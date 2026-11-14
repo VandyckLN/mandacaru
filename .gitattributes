@@ -1,0 +1,3 @@
+# Fim de linha LF em todo lugar, independente do core.autocrlf de quem clona
+* text=auto eol=lf
+*.png binary
