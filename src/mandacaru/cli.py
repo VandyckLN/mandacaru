@@ -51,19 +51,26 @@ def cmd_monitor(args) -> int:
 
     stoppers = []
     if ebpf.available() and not args.no_ebpf:
-        tracer = ebpf.ExecTracer(engine.q); tracer.start(); stoppers.append(tracer.stop)
+        tracer = ebpf.ExecTracer(engine.q)
+        tracer.start()
+        stoppers.append(tracer.stop)
         print("[mandacaru] processos: eBPF (kernel)", file=sys.stderr)
     else:
-        pm = ProcessMonitor(engine.q); pm.start(); stoppers.append(pm.stop)
+        pm = ProcessMonitor(engine.q)
+        pm.start()
+        stoppers.append(pm.stop)
         print("[mandacaru] processos: psutil (polling)", file=sys.stderr)
-    fm = FileMonitor(paths, engine.q); fm.start(); stoppers.append(fm.stop)
+    fm = FileMonitor(paths, engine.q)
+    fm.start()
+    stoppers.append(fm.stop)
     print(f"[mandacaru] vigiando arquivos em: {', '.join(paths) or '(nenhuma pasta)'}", file=sys.stderr)
 
     done = threading.Event()
     signal.signal(signal.SIGINT, lambda *_: done.set())
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, lambda *_: done.set())
-    t = threading.Thread(target=engine.run, daemon=True); t.start()
+    t = threading.Thread(target=engine.run, daemon=True)
+    t.start()
     done.wait()
     for s in stoppers:
         s()
