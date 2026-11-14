@@ -1,0 +1,75 @@
+# Mandacaru 🌵
+
+Antivírus/EDR de código aberto (**GPLv3**) feito para a nova geração de ataques: malware que muda a cada geração (escrito ou reescrito por IA), phishing sob medida e abuso de agentes de IA e servidores MCP.
+
+> Status: **protótipo v0.1** em Python, voltado para Linux. Também roda no Windows, mas sem eBPF.
+
+## Por que outro antivírus?
+
+Antivírus clássicos dependem de assinaturas e hashes. Um LLM consegue gerar mil variantes do mesmo malware, cada uma com bytes diferentes. O Mandacaru se apoia no que não muda: **o que o código precisa fazer** para causar dano.
+
+| Camada | O que detecta | Como |
+|---|---|---|
+| Estática | ofuscação + decodificação + execução, download-e-executa, shells reversos, notas de resgate, prompt injection em arquivos | YARA + heurísticas de técnica (não de bytes) |
+| Comportamento | criptografia em massa (ransomware), shell aberto por serviço web/Office, binário rodando de `/tmp`, shell com conexão de rede | regras com estado sobre eventos |
+| Agentes de IA | agente/servidor MCP lendo `~/.ssh`, `.env`, credenciais de nuvem; agente abrindo shell com `curl`/`nc` | linhagem de processos |
+| Kernel (Linux) | todo `execve`, inclusive processos que vivem milissegundos | eBPF (BCC), opcional |
+
+## Instalação
+
+```bash
+git clone <repo> mandacaru && cd mandacaru
+python3 -m venv .venv && . .venv/bin/activate
+pip install -e ".[dev]"
+# opcional, para o coletor eBPF (Ubuntu/Debian):
+sudo apt install bpfcc-tools python3-bpfcc
+```
+
+## Uso
+
+```bash
+# varrer pastas (código de saída 2 se houver alerta HIGH ou CRITICAL: bom para CI)
+mandacaru scan ~/Downloads ./projeto
+
+# monitorar em tempo real (Downloads, Documentos, /tmp...); com sudo, usa eBPF
+mandacaru monitor
+sudo mandacaru --json /var/log/mandacaru.jsonl monitor
+
+# regras YARA próprias
+mandacaru --rules ./minhas-regras scan .
+```
+
+Os alertas saem no terminal e, com `--json`, em JSON Lines, já com as técnicas do MITRE ATT&CK. Esse formato serve para mandar para Wazuh, Loki ou Elastic.
+
+## Arquitetura
+
+```
+coletores (procmon | ebpf | fsmon) ──► fila ──► Engine ──► detectores (static | behavior) ──► sinks (console | jsonl)
+```
+
+- `collectors/`: geram `Event`s. `procmon` usa psutil (multiplataforma), `ebpf` usa um tracepoint de `execve` (Linux, root) e `fsmon` usa watchdog (inotify/ReadDirectoryChanges).
+- `detectors/static.py`: YARA + heurísticas. Só alerta ofuscação quando aparecem **juntos** conteúdo codificado, decodificação e execução dinâmica.
+- `detectors/behavior.py`: regras com janela de tempo e *cooldown* para não inundar o usuário.
+- `rules/yara/base.yar`: regras base.
+
+## Testes e falsos positivos
+
+```bash
+pytest -q          # 19 testes, com amostras inofensivas que imitam as técnicas
+```
+
+Varredura de cerca de 91 mil arquivos legítimos (stdlib do Python, dist-packages e `/usr/share`): **0 alertas HIGH/CRITICAL**. Ficaram 1 MEDIUM (documentação com `curl | bash`) e 1 LOW (bundle JS grande).
+
+## Roadmap
+
+- [ ] Ações de resposta: suspender processo (`SIGSTOP`) e colocar arquivo em quarentena
+- [ ] Modelo de anomalias local (IsolationForest sobre linhagem, rede e arquivos), sem enviar dados para a nuvem
+- [ ] eBPF para `openat` em arquivos sensíveis e `connect` (rede)
+- [ ] Classificador de scripts gerados por LLM (features de AST + entropia)
+- [ ] Proteção do próprio agente: binário em Rust, assinatura das regras
+- [ ] Coletor Windows via ETW
+- [ ] Serviço systemd + pacote `.deb`
+
+## Licença
+
+GPL-3.0-or-later. Veja [LICENSE](LICENSE). Quem distribuir versões modificadas precisa publicar o código.
