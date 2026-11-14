@@ -1,5 +1,7 @@
 # Mandacaru 🌵
 
+[![CI](https://github.com/VandyckLN/mandacaru/actions/workflows/ci.yml/badge.svg)](https://github.com/VandyckLN/mandacaru/actions/workflows/ci.yml)
+
 Antivírus/EDR de código aberto (**GPLv3**) feito para a nova geração de ataques: malware que muda a cada geração (escrito ou reescrito por IA), phishing sob medida e abuso de agentes de IA e servidores MCP.
 
 > Status: **protótipo v0.1** em Python, voltado para Linux. Também roda no Windows, mas sem eBPF.
@@ -18,7 +20,7 @@ Antivírus clássicos dependem de assinaturas e hashes. Um LLM consegue gerar mi
 ## Instalação
 
 ```bash
-git clone <repo> mandacaru && cd mandacaru
+git clone https://github.com/VandyckLN/mandacaru && cd mandacaru
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
 # opcional, para o coletor eBPF (Ubuntu/Debian):
@@ -69,6 +71,10 @@ Varredura de cerca de 91 mil arquivos legítimos (stdlib do Python, dist-package
 - [ ] Proteção do próprio agente: binário em Rust, assinatura das regras
 - [ ] Coletor Windows via ETW
 - [ ] Serviço systemd + pacote `.deb`
+
+## Contribuindo
+
+Veja [CONTRIBUTING.md](CONTRIBUTING.md). Falhas de segurança: [SECURITY.md](SECURITY.md).
 
 ## Licença
 
