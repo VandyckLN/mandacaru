@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mandacaru"
+version = "0.1.0"
+description = "Antivirus/EDR de codigo aberto focado em ataques gerados ou conduzidos por IA"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+requires-python = ">=3.10"
+dependencies = [
+  "yara-python>=4.5",
+  "psutil>=5.9",
+  "watchdog>=4.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+# eBPF: instale o pacote do sistema (ex.: apt install python3-bpfcc)
+
+[project.scripts]
+mandacaru = "mandacaru.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+mandacaru = ["rules/yara/*.yar"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
