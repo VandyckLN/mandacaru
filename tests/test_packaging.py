@@ -28,3 +28,10 @@ def test_versao_do_changelog_debian_bate_com_o_pacote():
 def test_unit_aponta_para_o_config_instalado():
     unit = (ROOT / "debian" / "mandacaru.service").read_text()
     assert "ExecStart=/usr/bin/mandacaru --config /etc/mandacaru/config.toml monitor" in unit
+
+
+def test_nome_no_pypi_e_changelog_da_versao():
+    tomllib = pytest.importorskip("tomllib")
+    proj = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    assert proj["name"] == "mandacaru-edr"
+    assert f"## {mandacaru.__version__}" in (ROOT / "CHANGELOG.md").read_text()

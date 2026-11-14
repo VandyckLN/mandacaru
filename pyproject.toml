@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mandacaru"
+name = "mandacaru-edr"
 dynamic = ["version"]
 description = "Antivirus/EDR de codigo aberto focado em ataques gerados ou conduzidos por IA"
 readme = "README.md"
