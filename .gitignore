@@ -3,3 +3,12 @@ __pycache__/
 .venv/
 .pytest_cache/
 *.jsonl
+dist/
+build/
+.pybuild/
+debian/.debhelper/
+debian/mandacaru/
+debian/files
+debian/*.substvars
+debian/*.debhelper*
+debian/debhelper-build-stamp

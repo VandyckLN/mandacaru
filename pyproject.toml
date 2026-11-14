@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mandacaru"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Antivirus/EDR de codigo aberto focado em ataques gerados ou conduzidos por IA"
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -39,6 +39,9 @@ mandacaru = "mandacaru.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "mandacaru.__version__" }
 
 [tool.setuptools.package-data]
 mandacaru = ["rules/yara/*.yar"]

@@ -1,0 +1,18 @@
+[Unit]
+Description=Mandacaru - antivirus/EDR
+Documentation=https://github.com/VandyckLN/mandacaru
+After=local-fs.target
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/mandacaru --config /etc/mandacaru/config.toml monitor
+Restart=on-failure
+RestartSec=5
+LogsDirectory=mandacaru
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

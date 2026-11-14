@@ -1,0 +1,8 @@
+/var/log/mandacaru/*.jsonl {
+    weekly
+    rotate 8
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
