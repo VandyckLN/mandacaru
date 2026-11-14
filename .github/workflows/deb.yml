@@ -1,0 +1,74 @@
+name: deb
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencias de build
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y debhelper dh-python pybuild-plugin-pyproject python3-all \
+            python3-setuptools python3-pytest python3-yara python3-psutil python3-watchdog
+      - name: Monta o .deb
+        run: |
+          dpkg-buildpackage -us -uc -b
+          mkdir dist
+          mv ../mandacaru_*_all.deb dist/
+      - name: Confere o conteudo do pacote
+        run: |
+          dpkg-deb -c dist/*.deb | tee contents.txt
+          for f in usr/bin/mandacaru dist-packages/mandacaru/rules/yara/base.yar etc/mandacaru/config.toml \
+                   etc/mandacaru/rules.d/ systemd/system/mandacaru.service etc/logrotate.d/mandacaru; do
+            grep -q "$f" contents.txt || { echo "faltou $f"; exit 1; }
+          done
+          dpkg-deb -f dist/*.deb Depends
+          dpkg-deb -f dist/*.deb Depends | grep -q python3-yara
+      - name: Instala e testa o servico de verdade
+        run: |
+          sudo apt-get install -y ./dist/*.deb
+          systemd-analyze verify /usr/lib/systemd/system/mandacaru.service
+          sleep 3
+          systemctl is-active mandacaru
+          printf '%s' 'X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*' > /tmp/eicar-ci.txt
+          sleep 5
+          sudo journalctl -u mandacaru --no-pager | tail -20
+          sudo grep EICAR_Test_File /var/log/mandacaru/alerts.jsonl
+      - name: Remove e confere que o servico parou
+        run: |
+          sudo apt-get remove -y mandacaru
+          ! systemctl is-active mandacaru
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: dist/*.deb
+          if-no-files-found: error
+
+  install:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["ubuntu:24.04", "ubuntu:26.04", "debian:13"]
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: deb
+      - name: Instala em sistema limpo
+        run: |
+          apt-get update
+          apt-get install -y ./mandacaru_*_all.deb
+      - name: Varredura real com as bibliotecas da distro
+        run: |
+          mandacaru --version
+          printf '%s' 'X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*' > /tmp/e.txt
+          mandacaru --config /etc/mandacaru/config.toml --json /tmp/a.jsonl scan /tmp/e.txt
+          grep EICAR_Test_File /tmp/a.jsonl
