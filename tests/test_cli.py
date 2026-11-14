@@ -1,5 +1,6 @@
 """CLI: precedencia flag > arquivo > padrao, pastas padrao e erros com saida 1."""
 import os
+import queue
 
 from mandacaru import cli
 from mandacaru.events import Severity
@@ -66,3 +67,41 @@ def test_config_invalido_sai_com_1_sem_traceback(tmp_path, capsys):
 def test_json_nao_gravavel_sai_com_1(tmp_path, capsys):
     assert cli.main(["--json", str(tmp_path / "nao" / "existe" / "a.jsonl"), "scan", str(tmp_path)]) == 1
     assert "mandacaru: erro:" in capsys.readouterr().err
+
+
+# ------------------------------------------------------ coletor de processos
+class FakeCollector:
+    def __init__(self, q):
+        self.started = False
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        pass
+
+
+def test_ebpf_quebrado_cai_para_psutil(monkeypatch, capsys):
+    def boom(q):
+        raise RuntimeError("sem headers do kernel")
+    monkeypatch.setattr(cli.ebpf, "available", lambda: True)
+    monkeypatch.setattr(cli.ebpf, "ExecTracer", boom)
+    monkeypatch.setattr(cli, "ProcessMonitor", FakeCollector)
+    kind, stop = cli.start_process_collector(queue.Queue(), use_ebpf=True)
+    assert kind == "psutil" and callable(stop)
+    assert "eBPF indisponivel (sem headers do kernel)" in capsys.readouterr().err
+
+
+def test_ebpf_desligado_nem_tenta(monkeypatch):
+    def nao_devia(q):
+        raise AssertionError("nao devia tentar eBPF")
+    monkeypatch.setattr(cli.ebpf, "available", lambda: True)
+    monkeypatch.setattr(cli.ebpf, "ExecTracer", nao_devia)
+    monkeypatch.setattr(cli, "ProcessMonitor", FakeCollector)
+    assert cli.start_process_collector(queue.Queue(), use_ebpf=False)[0] == "psutil"
+
+
+def test_ebpf_funcionando_e_usado(monkeypatch):
+    monkeypatch.setattr(cli.ebpf, "available", lambda: True)
+    monkeypatch.setattr(cli.ebpf, "ExecTracer", FakeCollector)
+    assert cli.start_process_collector(queue.Queue(), use_ebpf=True)[0] == "ebpf"
