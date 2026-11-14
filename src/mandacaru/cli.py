@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import queue
 import signal
 import sys
 import threading
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -87,6 +89,20 @@ def cmd_scan(args) -> int:
     return 0 if worst < Severity.HIGH else 2
 
 
+def start_process_collector(q: queue.Queue, use_ebpf: bool) -> tuple[str, Callable[[], None]]:
+    """Inicia o coletor de processos; eBPF que falha ao subir cai para psutil em vez de derrubar o agente."""
+    if use_ebpf and ebpf.available():
+        try:
+            tracer = ebpf.ExecTracer(q)
+            tracer.start()
+            return "ebpf", tracer.stop
+        except Exception as exc:  # BCC falha de varias formas: sem headers, WSL, conteiner
+            print(f"[mandacaru] eBPF indisponivel ({exc}); usando psutil", file=sys.stderr)
+    pm = ProcessMonitor(q)
+    pm.start()
+    return "psutil", pm.stop
+
+
 def cmd_monitor(args) -> int:
     cfg = effective_config(args)
     sinks = [console_sink(cfg.min_severity)]
@@ -95,17 +111,9 @@ def cmd_monitor(args) -> int:
     engine = Engine(sinks, scanner=StaticScanner(cfg.rule_dirs, cfg.exclude))
     paths = list(cfg.watch_paths) or default_watch_paths()
 
-    stoppers = []
-    if cfg.ebpf and ebpf.available():
-        tracer = ebpf.ExecTracer(engine.q)
-        tracer.start()
-        stoppers.append(tracer.stop)
-        print("[mandacaru] processos: eBPF (kernel)", file=sys.stderr)
-    else:
-        pm = ProcessMonitor(engine.q)
-        pm.start()
-        stoppers.append(pm.stop)
-        print("[mandacaru] processos: psutil (polling)", file=sys.stderr)
+    kind, stop_procs = start_process_collector(engine.q, cfg.ebpf)
+    stoppers = [stop_procs]
+    print(f"[mandacaru] processos: {'eBPF (kernel)' if kind == 'ebpf' else 'psutil (polling)'}", file=sys.stderr)
     fm = FileMonitor(paths, engine.q)
     fm.start()
     stoppers.append(fm.stop)
