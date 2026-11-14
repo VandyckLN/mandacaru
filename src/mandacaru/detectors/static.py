@@ -6,6 +6,7 @@ decodificar e executar) em vez de bytes especificos.
 """
 from __future__ import annotations
 
+import fnmatch
 import math
 import os
 import re
@@ -102,8 +103,16 @@ def script_heuristics(path: Path, data: bytes) -> list[Alert]:
 
 
 class StaticScanner:
-    def __init__(self, extra_rule_dirs: Iterable[str] = ()):
+    def __init__(self, extra_rule_dirs: Iterable[str] = (), exclude: Iterable[str] = ()):
         self.rules = load_rules(extra_rule_dirs)
+        self.exclude = tuple(exclude)
+
+    def is_excluded(self, path: str | os.PathLike) -> bool:
+        """Compara o caminho absoluto com cada glob (`*` atravessa `/`)."""
+        if not self.exclude:
+            return False
+        full = os.path.abspath(path)
+        return any(fnmatch.fnmatchcase(full, pat) for pat in self.exclude)
 
     def scan_bytes(self, path: Path, data: bytes) -> list[Alert]:
         alerts: list[Alert] = []
@@ -121,6 +130,8 @@ class StaticScanner:
 
     def scan_file(self, path: str | os.PathLike) -> list[Alert]:
         p = Path(path)
+        if self.is_excluded(p):
+            return []
         try:
             if not p.is_file() or p.is_symlink():
                 return []
@@ -136,6 +147,7 @@ class StaticScanner:
             yield from self.scan_file(root)
             return
         for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-            dirnames[:] = [d for d in dirnames if d not in {".git", "node_modules", "__pycache__", ".venv"}]
+            dirnames[:] = [d for d in dirnames if d not in {".git", "node_modules", "__pycache__", ".venv"}
+                           and not self.is_excluded(Path(dirpath) / d)]
             for fn in filenames:
                 yield from self.scan_file(Path(dirpath) / fn)
