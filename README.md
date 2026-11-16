@@ -4,7 +4,7 @@
 
 Antivírus/EDR de código aberto (**GPLv3**) feito para a nova geração de ataques: malware que muda a cada geração (escrito ou reescrito por IA), phishing sob medida e abuso de agentes de IA e servidores MCP.
 
-> Status: **protótipo v0.1** em Python, voltado para Linux. Também roda no Windows, mas sem eBPF.
+> Status: **v0.2**, em Python, voltado para Linux. Detecta e registra; ainda não bloqueia nem remove nada. Também roda no Windows, mas sem eBPF nem serviço.
 
 ## Por que outro antivírus?
 
@@ -19,6 +19,29 @@ Antivírus clássicos dependem de assinaturas e hashes. Um LLM consegue gerar mi
 
 ## Instalação
 
+### Ubuntu 24.04+ / Debian 13+ (recomendado: instala o serviço)
+
+Baixe o `.deb` da [página de Releases](https://github.com/VandyckLN/mandacaru/releases) e instale:
+
+```bash
+sudo apt install ./mandacaru_0.2.0_all.deb
+systemctl status mandacaru                      # o serviço já sobe sozinho
+sudo tail -f /var/log/mandacaru/alerts.jsonl    # alertas em tempo real
+```
+
+O apt traz as dependências (`python3-yara`, `python3-psutil`, `python3-watchdog`) e, como recomendado, o `python3-bpfcc` para o coletor eBPF.
+
+### Só a ferramenta de varredura (qualquer Linux)
+
+```bash
+pipx install mandacaru-edr
+mandacaru scan ~/Downloads
+```
+
+No PyPI o pacote se chama `mandacaru-edr`; o comando é `mandacaru`. Se o `pip` precisar compilar o YARA e reclamar de `Python.h`, instale `python3-dev libssl-dev`.
+
+### Desenvolvimento
+
 ```bash
 git clone https://github.com/VandyckLN/mandacaru && cd mandacaru
 python3 -m venv .venv && . .venv/bin/activate
@@ -26,6 +49,29 @@ pip install -e ".[dev]"
 # opcional, para o coletor eBPF (Ubuntu/Debian):
 sudo apt install bpfcc-tools python3-bpfcc
 ```
+
+## Configuração
+
+O serviço lê `/etc/mandacaru/config.toml`. Depois de editar: `sudo systemctl restart mandacaru`.
+
+```toml
+[monitor]
+# Sem esta chave: Downloads, Documentos e Desktop de cada usuário, mais /tmp e /dev/shm.
+# paths = ["/home/ana/Downloads", "/srv/uploads"]
+ebpf = true          # se não funcionar, cai para psutil sozinho
+
+[alerts]
+min_severity = "LOW" # INFO | LOW | MEDIUM | HIGH | CRITICAL
+json = "/var/log/mandacaru/alerts.jsonl"
+
+[rules]
+dirs = ["/etc/mandacaru/rules.d"]   # suas regras .yar
+
+[exclude]
+paths = []           # globs de caminho absoluto, ex.: "/home/*/.cache/*"
+```
+
+A precedência é **flag da linha de comando > arquivo > padrão**. Use `--config CAMINHO` para outro arquivo. Chave desconhecida ou tipo errado faz o comando sair com código `1` e uma mensagem dizendo qual chave.
 
 ## Uso
 
@@ -57,7 +103,7 @@ coletores (procmon | ebpf | fsmon) ──► fila ──► Engine ──► det
 ## Testes e falsos positivos
 
 ```bash
-pytest -q          # 19 testes, com amostras inofensivas que imitam as técnicas
+pytest -q          # 54 testes, com amostras inofensivas que imitam as técnicas
 ```
 
 Varredura de cerca de 91 mil arquivos legítimos (stdlib do Python, dist-packages e `/usr/share`): **0 alertas HIGH/CRITICAL**. Ficaram 1 MEDIUM (documentação com `curl | bash`) e 1 LOW (bundle JS grande).
@@ -70,7 +116,7 @@ Varredura de cerca de 91 mil arquivos legítimos (stdlib do Python, dist-package
 - [ ] Classificador de scripts gerados por LLM (features de AST + entropia)
 - [ ] Proteção do próprio agente: binário em Rust, assinatura das regras
 - [ ] Coletor Windows via ETW
-- [ ] Serviço systemd + pacote `.deb`
+- [x] Serviço systemd + pacote `.deb`
 
 ## Contribuindo
 

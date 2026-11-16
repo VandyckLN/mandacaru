@@ -1,0 +1,23 @@
+[Unit]
+Description=Mandacaru - antivirus/EDR
+Documentation=https://github.com/VandyckLN/mandacaru
+After=local-fs.target
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/mandacaru --config /etc/mandacaru/config.toml monitor
+Restart=on-failure
+RestartSec=5
+# saida 1 = erro de configuracao ou de regra: reiniciar nao resolve
+RestartPreventExitStatus=1
+LogsDirectory=mandacaru
+# os alertas trazem linhas de comando: so root e o grupo leem
+LogsDirectoryMode=0750
+UMask=0027
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

@@ -31,7 +31,9 @@ def describe(proc: psutil.Process) -> dict:
     info["parent_name"] = ancestry[0] if ancestry else None
     info["ancestry"] = ancestry
     try:
-        info["remote_conns"] = [f"{c.raddr.ip}:{c.raddr.port}" for c in proc.net_connections(kind="inet") if c.raddr]
+        # net_connections so existe no psutil >= 6; antes disso (Ubuntu 24.04) e connections
+        conns = getattr(proc, "net_connections", None) or proc.connections
+        info["remote_conns"] = [f"{c.raddr.ip}:{c.raddr.port}" for c in conns(kind="inet") if c.raddr]
     except (psutil.Error, OSError, AttributeError):
         info["remote_conns"] = []
     return info

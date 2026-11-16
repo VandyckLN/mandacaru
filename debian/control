@@ -1,0 +1,18 @@
+Source: mandacaru
+Section: admin
+Priority: optional
+Maintainer: Vandyck Diniz <noreply@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13), dh-python, pybuild-plugin-pyproject,
+ python3-all, python3-setuptools, python3-pytest, python3-yara, python3-psutil, python3-watchdog
+Standards-Version: 4.7.0
+Homepage: https://github.com/VandyckLN/mandacaru
+Rules-Requires-Root: no
+
+Package: mandacaru
+Architecture: all
+Depends: ${python3:Depends}, ${misc:Depends}, python3-yara, python3-psutil, python3-watchdog
+Recommends: python3-bpfcc, logrotate
+Description: antivirus/EDR de codigo aberto contra ataques conduzidos por IA
+ Detecta tecnicas (ofuscacao + execucao, criptografia em massa, shell aberto
+ por servico, agente de IA lendo credenciais) em vez de assinaturas de bytes.
+ Roda como servico systemd e grava alertas em JSON Lines.

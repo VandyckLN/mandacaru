@@ -165,3 +165,60 @@ def test_file_monitor_end_to_end(tmp_path):
         assert "yara.Ransom_Note_Keywords" in rules_of(got)
     finally:
         fm.stop()
+
+
+# ---------------------------------------------------------------- exclusoes
+EICAR = r"X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
+
+
+def test_exclusao_ignora_arquivo(tmp_path):
+    f = tmp_path / "eicar.txt"
+    f.write_text(EICAR)
+    assert StaticScanner(exclude=[str(tmp_path / "*.txt")]).scan_file(f) == []
+    assert StaticScanner(exclude=["/outro/lugar/*"]).scan_file(f) != []
+
+
+def test_exclusao_usa_caminho_absoluto(tmp_path, monkeypatch):
+    (tmp_path / "eicar.txt").write_text(EICAR)
+    monkeypatch.chdir(tmp_path)
+    assert StaticScanner(exclude=[str(tmp_path / "eicar.txt")]).scan_file("eicar.txt") == []
+
+
+def test_scan_tree_nao_desce_em_pasta_excluida(tmp_path):
+    (tmp_path / "cache").mkdir()
+    (tmp_path / "cache" / "eicar.txt").write_text(EICAR)
+    (tmp_path / "ok.txt").write_text(EICAR)
+    alerts = list(StaticScanner(exclude=[str(tmp_path / "cache")]).scan_tree(tmp_path))
+    assert [a.evidence["path"] for a in alerts] == [str(tmp_path / "ok.txt")]
+
+
+def test_exclusao_de_pasta_vale_para_arquivo_dentro_dela(tmp_path):
+    # caminho dos eventos do monitor: scan_file direto no arquivo, sem passar pelo scan_tree
+    (tmp_path / "backups" / "sub").mkdir(parents=True)
+    f = tmp_path / "backups" / "sub" / "eicar.txt"
+    f.write_text(EICAR)
+    assert StaticScanner(exclude=[str(tmp_path / "backups")]).scan_file(f) == []
+    assert StaticScanner(exclude=[str(tmp_path / "backups") + "/"]).scan_file(f) == []
+
+
+def test_procmon_le_conexoes_no_psutil_antigo():
+    # psutil < 6 (Ubuntu 24.04) nao tem net_connections, so connections
+    from collections import namedtuple
+    from contextlib import nullcontext
+
+    from mandacaru.collectors.procmon import describe
+    Addr = namedtuple("Addr", "ip port")
+    Conn = namedtuple("Conn", "raddr")
+
+    class OldProc:
+        pid = 10
+        oneshot = staticmethod(nullcontext)
+        ppid = staticmethod(lambda: 1)
+        name = staticmethod(lambda: "bash")
+        exe = staticmethod(lambda: "/bin/bash")
+        cmdline = staticmethod(lambda: ["bash"])
+        username = staticmethod(lambda: "ana")
+        parents = staticmethod(lambda: [])
+        connections = staticmethod(lambda kind: [Conn(Addr("203.0.113.9", 4444))])
+
+    assert describe(OldProc())["remote_conns"] == ["203.0.113.9:4444"]

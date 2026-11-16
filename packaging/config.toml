@@ -1,0 +1,16 @@
+# Mandacaru - configuracao do servico. Depois de editar: sudo systemctl restart mandacaru
+
+[monitor]
+# Pastas vigiadas. Sem esta chave: Downloads, Documentos e Desktop de cada usuario, mais /tmp e /dev/shm.
+# paths = ["/home/ana/Downloads", "/srv/uploads"]
+ebpf = true          # ve todo execve pelo kernel; se nao funcionar, cai para psutil sozinho
+
+[alerts]
+min_severity = "LOW" # INFO | LOW | MEDIUM | HIGH | CRITICAL
+json = "/var/log/mandacaru/alerts.jsonl"
+
+[rules]
+dirs = ["/etc/mandacaru/rules.d"]   # suas regras .yar
+
+[exclude]
+paths = []           # globs de caminho absoluto, ex.: "/home/*/.cache/*"
