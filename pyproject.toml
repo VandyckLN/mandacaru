@@ -7,7 +7,8 @@ name = "mandacaru-edr"
 dynamic = ["version"]
 description = "Antivirus/EDR de codigo aberto focado em ataques gerados ou conduzidos por IA"
 readme = "README.md"
-license = "GPL-3.0-or-later"
+# tabela em vez de string SPDX: o setuptools 68 do Ubuntu 24.04 (build do .deb) nao aceita a string
+license = { text = "GPL-3.0-or-later" }
 requires-python = ">=3.10"
 authors = [{ name = "Vandyck Diniz" }]
 keywords = ["antivirus", "edr", "security", "yara", "ebpf", "linux"]
