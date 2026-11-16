@@ -50,6 +50,9 @@ def effective_config(args: argparse.Namespace) -> Config:
         changes["rule_dirs"] = cfg.rule_dirs + tuple(args.rules)
     if args.json:
         changes["json_path"] = args.json
+    elif args.cmd == "scan":
+        # o json do arquivo e o log do servico (so root grava); scan avulso so grava com --json
+        changes["json_path"] = None
     if args.min_severity:
         changes["min_severity"] = Severity[args.min_severity]
     if args.cmd == "monitor":
@@ -62,6 +65,17 @@ def effective_config(args: argparse.Namespace) -> Config:
         # o proprio arquivo de alertas nao pode gerar novos alertas (laco no monitor)
         cfg = replace(cfg, exclude=cfg.exclude + (os.path.abspath(cfg.json_path),))
     return cfg
+
+
+def resolve_watch_paths(paths: list[str]) -> list[str]:
+    """Avisa de cada pasta que nao existe; sem nenhuma, o monitor nao protegeria nada."""
+    existing = [p for p in paths if Path(p).is_dir()]
+    for p in paths:
+        if p not in existing:
+            print(f"[mandacaru] aviso: pasta vigiada nao existe: {p}", file=sys.stderr)
+    if not existing:
+        raise CliError("nenhuma pasta vigiada existe; confira [monitor] paths")
+    return existing
 
 
 def open_alert_log(path: str):
@@ -109,7 +123,7 @@ def cmd_monitor(args) -> int:
     if cfg.json_path:
         sinks.append(jsonl_sink(open_alert_log(cfg.json_path)))
     engine = Engine(sinks, scanner=StaticScanner(cfg.rule_dirs, cfg.exclude))
-    paths = list(cfg.watch_paths) or default_watch_paths()
+    paths = resolve_watch_paths(list(cfg.watch_paths) or default_watch_paths())
 
     kind, stop_procs = start_process_collector(engine.q, cfg.ebpf)
     stoppers = [stop_procs]
@@ -117,7 +131,7 @@ def cmd_monitor(args) -> int:
     fm = FileMonitor(paths, engine.q)
     fm.start()
     stoppers.append(fm.stop)
-    print(f"[mandacaru] vigiando arquivos em: {', '.join(paths) or '(nenhuma pasta)'}", file=sys.stderr)
+    print(f"[mandacaru] vigiando arquivos em: {', '.join(paths)}", file=sys.stderr)
 
     done = threading.Event()
     signal.signal(signal.SIGINT, lambda *_: done.set())

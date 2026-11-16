@@ -9,8 +9,8 @@ from mandacaru.config import Config, load_config
 from mandacaru.events import Severity
 
 ROOT = Path(__file__).resolve().parent.parent
-# o pybuild copia tests/ para um diretorio de build sem debian/ nem packaging/
-pytestmark = pytest.mark.skipif(not (ROOT / "pyproject.toml").is_file(), reason="fora da arvore de fontes")
+# Estes testes leem debian/ e packaging/, que nao existem no diretorio de build do pybuild:
+# debian/rules os tira do dh_auto_test (ver test_build_do_deb_ignora_este_arquivo).
 
 
 def test_config_de_exemplo_e_valido():
@@ -35,3 +35,14 @@ def test_nome_no_pypi_e_changelog_da_versao():
     proj = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
     assert proj["name"] == "mandacaru-edr"
     assert f"## {mandacaru.__version__}" in (ROOT / "CHANGELOG.md").read_text()
+
+
+def test_build_do_deb_ignora_este_arquivo():
+    rules = (ROOT / "debian" / "rules").read_text()
+    assert "export PYBUILD_TEST_ARGS = --ignore=tests/test_packaging.py" in rules
+
+
+def test_unit_protege_o_log_e_nao_reinicia_em_erro_de_config():
+    unit = (ROOT / "debian" / "mandacaru.service").read_text()
+    assert "LogsDirectoryMode=0750" in unit and "UMask=0027" in unit   # alertas trazem linhas de comando
+    assert "RestartPreventExitStatus=1" in unit                        # saida 1 = erro de config: nao adianta reiniciar

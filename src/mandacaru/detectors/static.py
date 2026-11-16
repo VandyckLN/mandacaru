@@ -17,6 +17,7 @@ from typing import Iterable, Iterator
 
 import yara
 
+from ..config import ConfigError
 from ..events import Alert, Severity
 
 MAX_BYTES = 8 * 1024 * 1024          # nao le arquivos gigantes inteiros
@@ -40,7 +41,10 @@ def load_rules(extra_dirs: Iterable[str | os.PathLike] = ()) -> yara.Rules:
     for d in extra_dirs:
         for p in Path(d).glob("*.yar"):
             files[f"user_{p.name}"] = str(p)
-    return yara.compile(filepaths=files)
+    try:
+        return yara.compile(filepaths=files)
+    except yara.Error as exc:  # a mensagem do YARA ja traz arquivo e linha
+        raise ConfigError(f"regra YARA invalida: {exc}") from exc
 
 
 # --- heuristicas de ofuscacao para scripts ----------------------------------
@@ -111,8 +115,10 @@ class StaticScanner:
         """Compara o caminho absoluto com cada glob (`*` atravessa `/`)."""
         if not self.exclude:
             return False
-        full = os.path.abspath(path)
-        return any(fnmatch.fnmatchcase(full, pat) for pat in self.exclude)
+        full = Path(os.path.abspath(path))
+        # o arquivo ou qualquer pasta acima dele: excluir "/srv/backups" cobre tudo la dentro
+        candidates = [str(full), *(str(p) for p in full.parents)]
+        return any(fnmatch.fnmatchcase(c, pat.rstrip("/") or "/") for c in candidates for pat in self.exclude)
 
     def scan_bytes(self, path: Path, data: bytes) -> list[Alert]:
         alerts: list[Alert] = []

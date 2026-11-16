@@ -34,7 +34,11 @@ jobs:
         run: |
           sudo apt-get install -y ./dist/*.deb
           systemd-analyze verify /usr/lib/systemd/system/mandacaru.service
-          sleep 3
+          # espera o monitor de arquivos subir (a compilacao do eBPF pode levar alguns segundos)
+          for i in $(seq 30); do
+            sudo journalctl -u mandacaru --no-pager | grep -q "vigiando arquivos" && break
+            sleep 1
+          done
           systemctl is-active mandacaru
           printf '%s' 'X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*' > /tmp/eicar-ci.txt
           sleep 5
@@ -58,6 +62,8 @@ jobs:
       matrix:
         image: ["ubuntu:24.04", "ubuntu:26.04", "debian:13"]
     container: ${{ matrix.image }}
+    env:
+      DEBIAN_FRONTEND: noninteractive
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -72,3 +78,8 @@ jobs:
           printf '%s' 'X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*' > /tmp/e.txt
           mandacaru --config /etc/mandacaru/config.toml --json /tmp/a.jsonl scan /tmp/e.txt
           grep EICAR_Test_File /tmp/a.jsonl
+      - name: Usuario comum varre sem --json (o log do servico e so de root)
+        run: |
+          useradd -m ana
+          su ana -c "mandacaru scan /tmp/e.txt" 2>&1 | tee /tmp/out.txt
+          grep EICAR_Test_File /tmp/out.txt
