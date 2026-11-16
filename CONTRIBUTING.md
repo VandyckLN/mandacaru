@@ -21,6 +21,20 @@ pytest -q
 
 Os dois rodam no CI em Python 3.10 a 3.14 e precisam passar.
 
+## Montando o `.deb` localmente
+
+```bash
+sudo apt install build-essential debhelper dh-python pybuild-plugin-pyproject python3-all python3-setuptools \
+  python3-pytest python3-yara python3-psutil python3-watchdog
+dpkg-buildpackage -us -uc -b      # gera ../mandacaru_<versão>_all.deb
+```
+
+O CI faz o mesmo, instala o pacote e confere que o serviço detecta um arquivo de teste.
+
+## Lançando uma versão
+
+Atualize `__version__` em `src/mandacaru/__init__.py`, o topo de `debian/changelog` e o `CHANGELOG.md` (um teste confere que os três batem). Depois do merge, `git tag vX.Y.Z && git push origin vX.Y.Z` dispara a publicação.
+
 ## Regras do projeto
 
 - **Nada de malware real no repositório.** Os testes usam amostras inofensivas que imitam a *técnica* (por exemplo, base64 de um `print`), nunca um payload funcional.
