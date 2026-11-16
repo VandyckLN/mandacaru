@@ -58,22 +58,32 @@ def script_heuristics(path: Path, data: bytes) -> list[Alert]:
     score = 0
     encoded = 0
     if _B64_BLOB.search(data):
-        reasons.append("blob base64 longo"); score += 2; encoded += 1
+        reasons.append("blob base64 longo")
+        score += 2
+        encoded += 1
     if _HEX_BLOB.search(data):
-        reasons.append("bytes em \\x hex"); score += 2; encoded += 1
+        reasons.append("bytes em \\x hex")
+        score += 2
+        encoded += 1
     if _CHR_CHAIN.search(data):
-        reasons.append("cadeia de chr()/[char]"); score += 2; encoded += 1
+        reasons.append("cadeia de chr()/[char]")
+        score += 2
+        encoded += 1
     lines = data.splitlines() or [b""]
-    longest = max(len(l) for l in lines)
+    longest = max(len(line) for line in lines)
     if longest > 1500:
-        reasons.append(f"linha com {longest} caracteres"); score += 1
+        reasons.append(f"linha com {longest} caracteres")
+        score += 1
     ent = shannon_entropy(data[:65536])
     if ent > 5.6:
-        reasons.append(f"entropia {ent:.2f}"); score += 1
+        reasons.append(f"entropia {ent:.2f}")
+        score += 1
     if _DYN_EXEC.search(data):
-        reasons.append("execucao dinamica de codigo"); score += 1
+        reasons.append("execucao dinamica de codigo")
+        score += 1
     if _DECODE.search(data):
-        reasons.append("funcao de decodificacao"); score += 1
+        reasons.append("funcao de decodificacao")
+        score += 1
     # so alerta com conteudo codificado + decodificacao + execucao dinamica:
     # codigo minificado comum tem linhas longas e eval, mas nao os tres juntos
     if encoded and score >= 4 and _DECODE.search(data) and _DYN_EXEC.search(data):
