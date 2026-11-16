@@ -14,7 +14,7 @@ jobs:
       - name: Dependencias de build
         run: |
           sudo apt-get update
-          sudo apt-get install -y debhelper dh-python pybuild-plugin-pyproject python3-all \
+          sudo apt-get install -y build-essential debhelper dh-python pybuild-plugin-pyproject python3-all \
             python3-setuptools python3-pytest python3-yara python3-psutil python3-watchdog
       - name: Monta o .deb
         run: |

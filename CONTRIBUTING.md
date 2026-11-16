@@ -24,7 +24,7 @@ Os dois rodam no CI em Python 3.10 a 3.14 e precisam passar.
 ## Montando o `.deb` localmente
 
 ```bash
-sudo apt install debhelper dh-python pybuild-plugin-pyproject python3-all python3-setuptools \
+sudo apt install build-essential debhelper dh-python pybuild-plugin-pyproject python3-all python3-setuptools \
   python3-pytest python3-yara python3-psutil python3-watchdog
 dpkg-buildpackage -us -uc -b      # gera ../mandacaru_<versão>_all.deb
 ```
