@@ -105,3 +105,32 @@ def test_ebpf_funcionando_e_usado(monkeypatch):
     monkeypatch.setattr(cli.ebpf, "available", lambda: True)
     monkeypatch.setattr(cli.ebpf, "ExecTracer", FakeCollector)
     assert cli.start_process_collector(queue.Queue(), use_ebpf=True)[0] == "ebpf"
+
+
+# ------------------------------------------------ achados da revisao final
+def test_scan_ignora_json_do_arquivo_de_config(tmp_path, capsys):
+    # o config do servico aponta para /var/log (so root grava); scan de usuario comum nao pode quebrar
+    c = cfgfile(tmp_path, f'[alerts]\njson = "{tmp_path}/nao/existe/alerts.jsonl"\n')
+    assert cli.effective_config(parse(["--config", c, "scan", "."])).json_path is None
+    assert cli.effective_config(parse(["--config", c, "monitor"])).json_path is not None
+    assert cli.main(["--config", c, "scan", str(tmp_path)]) == 0
+
+
+def test_regra_yara_invalida_sai_com_1_citando_o_arquivo(tmp_path, capsys):
+    (tmp_path / "quebrada.yar").write_text("rule x { condition: ")
+    assert cli.main(["--rules", str(tmp_path), "scan", str(tmp_path)]) == 1
+    err = capsys.readouterr().err
+    assert "mandacaru: erro:" in err and "quebrada.yar" in err and "Traceback" not in err
+
+
+def test_pasta_vigiada_inexistente_avisa_e_segue(tmp_path, capsys):
+    ok = tmp_path / "ok"
+    ok.mkdir()
+    assert cli.resolve_watch_paths([str(ok), str(tmp_path / "typo")]) == [str(ok)]
+    assert f"pasta vigiada nao existe: {tmp_path / 'typo'}" in capsys.readouterr().err
+
+
+def test_nenhuma_pasta_vigiada_existente_e_erro(tmp_path):
+    import pytest
+    with pytest.raises(cli.CliError, match="nenhuma pasta"):
+        cli.resolve_watch_paths([str(tmp_path / "typo")])

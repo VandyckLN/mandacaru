@@ -103,7 +103,7 @@ coletores (procmon | ebpf | fsmon) ──► fila ──► Engine ──► det
 ## Testes e falsos positivos
 
 ```bash
-pytest -q          # 46 testes, com amostras inofensivas que imitam as técnicas
+pytest -q          # 54 testes, com amostras inofensivas que imitam as técnicas
 ```
 
 Varredura de cerca de 91 mil arquivos legítimos (stdlib do Python, dist-packages e `/usr/share`): **0 alertas HIGH/CRITICAL**. Ficaram 1 MEDIUM (documentação com `curl | bash`) e 1 LOW (bundle JS grande).
