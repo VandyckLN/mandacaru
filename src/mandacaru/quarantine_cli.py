@@ -21,6 +21,7 @@ from .quarantine import (
     DEFAULT_DIR,
     DEFAULT_TRUST,
     CaseNotFound,
+    LogNotRecorded,
     Quarantine,
     Tampered,
     TrustList,
@@ -57,7 +58,18 @@ def add_parser(sub) -> None:
 def _production_quarantine(cfg) -> Quarantine:
     mb = 1024 * 1024
     return Quarantine(DEFAULT_DIR, DecisionLog(DEFAULT_LOG), TrustList(DEFAULT_TRUST), cfg.retention_days,
-                      cfg.max_file_mb * mb, cfg.max_total_mb * mb)
+                      cfg.max_file_mb * mb, cfg.max_total_mb * mb, strict_log=True)
+
+
+def _check_log(q: Quarantine) -> None:
+    """Toda decisao vai para o log: se ele nao abre para acrescentar, nada e feito."""
+    if q.log is None:
+        return
+    try:
+        fd = os.open(q.log.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_CLOEXEC, 0o640)
+    except OSError as e:
+        raise _Fail(f"log de decisoes indisponivel: {e.strerror or e}") from None
+    os.close(fd)
 
 
 def _clean(s: str) -> str:
@@ -85,8 +97,13 @@ def cmd_quarentena(args, *, quarantine: Quarantine | None = None, euid: int | No
         from .cli import effective_config  # import tardio: cli importa este modulo
         cfg = effective_config(args)
         q = quarantine if quarantine is not None else _production_quarantine(cfg)
+        if args.qcmd != "listar":
+            _check_log(q)
         ctx = _Ctx(args, cfg, q, env, analyzer, stdin_isatty, input_fn, uploader)
         return getattr(ctx, args.qcmd)()
+    except LogNotRecorded as e:
+        print(f"mandacaru: erro: decisao aplicada, mas nao registrada no log: {e}", file=sys.stderr)
+        return 1
     except CaseNotFound as e:
         print(f"mandacaru: erro: caso nao encontrado ou ja resolvido: {e}", file=sys.stderr)
         return 3
@@ -108,8 +125,8 @@ class _Ctx:
             env, analyzer, stdin_isatty, input_fn, uploader)
 
     def _log(self, action: str, **kw) -> None:
-        if self.q.log is not None:
-            self.q.log.record(action, **kw)
+        # mesmo caminho de manter/confiar/apagar; aqui sempre estrito, mesmo com Quarantine injetada
+        self.q._record(action, strict=True, **kw)
 
     # --- listar (grupo mandacaru, sem root) ---
     def listar(self) -> int:
@@ -173,8 +190,15 @@ class _Ctx:
     def _local_scan(self, case, result) -> None:
         """Nenhuma fonte respondeu: varre de novo com as regras YARA atuais (o veredito nao muda)."""
         from .detectors.static import StaticScanner
-        data = self.q.read_original(case.id, self.q.max_file_bytes)
-        alerts = StaticScanner(self.cfg.rule_dirs, ()).scan_bytes(Path(case.original_path), data)
+        try:
+            data = self.q.read_original(case.id, self.q.max_file_bytes)
+            alerts = StaticScanner(self.cfg.rule_dirs, ()).scan_bytes(Path(case.original_path), data)
+        except Tampered:
+            raise  # quarentena adulterada continua saindo com 4
+        except Exception as e:  # noqa: BLE001 - varredura opcional nao derruba a analise de rede
+            result.sources["yara_local"] = SourceResult("erro", _clean(str(e) or type(e).__name__)[:200])
+            result.summary += "; YARA local: erro"
+            return
         rules = ", ".join(dict.fromkeys(a.rule for a in alerts))
         if rules:
             result.sources["yara_local"] = SourceResult("achou", rules)

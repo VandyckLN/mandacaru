@@ -20,7 +20,7 @@ NOW = 1_800_000_000.0
 def q(tmp_path):
     (tmp_path / "q").mkdir()
     return Quarantine(tmp_path / "q", DecisionLog(tmp_path / "d.jsonl"), TrustList(tmp_path / "t.json"),
-                      now=lambda: NOW)
+                      now=lambda: NOW, strict_log=True)
 
 
 def isolar(q, tmp_path, nome="mal.py", conteudo=b"print('oi')\n"):
@@ -319,3 +319,78 @@ def test_main_despacha_quarentena(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(os, "geteuid", lambda: 1000)
     assert cli.main(["--config", cfgfile(tmp_path), "quarentena", "manter", "a" * 32]) == 1
     assert "precisa de root" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------- log de decisoes obrigatorio
+def test_log_indisponivel_recusa_antes_de_mudar_algo(q, tmp_path, capsys):
+    case = isolar(q, tmp_path)
+    antes = log(tmp_path)
+    q.log = DecisionLog(tmp_path / "nao-existe" / "d.jsonl")
+    for argv in (["manter", case.id], ["apagar", case.id], ["confiar", case.id], ["limpar"],
+                 ["desconfiar", "ab" * 32]):
+        assert run(argv, tmp_path, quarantine=q) == 1
+        assert capsys.readouterr().err.startswith("mandacaru: erro: log de decisoes indisponivel: ")
+    assert q.load(case.id) == case and log(tmp_path) == antes
+    assert not (tmp_path / "mal.py").exists()
+
+
+@pytest.mark.parametrize("sub", ["manter", "apagar", "confiar", "analisar"])
+def test_falha_do_log_depois_da_acao_sai_com_1(q, tmp_path, capsys, monkeypatch, sub):
+    case = isolar(q, tmp_path)
+
+    def quebra(self, action, **kw):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(DecisionLog, "record", quebra)
+    assert run([sub, case.id], tmp_path, quarantine=q, analyzer=analisador()) == 1
+    err = capsys.readouterr().err
+    assert err.strip() == "mandacaru: erro: decisao aplicada, mas nao registrada no log: No space left on device"
+
+
+def test_falha_do_log_no_desconfiar_e_no_limpar_sai_com_1(q, tmp_path, capsys, monkeypatch):
+    q.trust.add("ab" * 32, "/x", "eu")
+    velho = isolar(q, tmp_path)
+    q.now = lambda: velho.expires_at + 1
+    monkeypatch.setattr(DecisionLog, "record", lambda self, action, **kw: (_ for _ in ()).throw(OSError(5, "EIO")))
+    assert run(["desconfiar", "ab" * 32], tmp_path, quarantine=q) == 1
+    assert run(["limpar"], tmp_path, quarantine=q) == 1
+    assert capsys.readouterr().err.count("decisao aplicada, mas nao registrada no log: EIO") == 2
+
+
+def test_quarentena_do_monitor_continua_engolindo_falha_do_log(tmp_path, monkeypatch):
+    (tmp_path / "q").mkdir()
+    q = Quarantine(tmp_path / "q", DecisionLog(tmp_path / "d.jsonl"))
+    case = isolar(q, tmp_path)
+    monkeypatch.setattr(DecisionLog, "record", lambda self, action, **kw: (_ for _ in ()).throw(OSError(5, "EIO")))
+    q.keep(case.id, "eu", 1)
+    q.delete(case.id, "eu", 1)
+    assert q.list() == []
+
+
+# ---------------------------------------------------------------- YARA local que falha
+def test_yara_local_que_falha_nao_derruba_a_analise(q, tmp_path, capsys, monkeypatch):
+    from mandacaru.detectors import static
+
+    class Quebrado:
+        def __init__(self, *a):
+            pass
+
+        def scan_bytes(self, path, data):
+            raise RuntimeError("yara explodiu")
+    monkeypatch.setattr(static, "StaticScanner", Quebrado)
+    case = isolar(q, tmp_path)
+    assert run(["analisar", case.id, "--json"], tmp_path, quarantine=q, analyzer=analisador(status="erro")) == 0
+    d = json.loads(capsys.readouterr().out)
+    assert d["sources"]["yara_local"] == {"status": "erro", "detail": "yara explodiu"}
+    assert d["summary"].endswith("; YARA local: erro") and d["verdict"] == "desconhecido"
+    assert q.load(case.id).analysis == d and log(tmp_path)[-1]["detail"] == d
+
+
+def test_regra_yara_invalida_no_config_nao_derruba_a_analise(q, tmp_path, capsys):
+    regras = tmp_path / "regras"
+    regras.mkdir()
+    (regras / "quebrada.yar").write_text("rule x { condition: ")
+    case = isolar(q, tmp_path)
+    assert run(["analisar", case.id, "--json"], tmp_path, f'[rules]\ndirs = ["{regras}"]\n', quarantine=q,
+               analyzer=analisador(status="erro")) == 0
+    d = json.loads(capsys.readouterr().out)
+    assert d["sources"]["yara_local"]["status"] == "erro" and q.load(case.id).analysis == d

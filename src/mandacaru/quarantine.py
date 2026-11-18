@@ -83,6 +83,14 @@ def _write_all(fd: int, data: bytes) -> None:
         view = view[n:]
 
 
+class LogNotRecorded(Exception):
+    """A acao foi aplicada, mas a linha do log de decisoes nao foi gravada (so com strict_log)."""
+
+    def __init__(self, cause: Exception):
+        super().__init__(getattr(cause, "strerror", None) or str(cause))
+        self.cause = cause
+
+
 class UnsafePath(OSError):
     """Algum componente do caminho e um symlink."""
 
@@ -247,7 +255,8 @@ class Quarantine:
     def __init__(self, root: str | os.PathLike = DEFAULT_DIR, log: DecisionLog | None = None,
                  trust: TrustList | None = None,
                  retention_days: int = 30, max_file_bytes: int = 256 * 1024 * 1024,
-                 max_total_bytes: int = 2 * 1024 * 1024 * 1024, now: Callable[[], float] = time.time):
+                 max_total_bytes: int = 2 * 1024 * 1024 * 1024, now: Callable[[], float] = time.time,
+                 strict_log: bool = False):
         self.root = os.fspath(root)
         self.log = log
         self.trust = trust
@@ -255,6 +264,8 @@ class Quarantine:
         self.max_file_bytes = max_file_bytes
         self.max_total_bytes = max_total_bytes
         self.now = now
+        # o monitor nunca para por causa do log; a CLI de decisoes (strict_log=True) nao decide sem registrar
+        self.strict_log = strict_log
 
     # --- consulta ---
     def _p(self, case_id: str, ext: str) -> str:
@@ -304,13 +315,15 @@ class Quarantine:
         return total
 
     # --- isolamento ---
-    def _record(self, action: str, **kw) -> None:
+    def _record(self, action: str, strict: bool | None = None, **kw) -> None:
         if self.log is None:
             return
         try:
             self.log.record(action, **kw)
-        except (OSError, ValueError):
-            pass  # o log nunca derruba o isolamento
+        except (OSError, ValueError) as e:
+            if self.strict_log if strict is None else strict:
+                raise LogNotRecorded(e) from e
+            # sem strict_log o log nunca derruba o isolamento
 
     def _fail(self, path: str, alert: Alert, reason: str, sha256: str | None = None) -> IsolateResult:
         self._record("nao_isolado", sha256=sha256, path=path, detail={"motivo": reason})
@@ -471,7 +484,8 @@ class Quarantine:
         return dest
 
     def _refuse(self, case: Case, by: str, uid: int | None, motivo: str) -> None:
-        self._record("restauracao_recusada", case_id=case.id, sha256=case.sha256, path=case.original_path,
+        # a recusa nao e a decisao: falha do log aqui nao pode esconder o motivo real
+        self._record("restauracao_recusada", strict=False, case_id=case.id, sha256=case.sha256, path=case.original_path,
                      by=by, uid=uid, detail={"motivo": motivo})
 
     def _restore_in(self, pfd: int, name: str, case: Case, by: str, uid: int | None) -> str:
@@ -596,6 +610,8 @@ class Quarantine:
                 continue
             try:
                 self.delete(case.id, "sistema", None, action="expirado")
+            except LogNotRecorded:
+                raise
             except Exception:
                 continue
             removed += 1
