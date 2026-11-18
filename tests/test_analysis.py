@@ -39,7 +39,7 @@ def resolver_com(ips):
 
 
 def nxdomain(name):
-    raise socket.gaierror(-2, "nxdomain")
+    raise socket.gaierror(socket.EAI_NONAME, "nxdomain")
 
 
 def cfg(**kw):
@@ -202,3 +202,31 @@ def test_to_dict_segue_o_contrato():
 
 def test_padroes_sao_chamaveis():
     assert callable(_default_http) and callable(_default_resolver)
+
+
+def test_cymru_eai_again_e_erro():
+    def res(name):
+        raise socket.gaierror(socket.EAI_AGAIN, "temporario")
+
+    r = analyze("id1", H, cfg(), res, Http())
+    assert r.sources["cymru"].status == "erro"
+
+
+def test_cymru_eai_noname_e_nao_achou():
+    def res(name):
+        raise socket.gaierror(socket.EAI_NONAME, "nxdomain")
+
+    r = analyze("id1", H, cfg(), res, Http())
+    assert r.sources["cymru"].status == "nao_achou"
+
+
+def test_offline_avisa_analise_limitada():
+    import urllib.error
+
+    def res(name):
+        raise socket.gaierror(socket.EAI_AGAIN, "offline")
+
+    http = Http({"circl": urllib.error.URLError("offline")})
+    r = analyze("id1", H, cfg(), res, http)
+    assert r.verdict == "desconhecido"
+    assert r.summary == "Desconhecido: analise limitada, sem resposta das fontes"

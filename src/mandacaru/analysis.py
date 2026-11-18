@@ -24,6 +24,7 @@ MAX_BODY = 1024 * 1024
 MAX_UPLOAD = 32 * 1024 * 1024
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _USER_AGENT = f"mandacaru/{__version__}"
+_NOT_FOUND_ERRNOS = {socket.EAI_NONAME, getattr(socket, "EAI_NODATA", object())}
 _LABELS = {"cymru": "Team Cymru", "malwarebazaar": "MalwareBazaar", "virustotal": "VirusTotal"}
 
 
@@ -81,8 +82,11 @@ def _cymru(h, resolver, http, timeout, cfg):
     name = f"{h[:32]}.{h[32:]}.hash.cymru.com"
     try:
         ips = resolver(name)
-    except socket.gaierror:  # NXDOMAIN
-        return SourceResult("nao_achou")
+    except socket.gaierror as e:
+        # So "nome inexistente" e nao_achou; EAI_AGAIN/EAI_FAIL (offline, resolvedor morto) e erro.
+        if e.errno in _NOT_FOUND_ERRNOS:
+            return SourceResult("nao_achou")
+        return SourceResult("erro", "falha de DNS")
     return SourceResult("achou" if "127.0.0.2" in ips else "nao_achou")
 
 
