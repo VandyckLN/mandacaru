@@ -1,0 +1,16 @@
+#!/bin/sh
+# Mandacaru - auxiliar do pkexec para a acao io.github.vandyckln.mandacaru.decide.
+# Aceita so: analisar <id> [--json] | manter <id>. Sem senha para o grupo mandacaru (50-mandacaru.rules).
+# O pkexec limpa o ambiente: MANDACARU_BIN so existe nos testes.
+set -u
+BIN="${MANDACARU_BIN:-/usr/bin/mandacaru}"
+uso() { echo "uso: quarantine-decide analisar <id> [--json] | manter <id>" >&2; exit 1; }
+case "${1-}" in
+    analisar) [ $# -eq 2 ] || { [ $# -eq 3 ] && [ "$3" = "--json" ]; } || uso ;;
+    manter) [ $# -eq 2 ] || uso ;;
+    *) uso ;;
+esac
+id=$2
+case "$id" in *[!0-9a-f]*|"") echo "id invalido: precisa de 32 caracteres hexadecimais" >&2; exit 3 ;; esac
+[ ${#id} -eq 32 ] || { echo "id invalido: precisa de 32 caracteres hexadecimais" >&2; exit 3; }
+exec "$BIN" --config /etc/mandacaru/config.toml quarentena "$@"

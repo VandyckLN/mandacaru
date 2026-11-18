@@ -26,15 +26,28 @@ jobs:
           dpkg-deb -c dist/*.deb | tee contents.txt
           for f in usr/bin/mandacaru dist-packages/mandacaru/rules/yara/base.yar etc/mandacaru/config.toml \
                    etc/mandacaru/rules.d/ systemd/system/mandacaru.service etc/logrotate.d/mandacaru \
-                   usr/share/icons/hicolor/64x64/apps/mandacaru.png; do
+                   usr/share/icons/hicolor/64x64/apps/mandacaru.png \
+                   usr/libexec/mandacaru/quarantine-decide usr/libexec/mandacaru/quarantine-release \
+                   usr/share/polkit-1/actions/io.github.vandyckln.mandacaru.policy \
+                   usr/share/polkit-1/rules.d/50-mandacaru.rules \
+                   systemd/system/mandacaru-quarantine-clean.timer; do
             grep -q "$f" contents.txt || { echo "faltou $f"; exit 1; }
           done
           dpkg-deb -f dist/*.deb Depends
           dpkg-deb -f dist/*.deb Depends | grep -q python3-yara
+          dpkg-deb -f dist/*.deb Depends | grep -q polkitd
+          # auxiliares do pkexec executaveis; config so root e o grupo leem (pode ter chave de API)
+          grep -E '^-rwxr-xr-x .* \./usr/libexec/mandacaru/quarantine-(decide|release)$' contents.txt | wc -l | grep -qx 2
+          grep -qE '^-rw-r----- .* \./etc/mandacaru/config.toml$' contents.txt
       - name: Instala e testa o servico de verdade
         run: |
           sudo apt-get install -y ./dist/*.deb
-          systemd-analyze verify /usr/lib/systemd/system/mandacaru.service
+          systemd-analyze verify /usr/lib/systemd/system/mandacaru.service \
+            /usr/lib/systemd/system/mandacaru-quarantine-clean.service \
+            /usr/lib/systemd/system/mandacaru-quarantine-clean.timer
+          systemctl is-enabled mandacaru-quarantine-clean.timer
+          systemctl is-active mandacaru-quarantine-clean.timer
+          sudo stat -c '%a %U:%G %n' /var/lib/mandacaru /var/lib/mandacaru/quarantine
           # espera o monitor de arquivos subir (a compilacao do eBPF pode levar alguns segundos)
           for i in $(seq 30); do
             sudo journalctl -u mandacaru --no-pager | grep -q "vigiando arquivos" && break
@@ -45,6 +58,10 @@ jobs:
           sleep 5
           sudo journalctl -u mandacaru --no-pager | tail -20
           sudo grep EICAR_Test_File /var/log/mandacaru/alerts.jsonl
+          # EICAR e LOW (abaixo do min_severity HIGH da quarentena): nao e isolado, entao nao ha "isolar" a conferir
+          # a limpeza roda de verdade dentro do sandbox da sua unit
+          sudo systemctl start mandacaru-quarantine-clean.service
+          systemctl show -p Result --value mandacaru-quarantine-clean.service | grep -qx success
       - name: Remove e confere que o servico parou
         run: |
           sudo apt-get remove -y mandacaru

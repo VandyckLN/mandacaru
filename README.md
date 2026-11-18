@@ -4,7 +4,7 @@
 
 Antivírus/EDR de código aberto (**GPLv3**) feito para a nova geração de ataques: malware que muda a cada geração (escrito ou reescrito por IA), phishing sob medida e abuso de agentes de IA e servidores MCP.
 
-> Status: **v0.2**, em Python, voltado para Linux. Detecta e registra; ainda não bloqueia nem remove nada. Também roda no Windows, mas sem eBPF nem serviço.
+> Status: **v0.4**, em Python, voltado para Linux. Detecta, registra e põe em quarentena os arquivos detectados (HIGH ou mais); ainda não bloqueia nem mata processos. Também roda no Windows, mas sem eBPF, serviço nem quarentena.
 
 ## Por que outro antivírus?
 
@@ -24,7 +24,7 @@ Antivírus clássicos dependem de assinaturas e hashes. Um LLM consegue gerar mi
 Baixe o `.deb` da [página de Releases](https://github.com/VandyckLN/mandacaru/releases) e instale:
 
 ```bash
-sudo apt install ./mandacaru_0.2.0_all.deb
+sudo apt install ./mandacaru_0.4.0_all.deb
 systemctl status mandacaru                      # o serviço já sobe sozinho
 sudo tail -f /var/log/mandacaru/alerts.jsonl    # alertas em tempo real
 ```
@@ -106,6 +106,52 @@ A `evidence` (linhas de comando, PIDs) não sai pelo socket; ela continua só no
 socat - UNIX-CONNECT:/run/mandacaru/alerts.sock
 ```
 
+## Quarentena
+
+Quando o serviço vê um arquivo novo ou alterado numa pasta vigiada e a varredura estática (YARA ou heurística) acusa severidade `HIGH` ou mais, o arquivo sai do lugar e vai para `/var/lib/mandacaru/quarantine/`, embaralhado para não disparar outros antivírus. O alerta avisa com o `quarantine_id`. Alertas de comportamento (ransomware, shell reverso etc.) só alertam; nada é isolado por eles. O `mandacaru scan` avulso também só relata.
+
+Para cada arquivo isolado há três escolhas:
+
+| Escolha | Botão do popup (`pkexec`) | Quem pode |
+|---|---|---|
+| **Analisar**: consulta o hash em serviços públicos e mostra o veredito | `/usr/libexec/mandacaru/quarantine-decide analisar <id>` | grupo `mandacaru`, sem senha |
+| **Manter isolado**: registra a decisão; o arquivo é apagado ao fim do prazo | `/usr/libexec/mandacaru/quarantine-decide manter <id>` | grupo `mandacaru`, sem senha |
+| **Confio**: devolve o arquivo ao lugar e não isola mais esse hash | `/usr/libexec/mandacaru/quarantine-release confiar <id>` | só com senha de administrador |
+
+Sem resposta, vale o lado seguro: o arquivo fica isolado e um timer diário (`mandacaru-quarantine-clean.timer`) o apaga depois de `retention_days` (30 dias por padrão). O polkit pede a senha só onde precisa: um malware rodando na sua sessão não consegue se liberar sozinho. Os auxiliares aceitam só os subcomandos do seu nível e um id de 32 caracteres hexadecimais. No terminal, os mesmos comandos rodam com `sudo`:
+
+```bash
+mandacaru quarentena listar                       # grupo mandacaru: id, data, arquivo, regra, dias até apagar
+sudo mandacaru quarentena analisar <id>           # só o hash sai da máquina
+sudo mandacaru quarentena analisar <id> --enviar  # envia o arquivo ao VirusTotal (pede chave e confirmação)
+sudo mandacaru quarentena manter <id>
+sudo mandacaru quarentena confiar <id>            # restaura e põe o hash na lista de confiança
+sudo mandacaru quarentena apagar <id>             # apaga já, sem esperar o prazo
+sudo mandacaru quarentena desconfiar <sha256>     # tira o hash da lista de confiança
+```
+
+Códigos de saída: `0` ok, `1` uso ou configuração, `3` id inexistente ou já resolvido, `4` quarentena adulterada. Toda decisão vai para `/var/log/mandacaru/decisions.jsonl` (legível por root e pelo grupo `mandacaru`), com quem decidiu.
+
+A análise funciona sem configurar nada, com o Team Cymru MHR e o CIRCL hashlookup (gratuitos, sem chave). Com chaves no config, também usa MalwareBazaar e VirusTotal:
+
+```toml
+[quarantine]
+enabled = true
+min_severity = "HIGH"
+retention_days = 30
+max_file_mb = 256
+max_total_mb = 2048
+
+[analysis]
+cymru = true
+# virustotal_key = ""
+# malwarebazaar_key = ""
+```
+
+> **Atenção:** o Team Cymru MHR é gratuito só para **uso não comercial**. Em empresa, desligue com `analysis.cymru = false`.
+
+O `config.toml` é instalado como `0640`, porque pode guardar chaves de API. Quem não é root e roda sem `--config` (por exemplo `mandacaru scan` ou `quarentena listar`) recebe um aviso e segue com a configuração padrão; um `--config` ilegível ou um config inválido continuam sendo erro.
+
 ## Arquitetura
 
 ```
@@ -127,7 +173,8 @@ Varredura de cerca de 91 mil arquivos legítimos (stdlib do Python, dist-package
 
 ## Roadmap
 
-- [ ] Ações de resposta: suspender processo (`SIGSTOP`) e colocar arquivo em quarentena
+- [ ] Ações de resposta: suspender processo (`SIGSTOP`)
+- [x] Quarentena de arquivos detectados, com decisão do usuário via polkit
 - [ ] Modelo de anomalias local (IsolationForest sobre linhagem, rede e arquivos), sem enviar dados para a nuvem
 - [ ] eBPF para `openat` em arquivos sensíveis e `connect` (rede)
 - [ ] Classificador de scripts gerados por LLM (features de AST + entropia)

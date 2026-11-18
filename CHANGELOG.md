@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.0
+
+Quarentena: o arquivo detectado sai do lugar e você decide o que fazer com ele.
+
+- **Isolamento automático** no serviço: arquivo novo ou alterado numa pasta vigiada com alerta estático (`yara.*`, `heur.*`) de severidade `HIGH` ou mais vai para `/var/lib/mandacaru/quarantine/` (embaralhado, `root:mandacaru` `0750`). O alerta no socket ganha o campo opcional `quarantine_id`.
+- **`mandacaru quarentena`**: `listar`, `analisar <id> [--enviar]`, `manter <id>`, `confiar <id>`, `apagar <id>`, `desconfiar <sha256>` e `limpar`. Saídas: `0` ok, `1` uso/config, `3` id inexistente ou já resolvido, `4` quarentena adulterada.
+- **Análise por hash** sem configurar nada (Team Cymru MHR e CIRCL hashlookup); com chave no config, MalwareBazaar e VirusTotal. O conteúdo do arquivo só sai da máquina com `--enviar`, chave do VirusTotal e confirmação.
+- **Polkit**: auxiliares em `/usr/libexec/mandacaru/` para os botões do popup. `confiar` e `apagar` pedem senha de administrador; `analisar` e `manter` são liberados para o grupo `mandacaru` em sessão ativa.
+- **Log de decisões** em `/var/log/mandacaru/decisions.jsonl` (`root:mandacaru` `0640`), guardado por um ano no logrotate.
+- **Timer diário** `mandacaru-quarantine-clean.timer`: apaga o que passou de `retention_days` (padrão 30).
+- Seções novas no config: `[quarantine]` e `[analysis]`. O `config.toml` é instalado como `0640`, porque pode guardar chaves de API. Sem `--config`, quem não consegue ler o arquivo recebe um aviso e segue com os padrões; `--config` ilegível e config inválido continuam sendo erro.
+- O pacote passa a depender de `polkitd | policykit-1`.
+
 ## 0.3.1
 
 - **Ícone do Mandacaru** para popups de alerta: PNG 64×64 de 382 bytes, com o nome `mandacaru` no tema hicolor (`/usr/share/icons/hicolor/64x64/apps/mandacaru.png`).

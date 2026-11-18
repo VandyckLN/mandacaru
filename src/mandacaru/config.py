@@ -6,6 +6,7 @@ digitacao nao pode desligar protecao em silencio.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -92,14 +93,24 @@ _SCHEMA = {
 
 
 def load_config(path: str | os.PathLike | None = None) -> Config:
-    """Le o config. Sem `path`, usa DEFAULT_PATH se existir, senao os padroes."""
-    if path is None:
+    """Le o config. Sem `path`, usa DEFAULT_PATH se existir, senao os padroes.
+
+    O DEFAULT_PATH e 0640 root:root (pode ter chaves de API): sem permissao de leitura, um usuario comum
+    segue com os padroes. Qualquer outro erro, ou um `path` explicito ilegivel, continua sendo erro.
+    """
+    implicit = path is None
+    if implicit:
         if not Path(DEFAULT_PATH).is_file():
             return Config()
         path = DEFAULT_PATH
     try:
         with open(path, "rb") as fh:
             raw = tomllib.load(fh)
+    except PermissionError as exc:
+        if implicit:
+            print(f"[mandacaru] aviso: sem permissao para ler {path}; usando configuracao padrao", file=sys.stderr)
+            return Config()
+        raise ConfigError(f"{path}: nao foi possivel ler ({exc.strerror or exc})") from exc
     except OSError as exc:
         raise ConfigError(f"{path}: nao foi possivel ler ({exc.strerror or exc})") from exc
     except tomllib.TOMLDecodeError as exc:

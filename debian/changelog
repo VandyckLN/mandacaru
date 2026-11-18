@@ -1,3 +1,16 @@
+mandacaru (0.4.0) unstable; urgency=medium
+
+  * Quarentena: o servico isola arquivos detectados (HIGH ou mais) em
+    /var/lib/mandacaru/quarantine e o usuario decide (analisar, manter, confiar).
+  * Comando mandacaru quarentena (listar, analisar, manter, confiar, apagar,
+    desconfiar, limpar) e log de decisoes em /var/log/mandacaru/decisions.jsonl.
+  * Auxiliares em /usr/libexec/mandacaru e politica do polkit: confiar/apagar
+    pedem senha de administrador; analisar/manter liberados para o grupo mandacaru.
+  * Timer diario mandacaru-quarantine-clean apaga os casos vencidos (30 dias).
+  * Logrotate guarda um ano de decisoes; depende de polkitd | policykit-1.
+
+ -- Vandyck Diniz <noreply@users.noreply.github.com>  Wed, 18 Nov 2026 12:00:00 -0300
+
 mandacaru (0.3.1) unstable; urgency=medium
 
   * Icone do Mandacaru em /usr/share/icons/hicolor/64x64/apps/mandacaru.png.

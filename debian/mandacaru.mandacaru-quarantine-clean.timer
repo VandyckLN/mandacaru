@@ -1,0 +1,10 @@
+[Unit]
+Description=Mandacaru - limpeza diaria da quarentena
+Documentation=https://github.com/VandyckLN/mandacaru
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target

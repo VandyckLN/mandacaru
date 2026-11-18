@@ -1,4 +1,6 @@
 """Carregador de configuracao: defaults, leitura completa e erros que citam a chave."""
+import os
+
 import pytest
 
 from mandacaru.config import Config, ConfigError, load_config
@@ -107,3 +109,34 @@ def test_retention_days_invalido(tmp_path, v):
 def test_chave_desconhecida_em_analysis(tmp_path):
     with pytest.raises(ConfigError, match="analysis.vt"):
         load_config(write(tmp_path, '[analysis]\nvt = "x"\n'))
+
+
+_root = pytest.mark.skipif(os.geteuid() == 0, reason="root ignora permissao de leitura")
+
+
+@_root
+def test_padrao_sem_permissao_usa_defaults_e_avisa(monkeypatch, tmp_path, capsys):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[analysis]\nvirustotal_key = "segredo"\n')
+    cfg.chmod(0o000)   # 0640 root:root visto por usuario comum
+    monkeypatch.setattr("mandacaru.config.DEFAULT_PATH", str(cfg))
+    assert load_config() == Config()
+    err = capsys.readouterr().err
+    assert err == f"[mandacaru] aviso: sem permissao para ler {cfg}; usando configuracao padrao\n"
+
+
+@_root
+def test_config_explicito_sem_permissao_continua_erro(tmp_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("[monitor]\nebpf = true\n")
+    cfg.chmod(0o000)
+    with pytest.raises(ConfigError, match="nao foi possivel ler"):
+        load_config(cfg)
+
+
+def test_padrao_com_toml_invalido_continua_erro(monkeypatch, tmp_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("[monitor\n")
+    monkeypatch.setattr("mandacaru.config.DEFAULT_PATH", str(cfg))
+    with pytest.raises(ConfigError, match="TOML invalido"):
+        load_config()

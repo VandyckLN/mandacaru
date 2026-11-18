@@ -1,0 +1,8 @@
+// Mandacaru: analisar/manter um arquivo da quarentena sem senha para o grupo mandacaru, em sessao local ativa.
+// Confiar/apagar (acao release) continua pedindo senha de administrador.
+polkit.addRule(function(action, subject) {
+    if (action.id == "io.github.vandyckln.mandacaru.decide" &&
+        subject.active && subject.local && subject.isInGroup("mandacaru")) {
+        return polkit.Result.YES;
+    }
+});

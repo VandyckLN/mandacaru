@@ -4,3 +4,14 @@ export PYBUILD_TEST_PYTEST = 1
 export PYBUILD_TEST_ARGS = --ignore=tests/test_packaging.py
 %:
 	dh $@ --with python3 --buildsystem=pybuild
+
+override_dh_installsystemd:
+	dh_installsystemd
+	# timer de limpeza: habilitado e iniciado na instalacao; o servico oneshot (sem [Install]) so roda por ele
+	dh_installsystemd --name=mandacaru-quarantine-clean
+
+execute_after_dh_fixperms:
+	# o config pode trazer chaves de API (VirusTotal, MalwareBazaar)
+	chmod 0640 debian/mandacaru/etc/mandacaru/config.toml
+	chmod 0755 debian/mandacaru/usr/libexec/mandacaru/quarantine-decide \
+		debian/mandacaru/usr/libexec/mandacaru/quarantine-release
