@@ -20,6 +20,7 @@ def test_config_de_exemplo_e_valido():
                          json_path="/var/log/mandacaru/alerts.jsonl",
                          socket_path="/run/mandacaru/alerts.sock",
                          rule_dirs=("/etc/mandacaru/rules.d",))
+    assert "uso NAO comercial" in (ROOT / "packaging" / "config.toml").read_text()
 
 
 def test_versao_do_changelog_debian_bate_com_o_pacote():

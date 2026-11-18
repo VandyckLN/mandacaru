@@ -15,3 +15,17 @@ dirs = ["/etc/mandacaru/rules.d"]   # suas regras .yar
 
 [exclude]
 paths = []           # globs de caminho absoluto, ex.: "/home/*/.cache/*"
+
+[quarantine]
+enabled = true
+min_severity = "HIGH"
+retention_days = 30
+max_file_mb = 256
+max_total_mb = 2048
+
+[analysis]
+# Team Cymru MHR e gratuito so para uso NAO comercial; em uso por empresa, desligue (false)
+cymru = true
+# opcionais; sem elas a analise usa so Team Cymru + CIRCL (gratuitos, sem chave)
+# virustotal_key = ""
+# malwarebazaar_key = ""
