@@ -1,3 +1,9 @@
+mandacaru (0.3.1) unstable; urgency=medium
+
+  * Icone do Mandacaru em /usr/share/icons/hicolor/64x64/apps/mandacaru.png.
+
+ -- Vandyck Diniz <noreply@users.noreply.github.com>  Wed, 18 Nov 2026 14:36:51 -0300
+
 mandacaru (0.3.0) unstable; urgency=medium
 
   * Socket de alertas em tempo real em /run/mandacaru/alerts.sock (grupo mandacaru).
