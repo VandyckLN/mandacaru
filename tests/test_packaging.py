@@ -1,5 +1,6 @@
 """Empacotamento: config de exemplo valido, versoes coerentes, unit apontando para o config."""
 import re
+import struct
 from pathlib import Path
 
 import pytest
@@ -62,3 +63,17 @@ def test_postinst_cria_o_grupo_antes_do_debhelper():
 
 def test_control_depende_de_adduser():
     assert "adduser" in (ROOT / "debian" / "control").read_text().split("Package: mandacaru", 1)[1]
+
+
+def test_icone_e_png_64_indexado_e_leve():
+    png = (ROOT / "packaging" / "icons" / "64x64" / "mandacaru.png").read_bytes()
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    largura, altura, _, tipo_cor = struct.unpack(">IIBB", png[16:26])
+    assert (largura, altura, tipo_cor) == (64, 64, 3)   # paleta: 1:1 no max-icon-size do mako
+    assert b"tRNS" in png                                # fundo transparente
+    assert len(png) <= 1024
+
+
+def test_icone_vai_para_o_hicolor():
+    install = (ROOT / "debian" / "mandacaru.install").read_text()
+    assert "packaging/icons/64x64/mandacaru.png usr/share/icons/hicolor/64x64/apps/" in install

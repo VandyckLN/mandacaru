@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- **Ícone do Mandacaru** para popups de alerta: PNG 64×64 de 382 bytes, com o nome `mandacaru` no tema hicolor (`/usr/share/icons/hicolor/64x64/apps/mandacaru.png`).
+
 ## 0.3.0
 
 Alertas em tempo real para programas da sessão do usuário.
