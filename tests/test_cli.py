@@ -134,3 +134,43 @@ def test_nenhuma_pasta_vigiada_existente_e_erro(tmp_path):
     import pytest
     with pytest.raises(cli.CliError, match="nenhuma pasta"):
         cli.resolve_watch_paths([str(tmp_path / "typo")])
+
+
+# ------------------------------------------------- socket de alertas (0.3.0)
+def test_build_sinks_com_socket_cria_o_arquivo(short_dir, capsys):
+    from mandacaru.config import Config
+    p = os.path.join(short_dir, "a.sock")
+    sinks, stops = cli.build_sinks(Config(socket_path=p))
+    try:
+        assert len(sinks) == 2 and os.path.exists(p)
+        assert f"[mandacaru] alertas em tempo real: {p}" in capsys.readouterr().err
+    finally:
+        for s in stops:
+            s()
+    assert not os.path.exists(p)
+
+
+def test_build_sinks_com_socket_impossivel_avisa_e_segue(short_dir, capsys):
+    from mandacaru.config import Config
+    sinks, stops = cli.build_sinks(Config(socket_path=os.path.join(short_dir, "nao", "a.sock")))
+    assert len(sinks) == 1 and stops == []
+    assert "[mandacaru] socket de alertas desligado:" in capsys.readouterr().err
+
+
+def test_build_sinks_sem_socket():
+    from mandacaru.config import Config
+    sinks, stops = cli.build_sinks(Config())
+    assert len(sinks) == 1 and stops == []
+
+
+def test_jsonl_nao_perde_alerta_com_nome_utf8_invalido(tmp_path):
+    from mandacaru.engine import Engine, jsonl_sink
+    from mandacaru.events import Alert
+    recebidos = []
+    fh = cli.open_alert_log(str(tmp_path / "a.jsonl"))
+    engine = Engine([jsonl_sink(fh), recebidos.append])
+    nome = os.fsdecode(b"payload\xff.sh")
+    engine.emit(Alert(rule="r", severity=Severity.HIGH, summary=nome, evidence={"path": "/tmp/" + nome}))
+    fh.close()
+    assert len(recebidos) == 1               # o sink seguinte ainda recebeu
+    assert "payload" in (tmp_path / "a.jsonl").read_text(encoding="utf-8")

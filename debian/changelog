@@ -1,3 +1,10 @@
+mandacaru (0.3.0) unstable; urgency=medium
+
+  * Socket de alertas em tempo real em /run/mandacaru/alerts.sock (grupo mandacaru).
+  * Grupo de sistema mandacaru criado na instalacao.
+
+ -- Vandyck Diniz <noreply@users.noreply.github.com>  Wed, 18 Nov 2026 05:36:52 -0300
+
 mandacaru (0.2.0) unstable; urgency=medium
 
   * Configuracao em /etc/mandacaru/config.toml (flag > arquivo > padrao).

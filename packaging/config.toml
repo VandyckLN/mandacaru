@@ -8,6 +8,7 @@ ebpf = true          # ve todo execve pelo kernel; se nao funcionar, cai para ps
 [alerts]
 min_severity = "LOW" # INFO | LOW | MEDIUM | HIGH | CRITICAL
 json = "/var/log/mandacaru/alerts.jsonl"
+socket = "/run/mandacaru/alerts.sock"  # alertas em tempo real p/ o grupo mandacaru; "" desliga
 
 [rules]
 dirs = ["/etc/mandacaru/rules.d"]   # suas regras .yar

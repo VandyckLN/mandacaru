@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0
+
+Alertas em tempo real para programas da sessão do usuário.
+
+- **Socket de alertas** em `/run/mandacaru/alerts.sock` (chave `[alerts] socket`; `""` desliga). Cada alerta sai como uma linha JSON com contrato versionado (`v: 1`): `ts`, `severity`, `rule`, `summary` e `mitre`. A `evidence` fica de fora, porque traz linhas de comando. Um cliente lento é derrubado; a detecção nunca espera.
+- **Grupo `mandacaru`**, criado na instalação do `.deb`. Só root e membros do grupo conectam no socket (`0660`).
+
 ## 0.2.0
 
 Primeira versão instalável.
