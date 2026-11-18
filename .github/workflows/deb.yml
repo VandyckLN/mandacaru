@@ -25,7 +25,8 @@ jobs:
         run: |
           dpkg-deb -c dist/*.deb | tee contents.txt
           for f in usr/bin/mandacaru dist-packages/mandacaru/rules/yara/base.yar etc/mandacaru/config.toml \
-                   etc/mandacaru/rules.d/ systemd/system/mandacaru.service etc/logrotate.d/mandacaru; do
+                   etc/mandacaru/rules.d/ systemd/system/mandacaru.service etc/logrotate.d/mandacaru \
+                   usr/share/icons/hicolor/64x64/apps/mandacaru.png; do
             grep -q "$f" contents.txt || { echo "faltou $f"; exit 1; }
           done
           dpkg-deb -f dist/*.deb Depends
