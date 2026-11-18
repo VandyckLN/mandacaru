@@ -155,9 +155,9 @@ git commit -m "Socket de alertas: transmite cada alerta como JSON v1 sem travar 
 
 ```python
 # tests/test_config.py
-def test_socket_preenche_socket_path(short_dir):      # [alerts] socket = "/x"  -> cfg.socket_path == "/x"
-def test_socket_vazio_desliga(short_dir):              # socket = ""             -> cfg.socket_path == "" e len(cli.build_sinks(cfg)[0]) == 1
-def test_socket_com_tipo_errado_e_erro(short_dir):     # socket = 1              -> pytest.raises(ConfigError, match="alerts.socket")
+def test_socket_preenche_socket_path(tmp_path):      # [alerts] socket = "/x"  -> cfg.socket_path == "/x"
+def test_socket_vazio_desliga(tmp_path):              # socket = ""             -> cfg.socket_path == "" e len(cli.build_sinks(cfg)[0]) == 1
+def test_socket_com_tipo_errado_e_erro(tmp_path):     # socket = 1              -> pytest.raises(ConfigError, match="alerts.socket")
 
 # tests/test_cli.py
 def test_build_sinks_com_socket_cria_o_arquivo(short_dir, capsys):
@@ -169,7 +169,7 @@ def test_build_sinks_com_socket_impossivel_avisa_e_segue(short_dir, capsys):
     # cfg = Config(socket_path=os.path.join(short_dir, "nao", "a.sock")); sinks, stops = cli.build_sinks(cfg)
     # len(sinks) == 1; "[mandacaru] socket de alertas desligado:" no stderr; sem exceção
 
-def test_build_sinks_sem_socket(short_dir):
+def test_build_sinks_sem_socket():
     # Config() -> len(sinks) == 1 e stops == []
 ```
 
