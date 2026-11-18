@@ -82,14 +82,61 @@ def _write_all(fd: int, data: bytes) -> None:
         view = view[n:]
 
 
-def xor_stream(src: int, dst: int, key: int = XOR_KEY) -> str:
-    """Copia src -> dst (descritores) aplicando XOR byte a byte; devolve o sha256 hex do conteudo de entrada."""
+class UnsafePath(OSError):
+    """Algum componente do caminho e um symlink."""
+
+
+class LimitExceeded(Exception):
+    """A entrada passou do limite de bytes dado a xor_stream."""
+
+
+def open_parent_dir(path: str) -> tuple[int, str]:
+    """Abre o diretorio pai de `path` componente a componente, a partir de "/", sem seguir symlinks.
+
+    Devolve (fd do diretorio pai, nome final); o chamador fecha o fd. Levanta UnsafePath se algum componente
+    do diretorio for symlink. O nome final NAO e aberto aqui (o chamador usa dir_fd=fd com O_NOFOLLOW).
+    """
+    path = os.path.abspath(os.fsdecode(path))
+    parts = [c for c in path.split("/") if c]
+    if not parts:
+        raise OSError(errno.EINVAL, "caminho sem nome de arquivo")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    fd = os.open("/", flags)
+    try:
+        for comp in parts[:-1]:
+            try:
+                nxt = os.open(comp, flags, dir_fd=fd)
+            except OSError as e:
+                if e.errno in (errno.ELOOP, errno.ENOTDIR):
+                    try:
+                        is_link = stat.S_ISLNK(os.stat(comp, dir_fd=fd, follow_symlinks=False).st_mode)
+                    except OSError:
+                        is_link = False
+                    if is_link:
+                        raise UnsafePath(errno.ELOOP, "caminho com symlink", comp) from None
+                raise
+            os.close(fd)
+            fd = nxt
+        return fd, parts[-1]
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def xor_stream(src: int, dst: int, key: int = XOR_KEY, limit: int | None = None) -> str:
+    """Copia src -> dst (descritores) aplicando XOR byte a byte; devolve o sha256 hex do conteudo de entrada.
+
+    Com `limit`, levanta LimitExceeded assim que mais de `limit` bytes forem lidos."""
     h = hashlib.sha256()
     table = bytes(b ^ key for b in range(256))
+    total = 0
     while True:
         block = os.read(src, BLOCK)
         if not block:
             break
+        total += len(block)
+        if limit is not None and total > limit:
+            raise LimitExceeded()
         h.update(block)
         _write_all(dst, block.translate(table))
     return h.hexdigest()
@@ -207,9 +254,28 @@ class Quarantine:
         except Exception as e:  # nunca levanta para o chamador
             return self._fail(path, alert, _reason(e) if isinstance(e, OSError) else repr(e))
 
+    def _fsync_dir(self) -> None:
+        dfd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+
     def _isolate(self, path: str, alert: Alert) -> IsolateResult:
         try:
-            src = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            pfd, name = open_parent_dir(path)
+        except UnsafePath:
+            return self._fail(path, alert, "caminho_com_symlink")
+        except FileNotFoundError:
+            return self._fail(path, alert, "sumiu")
+        try:
+            return self._isolate_in(pfd, name, path, alert)
+        finally:
+            os.close(pfd)
+
+    def _isolate_in(self, pfd: int, name: str, path: str, alert: Alert) -> IsolateResult:
+        try:
+            src = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=pfd)
         except FileNotFoundError:
             return self._fail(path, alert, "sumiu")
         except OSError as e:
@@ -223,53 +289,59 @@ class Quarantine:
             st = os.fstat(src)
             if not stat.S_ISREG(st.st_mode):
                 return self._fail(path, alert, "nao_regular")
+            room = self.max_total_bytes - self.used_bytes()
             if st.st_size > self.max_file_bytes:
                 return self._fail(path, alert, "tamanho")
-            if self.used_bytes() + st.st_size > self.max_total_bytes:
+            if st.st_size > room:
                 return self._fail(path, alert, "quarentena_cheia")
+            limit = min(self.max_file_bytes, room)
+            limit_reason = "tamanho" if self.max_file_bytes <= room else "quarentena_cheia"
             try:
                 # 2. copia embaralhada + fsync
                 dst = os.open(bin_tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 try:
                     os.fchmod(dst, 0o600)
-                    digest = xor_stream(src, dst)
+                    digest = xor_stream(src, dst, limit=limit)
+                    copied = os.lseek(dst, 0, os.SEEK_CUR)
                     os.fsync(dst)
                 finally:
                     os.close(dst)
                 now = self.now()
                 case = Case(
-                    id=case_id, sha256=digest, size=st.st_size, original_path=path, uid=st.st_uid,
+                    id=case_id, sha256=digest, size=copied, original_path=path, uid=st.st_uid,
                     gid=st.st_gid, mode=st.st_mode, mtime=st.st_mtime, rule=alert.rule,
                     severity=alert.severity.name, summary=alert.summary, quarantined_at=now,
                     expires_at=now + self.retention_days * 86400)
                 # 3. metadados, 4. bin definitivo + fsync do diretorio
                 self._write_json(case)
                 os.rename(bin_tmp, bin_final)
-                dfd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
-                try:
-                    os.fsync(dfd)
-                finally:
-                    os.close(dfd)
+                self._fsync_dir()
             except BaseException as e:
                 for p in (bin_tmp, bin_final, json_final, json_final + ".tmp"):
                     _unlink_quiet(p)
+                if isinstance(e, LimitExceeded):
+                    return self._fail(path, alert, limit_reason)
                 if isinstance(e, OSError):
                     return self._fail(path, alert, _reason(e))
                 raise
         finally:
             os.close(src)
-        # 5. so agora remove o original (e so se ainda for o mesmo arquivo)
+        # 5. so agora remove o original, por nome relativo ao diretorio ja aberto (e so se for o mesmo arquivo)
+        stale = False
         try:
-            cur = os.lstat(path)
+            cur = os.stat(name, dir_fd=pfd, follow_symlinks=False)
             if (cur.st_dev, cur.st_ino) != (st.st_dev, st.st_ino):
                 raise OSError(errno.ESTALE, "arquivo original foi substituido")
-            os.unlink(path)
+            os.unlink(name, dir_fd=pfd)
         except OSError:
             case.original_removido = False
             try:
                 self._write_json(case)
+                self._fsync_dir()
             except OSError:
-                pass
-        self._record("isolar", case_id=case.id, sha256=case.sha256, path=path,
-                     detail={"rule": case.rule, "severity": case.severity, "original_removido": case.original_removido})
+                stale = True
+        detail = {"rule": case.rule, "severity": case.severity, "original_removido": case.original_removido}
+        if stale:
+            detail["metadados_desatualizados"] = True
+        self._record("isolar", case_id=case.id, sha256=case.sha256, path=path, detail=detail)
         return IsolateResult("isolado", case=case)

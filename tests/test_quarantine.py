@@ -137,7 +137,7 @@ def test_falha_no_unlink_mantem_o_caso(q, tmp_path, monkeypatch):
     real = os.unlink
 
     def falha(p, *a, **k):
-        if os.fspath(p) == str(f):
+        if os.fspath(p) == f.name and k.get("dir_fd") is not None:
             raise PermissionError(errno.EACCES, "Permission denied")
         return real(p, *a, **k)
 
@@ -158,3 +158,99 @@ def test_load_inexistente(q):
 def test_validate_id(ruim):
     with pytest.raises(CaseNotFound):
         validate_id(ruim)
+
+
+def test_diretorio_pai_symlink_nao_e_seguido(q, tmp_path):
+    fora = tmp_path / "fora"
+    fora.mkdir()
+    alvo = fora / "shadow"
+    alvo.write_bytes(b"segredo")
+    (tmp_path / "d").symlink_to(fora)
+    caminho = str(tmp_path / "d" / "shadow")
+    r = q.isolate(caminho, alerta(caminho))
+    assert (r.status, r.reason) == ("nao_isolado", "caminho_com_symlink")
+    assert alvo.read_bytes() == b"segredo"
+    assert list((tmp_path / "q").iterdir()) == []
+
+
+def test_symlink_em_nivel_intermediario(q, tmp_path):
+    real = tmp_path / "real" / "b"
+    real.mkdir(parents=True)
+    alvo = real / "file"
+    alvo.write_bytes(b"x")
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "link").symlink_to(tmp_path / "real")
+    caminho = str(tmp_path / "a" / "link" / "b" / "file")
+    r = q.isolate(caminho, alerta(caminho))
+    assert (r.status, r.reason) == ("nao_isolado", "caminho_com_symlink")
+    assert alvo.exists()
+
+
+def test_arquivo_que_cresce_alem_do_limite(tmp_path, monkeypatch):
+    (tmp_path / "q").mkdir()
+    q = Quarantine(tmp_path / "q", DecisionLog(tmp_path / "d.jsonl"), max_file_bytes=10)
+    f = tmp_path / "f"
+    f.write_bytes(b"x" * 50)
+    real = os.fstat
+
+    def pequeno(fd):
+        st = list(real(fd))
+        st[6] = 5
+        return os.stat_result(st)
+
+    monkeypatch.setattr(qmod.os, "fstat", pequeno)
+    r = q.isolate(str(f), alerta(f))
+    monkeypatch.undo()
+    assert (r.status, r.reason) == ("nao_isolado", "tamanho")
+    assert f.exists() and list((tmp_path / "q").iterdir()) == []
+
+
+def test_limite_total_ao_crescer(tmp_path, monkeypatch):
+    (tmp_path / "q").mkdir()
+    q = Quarantine(tmp_path / "q", DecisionLog(tmp_path / "d.jsonl"), max_total_bytes=10)
+    f = tmp_path / "f"
+    f.write_bytes(b"x" * 50)
+    real = os.fstat
+
+    def pequeno(fd):
+        st = list(real(fd))
+        st[6] = 5
+        return os.stat_result(st)
+
+    monkeypatch.setattr(qmod.os, "fstat", pequeno)
+    r = q.isolate(str(f), alerta(f))
+    monkeypatch.undo()
+    assert (r.status, r.reason) == ("nao_isolado", "quarentena_cheia")
+
+
+def test_size_e_o_que_foi_copiado(q, tmp_path):
+    f = tmp_path / "f"
+    f.write_bytes(b"x" * 7)
+    assert q.isolate(str(f), alerta(f)).case.size == 7
+
+
+def test_falha_ao_reescrever_metadados_vai_para_o_log(q, tmp_path, monkeypatch):
+    f = tmp_path / "f"
+    f.write_bytes(b"x")
+    real_unlink, real_write = os.unlink, Quarantine._write_json
+
+    def sem_unlink(p, *a, **k):
+        if k.get("dir_fd") is not None:
+            raise PermissionError(errno.EACCES, "Permission denied")
+        return real_unlink(p, *a, **k)
+
+    chamadas = []
+
+    def json_falha(self, case):
+        chamadas.append(1)
+        if len(chamadas) == 2:
+            raise OSError(errno.EIO, "I/O error")
+        return real_write(self, case)
+
+    monkeypatch.setattr(qmod.os, "unlink", sem_unlink)
+    monkeypatch.setattr(Quarantine, "_write_json", json_falha)
+    r = q.isolate(str(f), alerta(f))
+    monkeypatch.undo()
+    assert r.status == "isolado" and r.case.original_removido is False
+    d = linhas(tmp_path)[0]["detail"]
+    assert d["metadados_desatualizados"] is True and d["original_removido"] is False
