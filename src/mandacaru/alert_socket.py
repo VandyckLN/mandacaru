@@ -6,6 +6,7 @@ A `evidence` fica de fora: traz linhas de comando e PIDs.
 """
 from __future__ import annotations
 
+import errno
 import grp
 import json
 import os
@@ -13,13 +14,17 @@ import socket
 import stat
 import sys
 import threading
+import time
 from typing import Callable
 
 from .engine import AlertSink
-from .events import Alert, Severity
+from .events import Alert, Severity, safe_text
 
 GROUP = "mandacaru"
 CONTRACT_VERSION = 1
+# teto de conexoes: sem ele, um processo do grupo abre conexoes ate esgotar os file
+# descriptors do servico, e o EDR para de conseguir abrir arquivos para varrer
+MAX_CLIENTS = 32
 
 
 def _group_gid(name: str) -> int | None:
@@ -32,7 +37,7 @@ def _group_gid(name: str) -> int | None:
 def alert_line(alert: Alert) -> bytes:
     d = {"v": CONTRACT_VERSION, "ts": alert.ts, "severity": alert.severity.name,
          "rule": alert.rule, "summary": alert.summary, "mitre": list(alert.mitre)}
-    return json.dumps(d, ensure_ascii=False, separators=(",", ":")).encode() + b"\n"
+    return safe_text(json.dumps(d, ensure_ascii=False, separators=(",", ":"))).encode() + b"\n"
 
 
 def _prepare_path(path: str) -> None:
@@ -42,7 +47,18 @@ def _prepare_path(path: str) -> None:
         return
     if not stat.S_ISSOCK(st.st_mode):
         raise FileExistsError(f"{path} existe e nao e um socket")
-    os.unlink(path)  # sobra de uma execucao que caiu
+    # socket vivo = outro monitor (ex.: `sudo mandacaru monitor` com o servico rodando):
+    # apagar o arquivo deixaria os consumidores do servico sem ter onde conectar
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    probe.settimeout(0.5)
+    try:
+        probe.connect(path)
+    except ConnectionRefusedError:
+        os.unlink(path)  # sobra de uma execucao que caiu
+        return
+    finally:
+        probe.close()
+    raise OSError(errno.EADDRINUSE, f"outro monitor ja publica em {path}")
 
 
 def _set_permissions(path: str) -> None:
@@ -79,18 +95,30 @@ def socket_sink(path: str, min_sev: Severity) -> tuple[AlertSink, Callable[[], N
     stopped = threading.Event()
 
     def _accept_loop():
+        avisou_erro = False
         while not stopped.is_set():
             try:
                 conn, _ = server.accept()
             except (TimeoutError, socket.timeout):
                 continue
-            except OSError:
-                return
-            conn.setblocking(False)
+            except OSError as exc:
+                if stopped.is_set():
+                    return
+                # EMFILE e afins: a thread nao pode morrer, senao ninguem mais conecta
+                if not avisou_erro:
+                    print(f"[mandacaru] socket de alertas nao aceitou conexao: {exc}", file=sys.stderr)
+                    avisou_erro = True
+                time.sleep(0.5)
+                continue
+            avisou_erro = False
             with lock:
                 if stopped.is_set():
                     conn.close()
                     return
+                if len(clients) >= MAX_CLIENTS:
+                    conn.close()
+                    continue
+                conn.setblocking(False)
                 clients.append(conn)
 
     thread = threading.Thread(target=_accept_loop, name="mandacaru-alert-socket", daemon=True)

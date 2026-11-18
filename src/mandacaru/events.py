@@ -8,6 +8,15 @@ from enum import IntEnum
 from typing import Any
 
 
+def safe_text(s: str) -> str:
+    """Troca surrogates (bytes invalidos de nomes de arquivo lidos com surrogateescape) por U+FFFD.
+
+    Sem isso, gravar ou enviar o alerta levanta UnicodeEncodeError e o alerta some:
+    um malware escaparia so pelo nome do arquivo.
+    """
+    return s.encode("utf-8", "surrogatepass").decode("utf-8", "replace")
+
+
 class Severity(IntEnum):
     INFO = 0
     LOW = 1
@@ -38,4 +47,4 @@ class Alert:
     def to_json(self) -> str:
         d = asdict(self)
         d["severity"] = self.severity.name
-        return json.dumps(d, ensure_ascii=False, default=str)
+        return safe_text(json.dumps(d, ensure_ascii=False, default=str))

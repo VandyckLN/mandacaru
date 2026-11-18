@@ -161,3 +161,16 @@ def test_build_sinks_sem_socket():
     from mandacaru.config import Config
     sinks, stops = cli.build_sinks(Config())
     assert len(sinks) == 1 and stops == []
+
+
+def test_jsonl_nao_perde_alerta_com_nome_utf8_invalido(tmp_path):
+    from mandacaru.engine import Engine, jsonl_sink
+    from mandacaru.events import Alert
+    recebidos = []
+    fh = cli.open_alert_log(str(tmp_path / "a.jsonl"))
+    engine = Engine([jsonl_sink(fh), recebidos.append])
+    nome = os.fsdecode(b"payload\xff.sh")
+    engine.emit(Alert(rule="r", severity=Severity.HIGH, summary=nome, evidence={"path": "/tmp/" + nome}))
+    fh.close()
+    assert len(recebidos) == 1               # o sink seguinte ainda recebeu
+    assert "payload" in (tmp_path / "a.jsonl").read_text(encoding="utf-8")
