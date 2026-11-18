@@ -553,3 +553,22 @@ def test_list_ignora_json_corrompido(qr, tmp_path):
     c = isolar(qr, tmp_path / "a.py")
     (tmp_path / "q" / ("e" * 32 + ".json")).write_text("{lixo")
     assert [x.id for x in qr.list()] == [c.id]
+
+
+def test_read_original_desembaralha_confere_e_limita(q, tmp_path):
+    f = tmp_path / "mal.py"
+    conteudo = b"conteudo original\n" * 3
+    f.write_bytes(conteudo)
+    case = q.isolate(str(f), alerta(f)).case
+    assert q.read_original(case.id) == conteudo
+    assert q.read_original(case.id, max_bytes=len(conteudo)) == conteudo
+    with pytest.raises(ValueError):
+        q.read_original(case.id, max_bytes=len(conteudo) - 1)
+    (tmp_path / "q" / f"{case.id}.bin").write_bytes(b"trocado")
+    with pytest.raises(Tampered):
+        q.read_original(case.id)
+    (tmp_path / "q" / f"{case.id}.bin").unlink()
+    with pytest.raises(Tampered):
+        q.read_original(case.id)
+    with pytest.raises(CaseNotFound):
+        q.read_original("0" * 32)

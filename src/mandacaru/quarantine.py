@@ -554,6 +554,32 @@ class Quarantine:
         self._fsync_dir()
         self._record(action, case_id=case.id, sha256=case.sha256, path=case.original_path, by=by, uid=uid)
 
+    def read_original(self, case_id: str, max_bytes: int | None = None) -> bytes:
+        """Conteudo original desembaralhado, so em memoria; confere o sha256 (diferente = Tampered)."""
+        case = self.load(case_id)
+        try:
+            fd = os.open(self._p(case.id, ".bin"), os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        except FileNotFoundError:
+            raise Tampered(f"arquivo isolado ausente em {case.id}") from None
+        try:
+            size = os.fstat(fd).st_size
+            if max_bytes is not None and size > max_bytes:
+                raise ValueError(f"arquivo isolado maior que o limite de {max_bytes} bytes")
+            chunks = []
+            while True:
+                block = os.read(fd, BLOCK)
+                if not block:
+                    break
+                chunks.append(block)
+        finally:
+            os.close(fd)
+        data = b"".join(chunks).translate(bytes(b ^ XOR_KEY for b in range(256)))
+        if max_bytes is not None and len(data) > max_bytes:
+            raise ValueError(f"arquivo isolado maior que o limite de {max_bytes} bytes")
+        if hashlib.sha256(data).hexdigest() != case.sha256:
+            raise Tampered(f"conteudo adulterado em {case.id}")
+        return data
+
     def set_analysis(self, case_id: str, analysis: dict) -> Case:
         case = self.load(case_id)
         case.analysis = analysis

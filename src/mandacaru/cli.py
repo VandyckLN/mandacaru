@@ -1,4 +1,4 @@
-"""CLI: `mandacaru scan CAMINHO` e `mandacaru monitor`."""
+"""CLI: `mandacaru scan CAMINHO`, `mandacaru monitor` e `mandacaru quarentena ...`."""
 from __future__ import annotations
 
 import argparse
@@ -22,6 +22,7 @@ from .detectors.static import StaticScanner
 from .engine import AlertSink, Engine, console_sink, jsonl_sink
 from .events import Severity
 from .quarantine import DEFAULT_DIR, DEFAULT_TRUST, Quarantine, TrustList
+from .quarantine_cli import add_parser as add_quarantine_parser
 
 
 class CliError(Exception):
@@ -205,6 +206,7 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("paths", nargs="*", help="pastas a vigiar (padrao: Downloads, Documentos, /tmp...)")
     m.add_argument("--no-ebpf", action="store_true")
     m.set_defaults(fn=cmd_monitor)
+    add_quarantine_parser(sub)
     return ap
 
 
