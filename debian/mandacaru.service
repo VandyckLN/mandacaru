@@ -25,9 +25,10 @@ StateDirectoryMode=0755
 UMask=0027
 NoNewPrivileges=yes
 ProtectSystem=full
-ProtectHome=read-only
-# a quarentena tira arquivos detectados das pastas vigiadas em /home
-ReadWritePaths=/home
+# a quarentena tira arquivos detectados das pastas vigiadas em /home. ProtectHome=read-only venceria um
+# ReadWritePaths=/home (mesmo caminho), entao /home fica gravavel e o resto do ProtectHome vira so leitura
+ProtectHome=no
+ReadOnlyPaths=-/root -/run/user
 
 [Install]
 WantedBy=multi-user.target

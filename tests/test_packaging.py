@@ -90,7 +90,12 @@ RELEASE = ROOT / "packaging" / "libexec" / "quarantine-release"
 def test_service_tem_state_directory_e_escrita_em_home():
     unit = (ROOT / "debian" / "mandacaru.service").read_text()
     assert "StateDirectory=mandacaru" in unit and "StateDirectoryMode=0755" in unit
-    assert "ReadWritePaths=/home" in unit and "ProtectHome=read-only" in unit   # move arquivos de /home
+    # ProtectHome=read-only venceria um ReadWritePaths=/home (mesmo caminho): /home fica gravavel e so
+    # /root e /run/user ficam so leitura (verificado com systemd-run --user no systemd 259)
+    linhas = unit.splitlines()
+    assert "ProtectHome=no" in linhas and "ReadOnlyPaths=-/root -/run/user" in linhas
+    assert not [linha for linha in linhas if linha.startswith(("ProtectHome=read-only", "ProtectHome=yes",
+                                                                "ProtectHome=tmpfs", "ReadWritePaths="))]
     assert ("ExecStartPre=+/usr/bin/install -d -m 0750 -o root -g mandacaru /var/lib/mandacaru/quarantine"
             in unit)
 
