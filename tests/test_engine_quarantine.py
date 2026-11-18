@@ -201,3 +201,44 @@ def test_confiar_com_o_servico_rodando_nao_isola_o_temporario(scanner, tmp_path,
     assert f.read_text() == HIGH
     assert sorted(p.name for p in w.iterdir()) == ["loader.py"]
     assert not [a for a in got[1:] if a.severity != Severity.INFO]   # sem segundo popup
+
+
+# alertas abaixo do min_severity no mesmo arquivo herdam o resultado da quarentena
+AMBOS = MEDIUM + HIGH
+
+
+def test_alerta_medium_do_arquivo_isolado_leva_o_id_e_ignora_dedup(setup, q, w):
+    engine, got = setup
+    f = w / "x.py"
+    f.write_text(MEDIUM)
+    engine.process(fev("file_create", f))           # MEDIUM sozinho: alerta, sem isolar
+    assert got and f.exists()
+    f.write_text(AMBOS)
+    out = engine.process(fev("file_write", f))
+    [case] = q.list()
+    med = [a for a in out if a.rule == "yara.Shell_Pipe_To_Interpreter"]
+    assert med, "o MEDIUM do arquivo isolado tem de chegar mesmo dentro da janela de dedup"
+    assert med[0].quarantine_id == case.id and med[0].evidence["quarantine_id"] == case.id
+
+
+def test_alerta_medium_de_arquivo_confiavel_vira_info(setup, q, w, trust):
+    engine, got = setup
+    f = w / "x.py"
+    f.write_text(AMBOS)
+    trust.add(hashlib.sha256(AMBOS.encode()).hexdigest(), str(f), "teste")
+    out = engine.process(fev("file_create", f))
+    assert {a.rule for a in out} == {"yara.Py_Exec_Decoded_Payload", "yara.Shell_Pipe_To_Interpreter"}
+    assert all(a.severity == Severity.INFO and a.evidence["trusted"] is True for a in out)
+    assert q.list() == [] and f.exists()
+
+
+def test_alerta_medium_de_arquivo_nao_isolado_diz_o_motivo(scanner, tmp_path, w):
+    got = []
+    q = Quarantine(tmp_path / "nao-existe", DecisionLog(tmp_path / "d.jsonl"))
+    engine = Engine([got.append], scanner=scanner, quarantine=q, watch_paths=[str(w)])
+    f = w / "x.py"
+    f.write_text(AMBOS)
+    out = engine.process(fev("file_create", f))
+    assert len(out) == 2
+    assert all(a.evidence["quarantine"].startswith("nao_isolado: ") for a in out)
+    assert all("(NAO isolado: " in a.summary for a in out)

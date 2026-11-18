@@ -82,11 +82,13 @@ class Engine:
         results: dict[str, IsolateResult] = {}  # um isolate por caminho: os alertas do arquivo dividem o caso
         for a in found:
             p = a.evidence.get("path")
-            if not p or a.severity < self.quarantine_min_severity or not self._watched(p):
-                continue
-            if p not in results:
+            if p and p not in results and a.severity >= self.quarantine_min_severity and self._watched(p):
                 results[p] = self.quarantine.isolate(p, a)
-            r = results[p]
+        # todos os alertas do arquivo herdam o resultado, inclusive os abaixo do min_severity
+        for a in found:
+            r = results.get(a.evidence.get("path"))
+            if r is None:
+                continue
             if r.status == "isolado":
                 a.quarantine_id = r.case.id
                 a.evidence["quarantine_id"] = r.case.id
