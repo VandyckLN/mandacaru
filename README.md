@@ -130,7 +130,7 @@ sudo mandacaru quarentena apagar <id>             # apaga já, sem esperar o pra
 sudo mandacaru quarentena desconfiar <sha256>     # tira o hash da lista de confiança
 ```
 
-Códigos de saída: `0` ok, `1` uso ou configuração, `3` id inexistente ou já resolvido, `4` quarentena adulterada. Toda decisão vai para `/var/log/mandacaru/decisions.jsonl` (legível por root e pelo grupo `mandacaru`), com quem decidiu.
+Códigos de saída: `0` ok, `1` uso ou configuração, `3` id inexistente ou já resolvido, `4` quarentena adulterada. Toda decisão vai para `/var/log/mandacaru/decisions.jsonl` (legível só por root), com quem decidiu.
 
 A análise funciona sem configurar nada, com o Team Cymru MHR e o CIRCL hashlookup (gratuitos, sem chave). Com chaves no config, também usa MalwareBazaar e VirusTotal:
 

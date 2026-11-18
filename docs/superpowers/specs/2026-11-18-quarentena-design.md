@@ -237,7 +237,8 @@ mais uma varredura YARA local de novo (regras atuais podem ter mudado).
 ### 7. Log de decisões
 
 `/var/log/mandacaru/decisions.jsonl`, root:mandacaru, 0640, uma linha JSON por evento, escrita com `O_APPEND` e
-`flock` (serviço e auxiliares escrevem no mesmo arquivo). Campos:
+`flock` (serviço e auxiliares escrevem no mesmo arquivo). *Na implementação, o log fica só para root: o
+`LogsDirectory` é `0750 root:root`.* Campos:
 
 ```json
 {"v": 1, "ts": 1763…, "id": "…", "sha256": "…", "path": "/home/ana/Downloads/x.py",

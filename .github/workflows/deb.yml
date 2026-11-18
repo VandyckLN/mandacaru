@@ -75,12 +75,14 @@ jobs:
           printf '%s\n' 'import base64' "exec(base64.b64decode('cHJpbnQoMSk='))" \
             | sudo -u qtest tee /home/qtest/Downloads/amostra.py >/dev/null
           for i in $(seq 15); do
-            [ -e /home/qtest/Downloads/amostra.py ] || break
+            sudo test -e /home/qtest/Downloads/amostra.py || break   # a home do qtest pode ser 0750
             sleep 1
           done
           sudo journalctl -u mandacaru --since "$desde" --no-pager | tail -20
-          ! sudo test -e /home/qtest/Downloads/amostra.py
-          sudo grep -q '"action": "isolar"' /var/log/mandacaru/decisions.jsonl
+          # "! cmd" no meio do script nao derruba o set -e: o teste tem de sair explicitamente
+          if sudo test -e /home/qtest/Downloads/amostra.py; then echo "nao isolou a amostra"; exit 1; fi
+          sudo grep '"action": "isolar"' /var/log/mandacaru/decisions.jsonl | grep amostra.py \
+            | grep -q '"original_removido": true'
           sudo mandacaru quarentena listar | tee /tmp/listar.txt
           grep -q amostra.py /tmp/listar.txt
           # a limpeza roda de verdade dentro do sandbox da sua unit
