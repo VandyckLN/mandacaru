@@ -14,6 +14,9 @@ RestartPreventExitStatus=1
 LogsDirectory=mandacaru
 # os alertas trazem linhas de comando: so root e o grupo leem
 LogsDirectoryMode=0750
+# socket de alertas em tempo real: /run/mandacaru/alerts.sock (grupo mandacaru)
+RuntimeDirectory=mandacaru
+RuntimeDirectoryMode=0755
 UMask=0027
 NoNewPrivileges=yes
 ProtectSystem=full

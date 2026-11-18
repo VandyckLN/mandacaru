@@ -17,6 +17,7 @@ def test_config_de_exemplo_e_valido():
     cfg = load_config(ROOT / "packaging" / "config.toml")
     assert cfg == Config(ebpf=True, min_severity=Severity.LOW,
                          json_path="/var/log/mandacaru/alerts.jsonl",
+                         socket_path="/run/mandacaru/alerts.sock",
                          rule_dirs=("/etc/mandacaru/rules.d",))
 
 
@@ -46,3 +47,18 @@ def test_unit_protege_o_log_e_nao_reinicia_em_erro_de_config():
     unit = (ROOT / "debian" / "mandacaru.service").read_text()
     assert "LogsDirectoryMode=0750" in unit and "UMask=0027" in unit   # alertas trazem linhas de comando
     assert "RestartPreventExitStatus=1" in unit                        # saida 1 = erro de config: nao adianta reiniciar
+
+
+def test_unit_cria_o_diretorio_do_socket():
+    unit = (ROOT / "debian" / "mandacaru.service").read_text()
+    assert "RuntimeDirectory=mandacaru" in unit and "RuntimeDirectoryMode=0755" in unit
+
+
+def test_postinst_cria_o_grupo_antes_do_debhelper():
+    post = (ROOT / "debian" / "mandacaru.postinst").read_text()
+    assert "addgroup --system --quiet mandacaru" in post
+    assert post.index("addgroup") < post.index("#DEBHELPER#")   # grupo existe antes de o servico subir
+
+
+def test_control_depende_de_adduser():
+    assert "adduser" in (ROOT / "debian" / "control").read_text().split("Package: mandacaru", 1)[1]

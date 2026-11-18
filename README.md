@@ -63,6 +63,7 @@ ebpf = true          # se não funcionar, cai para psutil sozinho
 [alerts]
 min_severity = "LOW" # INFO | LOW | MEDIUM | HIGH | CRITICAL
 json = "/var/log/mandacaru/alerts.jsonl"
+socket = "/run/mandacaru/alerts.sock"  # alertas em tempo real; "" desliga
 
 [rules]
 dirs = ["/etc/mandacaru/rules.d"]   # suas regras .yar
@@ -89,10 +90,26 @@ mandacaru --rules ./minhas-regras scan .
 
 Os alertas saem no terminal e, com `--json`, em JSON Lines, já com as técnicas do MITRE ATT&CK. Esse formato serve para mandar para Wazuh, Loki ou Elastic.
 
+## Alertas em tempo real
+
+O serviço publica cada alerta, na hora, no socket Unix `/run/mandacaru/alerts.sock`. Só o root e os membros do grupo `mandacaru` conseguem conectar (`0660`). Para ouvir com o seu usuário: `sudo usermod -aG mandacaru $USER` e entre de novo na sessão.
+
+Cada alerta é uma linha JSON (contrato `v: 1`):
+
+```json
+{"v":1,"ts":1794872689.2,"severity":"HIGH","rule":"behavior.revshell","summary":"Shell bash com conexao de rede ativa","mitre":["T1059"]}
+```
+
+A `evidence` (linhas de comando, PIDs) não sai pelo socket; ela continua só no `alerts.jsonl`, legível pelo root. O socket só transmite: o que o cliente envia é ignorado, e um cliente que não lê a tempo é desconectado.
+
+```bash
+socat - UNIX-CONNECT:/run/mandacaru/alerts.sock
+```
+
 ## Arquitetura
 
 ```
-coletores (procmon | ebpf | fsmon) ──► fila ──► Engine ──► detectores (static | behavior) ──► sinks (console | jsonl)
+coletores (procmon | ebpf | fsmon) ──► fila ──► Engine ──► detectores (static | behavior) ──► sinks (console | jsonl | socket)
 ```
 
 - `collectors/`: geram `Event`s. `procmon` usa psutil (multiplataforma), `ebpf` usa um tracepoint de `execve` (Linux, root) e `fsmon` usa watchdog (inotify/ReadDirectoryChanges).
