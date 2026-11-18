@@ -190,9 +190,9 @@ class TrustList:
             return []
         return [e for e in data if isinstance(e, dict) and isinstance(e.get("sha256"), str)]
 
-    def _refresh(self) -> None:
+    def _refresh(self, force: bool = False) -> None:
         t = self.now()
-        if self._checked is not None and t - self._checked < self.recheck_seconds:
+        if not force and self._checked is not None and t - self._checked < self.recheck_seconds:
             return
         self._checked = t
         try:
@@ -206,6 +206,11 @@ class TrustList:
 
     def contains(self, sha256: str) -> bool:
         self._refresh()
+        if sha256 in self._hashes:
+            return True
+        # falta no cache: confere o arquivo agora (so roda em deteccao HIGH), senao um "confiar" de menos de
+        # `recheck_seconds` atras passaria despercebido e o servico isolaria o arquivo restaurado
+        self._refresh(force=True)
         return sha256 in self._hashes
 
     def _save(self, entries: list[dict]) -> None:
@@ -224,12 +229,14 @@ class TrustList:
             raise
         self._checked = None  # forca reler na proxima consulta
 
-    def add(self, sha256: str, original_path: str, by: str) -> None:
+    def add(self, sha256: str, original_path: str, by: str) -> bool:
+        """Poe o hash na lista; devolve True so se ele ainda nao estava no arquivo."""
         entries = self._read()
         if any(e["sha256"] == sha256 for e in entries):
-            return
+            return False
         entries.append({"sha256": sha256, "added_at": time.time(), "original_path": original_path, "by": by})
         self._save(entries)
+        return True
 
     def remove(self, sha256: str) -> bool:
         entries = self._read()
@@ -495,14 +502,19 @@ class Quarantine:
         except FileNotFoundError:
             self._refuse(case, by, uid, "bin_ausente")
             raise Tampered(f"arquivo isolado ausente em {case.id}") from None
-        added = False
+        added = refused = False
         try:
+            # o hash entra na lista ANTES de o conteudo aparecer na pasta vigiada: o monitor ve o temporario
+            # (create/write) e o isolaria, levando junto a restauracao
+            if self.trust is not None:
+                added = self.trust.add(case.sha256, case.original_path, by)
             fd = os.open(tmpname, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=pfd)
             try:
                 try:
                     digest = xor_stream(src, fd, hash_output=True)
                     if digest != case.sha256:
                         self._refuse(case, by, uid, "hash_diferente")
+                        refused = True
                         raise Tampered(f"conteudo adulterado em {case.id}")
                     if os.geteuid() == 0:
                         os.fchown(fd, case.uid, case.gid)
@@ -511,10 +523,6 @@ class Quarantine:
                     os.fsync(fd)
                 finally:
                     os.close(fd)
-                # o hash entra na lista ANTES do arquivo voltar (senao o scanner o isola de novo)
-                if self.trust is not None and not self.trust.contains(case.sha256):
-                    self.trust.add(case.sha256, case.original_path, by)
-                    added = True
                 final = name
                 try:
                     os.link(tmpname, final, src_dir_fd=pfd, dst_dir_fd=pfd, follow_symlinks=False)
@@ -524,16 +532,16 @@ class Quarantine:
                         os.link(tmpname, final, src_dir_fd=pfd, dst_dir_fd=pfd, follow_symlinks=False)
                     except FileExistsError:
                         self._refuse(case, by, uid, "destino_existe")
+                        refused = True
                         raise
                 try:
                     # o novo nome tem de estar no disco antes de apagar o .bin (senao um crash perde o arquivo)
                     os.fsync(pfd)
-                except OSError as e:
+                except OSError:
                     try:
                         os.unlink(final, dir_fd=pfd)
                     except OSError:
                         pass
-                    self._refuse(case, by, uid, _reason(e))
                     raise
                 return final
             finally:
@@ -541,12 +549,14 @@ class Quarantine:
                     os.unlink(tmpname, dir_fd=pfd)
                 except OSError:
                     pass
-        except BaseException:
+        except BaseException as e:
             if added:
                 try:
                     self.trust.remove(case.sha256)
                 except OSError:
                     pass
+            if isinstance(e, OSError) and not refused:
+                self._refuse(case, by, uid, _reason(e))
             raise
         finally:
             os.close(src)

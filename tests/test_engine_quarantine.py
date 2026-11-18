@@ -165,3 +165,39 @@ def test_alerta_isolado_vai_no_jsonl_com_o_id(setup, w):
     f.write_text(HIGH)
     out = engine.process(fev("file_create", f))
     assert f'"quarantine_id": "{out[0].quarantine_id}"' in out[0].to_json()
+
+
+def test_confiar_com_o_servico_rodando_nao_isola_o_temporario(scanner, tmp_path, w, monkeypatch):
+    """O monitor ve o temporario da restauracao (create/write) no meio do "confiar": nao pode isola-lo."""
+    from mandacaru import quarantine as qmod
+    got = []
+    # servico: lista propria, que acabou de ler o arquivo (e so releria depois de 1 h)
+    q_svc = Quarantine(tmp_path / "q", DecisionLog(tmp_path / "d.jsonl"),
+                       trust=TrustList(tmp_path / "trusted.json", recheck_seconds=3600))
+    (tmp_path / "q").mkdir()
+    engine = Engine([got.append], scanner=scanner, quarantine=q_svc, watch_paths=[str(w)])
+    f = w / "loader.py"
+    f.write_text(HIGH)
+    engine.process(fev("file_create", f))
+    [case] = q_svc.list()
+    vistos = []
+    real = qmod.xor_stream
+
+    def servico_ve_o_temporario(src, dst, *a, **k):
+        digest = real(src, dst, *a, **k)
+        for p in w.iterdir():
+            if p.name.startswith(".mandacaru-restore-"):
+                vistos.append(p.name)
+                for kind in ("file_create", "file_write"):
+                    engine.process(fev(kind, p))
+        return digest
+
+    monkeypatch.setattr(qmod, "xor_stream", servico_ve_o_temporario)
+    q_cli = Quarantine(tmp_path / "q", DecisionLog(tmp_path / "d.jsonl"),
+                       trust=TrustList(tmp_path / "trusted.json", recheck_seconds=3600), strict_log=True)
+    assert q_cli.restore(case.id, "ana", 1000) == str(f)
+    assert vistos                                    # o servico de fato processou o temporario
+    assert q_svc.list() == []                        # nenhum caso novo
+    assert f.read_text() == HIGH
+    assert sorted(p.name for p in w.iterdir()) == ["loader.py"]
+    assert not [a for a in got[1:] if a.severity != Severity.INFO]   # sem segundo popup

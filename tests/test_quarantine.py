@@ -410,15 +410,97 @@ def test_trustlist_corrompida_ou_ausente_e_vazia(tmp_path):
     assert not t.contains("aa")
 
 
-def test_trustlist_respeita_recheck_seconds(tmp_path):
+def test_trustlist_respeita_recheck_seconds_nos_acertos(tmp_path):
     p = tmp_path / "t.json"
     agora = [0.0]
     a = TrustList(p, recheck_seconds=5, now=lambda: agora[0])
+    TrustList(p).add("aa", "/x", "ana")
+    assert a.contains("aa")
+    TrustList(p).remove("aa")
+    assert a.contains("aa")          # acerto: usa o cache ate o intervalo passar
+    agora[0] = 6
+    assert not a.contains("aa")
+
+
+def test_trustlist_falta_no_cache_rele_sem_esperar_o_intervalo(tmp_path):
+    # o servico leu a lista ha menos de 5 s e o "confiar" acabou de por o hash: tem de ver na hora
+    p = tmp_path / "t.json"
+    a = TrustList(p, recheck_seconds=5, now=lambda: 0.0)
     assert not a.contains("aa")
     TrustList(p).add("aa", "/x", "ana")
-    assert not a.contains("aa")
-    agora[0] = 6
     assert a.contains("aa")
+
+
+def test_trustlist_add_diz_se_inseriu(tmp_path):
+    t = TrustList(tmp_path / "t.json", recheck_seconds=0)
+    assert t.add("aa", "/x", "ana") is True
+    assert t.add("aa", "/x", "ana") is False
+
+
+def test_restaurar_poe_o_hash_antes_de_criar_o_temporario(qt, tmp_path, monkeypatch):
+    f = tmp_path / "x.py"
+    case = isolar(qt, f)
+    vistos = []
+    real = qmod.xor_stream
+
+    def espia(src, dst, *a, **k):
+        vistos.append(TrustList(tmp_path / "trusted.json").contains(case.sha256))
+        return real(src, dst, *a, **k)
+
+    monkeypatch.setattr(qmod, "xor_stream", espia)
+    qt.restore(case.id, "ana", 1000)
+    assert vistos == [True]
+
+
+def test_restaurar_com_cache_velho_ainda_poe_o_hash(tmp_path):
+    (tmp_path / "q").mkdir()
+    trust = TrustList(tmp_path / "trusted.json", recheck_seconds=3600)
+    q = Quarantine(tmp_path / "q", DecisionLog(tmp_path / "d.jsonl"), trust=trust, now=lambda: 1000.0)
+    f = tmp_path / "x.py"
+    f.write_bytes(b"abc")
+    sha = hashlib.sha256(b"abc").hexdigest()
+    trust.add(sha, str(f), "ana")
+    assert trust.contains(sha)                       # cache: presente
+    TrustList(tmp_path / "trusted.json").remove(sha)  # outro processo tira o hash
+    q.trust = None
+    case = q.isolate(str(f), alerta(f)).case
+    q.trust = trust
+    q.restore(case.id, "ana", 1000)
+    assert TrustList(tmp_path / "trusted.json").contains(sha)
+
+
+def test_restaurar_erro_de_disco_registra_recusa_e_desfaz_a_confianca(qt, tmp_path, monkeypatch):
+    f = tmp_path / "x.py"
+    case = isolar(qt, f)
+
+    def link_falha(*a, **k):
+        raise OSError(errno.EIO, "Input/output error")
+
+    monkeypatch.setattr(qmod.os, "link", link_falha)
+    with pytest.raises(OSError):
+        qt.restore(case.id, "ana", 1000)
+    monkeypatch.undo()
+    assert [c.id for c in qt.list()] == [case.id]
+    assert not TrustList(tmp_path / "trusted.json").contains(case.sha256)
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".mandacaru")] == []
+    ult = linhas(tmp_path)[-1]
+    assert ult["action"] == "restauracao_recusada" and ult["detail"]["motivo"] == "Input/output error"
+
+
+def test_restaurar_falha_ao_gravar_a_lista_registra_recusa(qt, tmp_path, monkeypatch):
+    f = tmp_path / "x.py"
+    case = isolar(qt, f)
+
+    def save_falha(self, entries):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(TrustList, "_save", save_falha)
+    with pytest.raises(OSError):
+        qt.restore(case.id, "ana", 1000)
+    monkeypatch.undo()
+    assert [c.id for c in qt.list()] == [case.id] and not f.exists()
+    ult = linhas(tmp_path)[-1]
+    assert ult["action"] == "restauracao_recusada" and ult["detail"]["motivo"] == "No space left on device"
 
 
 def test_restaurar_falha_no_fsync_do_destino_mantem_o_caso(qt, tmp_path, monkeypatch):
