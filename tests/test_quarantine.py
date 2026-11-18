@@ -419,3 +419,26 @@ def test_trustlist_respeita_recheck_seconds(tmp_path):
     assert not a.contains("aa")
     agora[0] = 6
     assert a.contains("aa")
+
+
+def test_restaurar_falha_no_fsync_do_destino_mantem_o_caso(qt, tmp_path, monkeypatch):
+    import stat as _stat
+    f = tmp_path / "x.py"
+    case = isolar(qt, f)
+    real = os.fsync
+
+    def falha(fd):
+        if _stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError(errno.EIO, "Input/output error")
+        return real(fd)
+
+    monkeypatch.setattr(os, "fsync", falha)
+    with pytest.raises(OSError):
+        qt.restore(case.id, "ana", 1000)
+    assert (tmp_path / "q" / f"{case.id}.bin").exists() and (tmp_path / "q" / f"{case.id}.json").exists()
+    assert [c.id for c in qt.list()] == [case.id]
+    assert not f.exists() and not qt.trust.contains(case.sha256)
+    ult = linhas(tmp_path)[-1]
+    assert ult["action"] == "restauracao_recusada" and ult["detail"]["motivo"] == "Input/output error"
+    monkeypatch.undo()
+    assert qt.restore(case.id, "ana", 1000) == str(f)

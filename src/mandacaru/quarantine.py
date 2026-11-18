@@ -511,6 +511,16 @@ class Quarantine:
                     except FileExistsError:
                         self._refuse(case, by, uid, "destino_existe")
                         raise
+                try:
+                    # o novo nome tem de estar no disco antes de apagar o .bin (senao um crash perde o arquivo)
+                    os.fsync(pfd)
+                except OSError as e:
+                    try:
+                        os.unlink(final, dir_fd=pfd)
+                    except OSError:
+                        pass
+                    self._refuse(case, by, uid, _reason(e))
+                    raise
                 return final
             finally:
                 try:
