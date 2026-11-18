@@ -1,4 +1,5 @@
 """Socket de alertas: contrato JSON v1, permissao e nunca travar o motor."""
+import errno
 import json
 import os
 import socket
@@ -201,3 +202,65 @@ def test_stop_apaga_o_socket_e_encerra_rapido(path, sem_grupo):
     assert not os.path.exists(path)
     sink(mk())  # depois do stop: nao levanta
     stop()      # idempotente
+
+
+# ------------------------------------------------ achados da revisao final
+def test_teto_de_clientes_recusa_o_excedente(path, sem_grupo, monkeypatch):
+    monkeypatch.setattr(alert_socket, "MAX_CLIENTS", 3)
+    sink, stop = socket_sink(path, Severity.LOW)
+    try:
+        dentro = [connect(path) for _ in range(3)]
+        fora = connect(path)
+        assert fora.recv(1) == b""          # o excedente e fechado na hora
+        sink(mk())
+        assert all(readline(c)["rule"] == "behavior.revshell" for c in dentro)
+    finally:
+        stop()
+
+
+def test_accept_sobrevive_a_emfile(path, sem_grupo, monkeypatch):
+    original = socket.socket.accept
+    falhas = {"n": 0}
+
+    def accept_com_emfile(self):
+        if falhas["n"] == 0:
+            falhas["n"] += 1
+            raise OSError(errno.EMFILE, "Too many open files")
+        return original(self)
+    monkeypatch.setattr(socket.socket, "accept", accept_com_emfile)
+    sink, stop = socket_sink(path, Severity.LOW)
+    try:
+        time.sleep(0.2)                      # a thread ja passou pelo EMFILE
+        c = connect(path)
+        time.sleep(1.0)                      # pausa de recuperacao do accept
+        sink(mk())
+        assert readline(c)["rule"] == "behavior.revshell"
+    finally:
+        stop()
+
+
+def test_segunda_instancia_nao_apaga_socket_vivo(path, sem_grupo):
+    sink, stop = socket_sink(path, Severity.LOW)
+    try:
+        with pytest.raises(OSError, match="outro monitor"):
+            socket_sink(path, Severity.LOW)
+        c = connect(path)                    # o socket do primeiro continua no lugar
+        sink(mk())
+        assert readline(c)["rule"] == "behavior.revshell"
+    finally:
+        stop()
+
+
+def test_nome_com_utf8_invalido_ainda_sai(path, sem_grupo, capsys):
+    nome = os.fsdecode(b"payload\xff.sh")    # surrogateescape, como o Python le do disco
+    line = alert_line(mk(summary=f"Executavel rodando de pasta temporaria: /tmp/{nome}"))
+    resumo = json.loads(line.decode("utf-8"))["summary"]
+    assert resumo.startswith("Executavel rodando de pasta temporaria: /tmp/payload")
+    sink, stop = socket_sink(path, Severity.LOW)
+    try:
+        c = connect(path)
+        sink(mk(summary=nome))
+        assert "payload" in readline(c)["summary"]
+        assert "erro no socket" not in capsys.readouterr().err
+    finally:
+        stop()
