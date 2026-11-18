@@ -442,3 +442,114 @@ def test_restaurar_falha_no_fsync_do_destino_mantem_o_caso(qt, tmp_path, monkeyp
     assert ult["action"] == "restauracao_recusada" and ult["detail"]["motivo"] == "Input/output error"
     monkeypatch.undo()
     assert qt.restore(case.id, "ana", 1000) == str(f)
+
+
+# --- Task 5: manter, apagar e expirar ---
+class Relogio:
+    def __init__(self, t=1000.0):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+
+@pytest.fixture
+def qr(tmp_path):
+    (tmp_path / "q").mkdir()
+    rel = Relogio()
+    qq = Quarantine(tmp_path / "q", DecisionLog(tmp_path / "d.jsonl"), now=rel)
+    qq.rel = rel
+    return qq
+
+
+def test_manter_registra_e_mantem_prazo(qr, tmp_path):
+    c = isolar(qr, tmp_path / "a.py")
+    out = qr.keep(c.id, "ana", 1000)
+    assert out.expires_at == c.expires_at
+    assert qr.load(c.id).expires_at == c.expires_at
+    ult = linhas(tmp_path)[-1]
+    assert (ult["action"], ult["id"], ult["by"], ult["uid"]) == ("manter", c.id, "ana", 1000)
+
+
+def test_manter_id_inexistente(qr):
+    with pytest.raises(CaseNotFound):
+        qr.keep("0" * 32, "ana", 1000)
+    with pytest.raises(CaseNotFound):
+        qr.keep("../x", "ana", 1000)
+
+
+def test_apagar_remove_os_dois_arquivos(qr, tmp_path):
+    c = isolar(qr, tmp_path / "a.py")
+    qr.delete(c.id, "ana", 1000)
+    assert os.listdir(tmp_path / "q") == []
+    ult = linhas(tmp_path)[-1]
+    assert (ult["action"], ult["sha256"], ult["path"]) == ("apagar", c.sha256, str(tmp_path / "a.py"))
+    with pytest.raises(CaseNotFound):
+        qr.delete(c.id, "ana", 1000)
+
+
+def test_purge_apaga_so_os_vencidos(qr, tmp_path):
+    a = isolar(qr, tmp_path / "a.py")
+    qr.rel.t += 10
+    b = isolar(qr, tmp_path / "b.py", b"outro\n")
+    qr.rel.t = a.expires_at + 1  # a venceu, b ainda nao (b vence 10 s depois)
+    assert qr.purge_expired() == 1
+    assert [c.id for c in qr.list()] == [b.id]
+    ult = linhas(tmp_path)[-1]
+    assert (ult["action"], ult["id"], ult["by"]) == ("expirado", a.id, "sistema")
+
+
+def test_purge_ignora_json_corrompido_e_continua(qr, tmp_path):
+    a = isolar(qr, tmp_path / "a.py")
+    (tmp_path / "q" / ("f" * 32 + ".json")).write_text("{lixo")
+    qr.rel.t = a.expires_at + 1
+    assert qr.purge_expired() == 1
+    assert (tmp_path / "q" / ("f" * 32 + ".json")).exists()
+
+
+def test_purge_erro_em_um_caso_nao_para_os_outros(qr, tmp_path, monkeypatch):
+    a = isolar(qr, tmp_path / "a.py")
+    b = isolar(qr, tmp_path / "b.py", b"outro\n")
+    qr.rel.t = b.expires_at + 1
+    real = Quarantine.delete
+
+    def falha(self, case_id, *args, **kw):
+        if case_id == a.id:
+            raise OSError(errno.EIO, "io")
+        return real(self, case_id, *args, **kw)
+
+    monkeypatch.setattr(Quarantine, "delete", falha)
+    assert qr.purge_expired() == 1
+    assert not (tmp_path / "q" / (b.id + ".json")).exists()
+
+
+def test_purge_limpa_orfaos(qr, tmp_path):
+    d = tmp_path / "q"
+    (d / ("a" * 32 + ".bin")).write_bytes(b"x")
+    velho = d / "x.json.tmp"
+    velho.write_bytes(b"x")
+    os.utime(velho, (qr.rel.t - 3601, qr.rel.t - 3601))
+    novo = d / "y.json.tmp"
+    novo.write_bytes(b"x")
+    os.utime(novo, (qr.rel.t - 60, qr.rel.t - 60))
+    c = isolar(qr, tmp_path / "a.py")
+    n_log = len(linhas(tmp_path))
+    assert qr.purge_expired() == 0
+    assert sorted(os.listdir(d)) == sorted(["y.json.tmp", c.id + ".bin", c.id + ".json"])
+    assert len(linhas(tmp_path)) == n_log
+
+
+def test_set_analysis_persiste(qr, tmp_path):
+    c = isolar(qr, tmp_path / "a.py")
+    out = qr.set_analysis(c.id, {"cymru": "desconhecido"})
+    assert out.analysis == {"cymru": "desconhecido"}
+    assert qr.load(c.id).analysis == {"cymru": "desconhecido"}
+    assert not [n for n in os.listdir(tmp_path / "q") if n.endswith(".tmp")]
+    with pytest.raises(CaseNotFound):
+        qr.set_analysis("0" * 32, {})
+
+
+def test_list_ignora_json_corrompido(qr, tmp_path):
+    c = isolar(qr, tmp_path / "a.py")
+    (tmp_path / "q" / ("e" * 32 + ".json")).write_text("{lixo")
+    assert [x.id for x in qr.list()] == [c.id]

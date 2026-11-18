@@ -536,3 +536,56 @@ class Quarantine:
             raise
         finally:
             os.close(src)
+
+    # --- manter, apagar, expirar ---
+    def keep(self, case_id: str, by: str, uid: int | None) -> Case:
+        """Registra a decisao de manter; o prazo de expiracao nao muda."""
+        case = self.load(case_id)
+        self._record("manter", case_id=case.id, sha256=case.sha256, path=case.original_path, by=by, uid=uid)
+        return case
+
+    def delete(self, case_id: str, by: str, uid: int | None, action: str = "apagar") -> None:
+        case = self.load(case_id)
+        for ext in (".bin", ".json"):
+            try:
+                os.unlink(self._p(case.id, ext))
+            except FileNotFoundError:
+                pass
+        self._fsync_dir()
+        self._record(action, case_id=case.id, sha256=case.sha256, path=case.original_path, by=by, uid=uid)
+
+    def set_analysis(self, case_id: str, analysis: dict) -> Case:
+        case = self.load(case_id)
+        case.analysis = analysis
+        self._write_json(case)
+        self._fsync_dir()
+        return case
+
+    def purge_expired(self) -> int:
+        """Apaga os casos vencidos e os orfaos; nunca levanta por causa de uma entrada ruim."""
+        now = self.now()
+        removed = 0
+        for case in self.list():  # list() ja pula os .json ilegiveis
+            if case.expires_at > now:
+                continue
+            try:
+                self.delete(case.id, "sistema", None, action="expirado")
+            except Exception:
+                continue
+            removed += 1
+        try:
+            names = os.listdir(self.root)
+        except OSError:
+            return removed
+        present = set(names)
+        for name in names:
+            orphan_bin = name.endswith(".bin") and _ID_RE.fullmatch(name[:-4]) and name[:-4] + ".json" not in present
+            stale_tmp = False
+            if name.endswith(".tmp"):
+                try:
+                    stale_tmp = now - os.stat(os.path.join(self.root, name)).st_mtime > 3600
+                except OSError:
+                    pass
+            if orphan_bin or stale_tmp:
+                _unlink_quiet(os.path.join(self.root, name))
+        return removed
