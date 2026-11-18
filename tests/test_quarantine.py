@@ -8,7 +8,7 @@ import pytest
 from mandacaru import quarantine as qmod
 from mandacaru.decisions import DecisionLog
 from mandacaru.events import Alert, Severity
-from mandacaru.quarantine import CaseNotFound, Quarantine, validate_id
+from mandacaru.quarantine import CaseNotFound, Quarantine, Tampered, TrustList, validate_id
 
 
 @pytest.fixture
@@ -254,3 +254,168 @@ def test_falha_ao_reescrever_metadados_vai_para_o_log(q, tmp_path, monkeypatch):
     assert r.status == "isolado" and r.case.original_removido is False
     d = linhas(tmp_path)[0]["detail"]
     assert d["metadados_desatualizados"] is True and d["original_removido"] is False
+
+
+# --- Task 4: lista de confianca e restauracao ---
+@pytest.fixture
+def qt(tmp_path):
+    (tmp_path / "q").mkdir()
+    trust = TrustList(tmp_path / "trusted.json", recheck_seconds=0)
+    return Quarantine(tmp_path / "q", DecisionLog(tmp_path / "d.jsonl"), trust=trust, now=lambda: 1000.0)
+
+
+def isolar(q, f, conteudo=b"print('x')\n"):
+    f.write_bytes(conteudo)
+    return q.isolate(str(f), alerta(f)).case
+
+
+def test_restaurar_devolve_conteudo_modo_e_mtime(qt, tmp_path):
+    f = tmp_path / "x.py"
+    f.write_bytes(b"conteudo\n")
+    os.chmod(f, 0o640)
+    os.utime(f, (5000, 5000))
+    case = qt.isolate(str(f), alerta(f)).case
+    assert not f.exists()
+    dest = qt.restore(case.id, "ana", 1000)
+    assert dest == str(f)
+    assert f.read_bytes() == b"conteudo\n"
+    assert (f.stat().st_mode & 0o777) == 0o640
+    assert f.stat().st_mtime == 5000
+    assert qt.list() == []
+    assert sorted(p.name for p in (tmp_path / "q").iterdir()) == []
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".mandacaru")] == []
+    ult = linhas(tmp_path)[-1]
+    assert ult["action"] == "confiar" and ult["by"] == "ana" and ult["detail"] == {"restaurado_em": str(f)}
+
+
+def test_restaurar_nao_sobrescreve(qt, tmp_path):
+    f = tmp_path / "x.py"
+    case = isolar(qt, f)
+    f.write_bytes(b"novo")
+    dest = qt.restore(case.id, "ana", 1000)
+    assert dest == str(f) + ".restaurado-1970-01-01"
+    assert f.read_bytes() == b"novo"
+    assert open(dest, "rb").read() == b"print('x')\n"
+
+
+def test_restaurar_destino_alternativo_tambem_existe(qt, tmp_path):
+    f = tmp_path / "x.py"
+    case = isolar(qt, f)
+    f.write_bytes(b"novo")
+    alt = tmp_path / "x.py.restaurado-1970-01-01"
+    alt.write_bytes(b"outro")
+    with pytest.raises(FileExistsError):
+        qt.restore(case.id, "ana", 1000)
+    assert alt.read_bytes() == b"outro" and f.read_bytes() == b"novo"
+    assert [c.id for c in qt.list()] == [case.id]
+    assert not qt.trust.contains(case.sha256)
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".mandacaru")] == []
+
+
+def test_restaurar_bin_adulterado_e_recusado(qt, tmp_path):
+    f = tmp_path / "x.py"
+    case = isolar(qt, f)
+    b = tmp_path / "q" / f"{case.id}.bin"
+    dado = bytearray(b.read_bytes())
+    dado[0] ^= 1
+    b.write_bytes(bytes(dado))
+    with pytest.raises(Tampered):
+        qt.restore(case.id, "ana", 1000)
+    assert not f.exists()
+    assert [c.id for c in qt.list()] == [case.id]
+    assert linhas(tmp_path)[-1]["action"] == "restauracao_recusada"
+    assert not qt.trust.contains(case.sha256)
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".mandacaru")] == []
+
+
+def test_restaurar_poe_hash_na_lista_e_nao_isola_de_novo(qt, tmp_path):
+    f = tmp_path / "x.py"
+    case = isolar(qt, f)
+    qt.restore(case.id, "ana", 1000)
+    r = qt.isolate(str(f), alerta(f))
+    assert r.status == "confiavel" and r.case is None
+    assert f.read_bytes() == b"print('x')\n"
+    assert qt.list() == []
+    ult = linhas(tmp_path)[-1]
+    assert ult["action"] == "ignorado_confiavel" and ult["sha256"] == case.sha256 and ult["path"] == str(f)
+
+
+def test_restaurar_nome_com_bytes_invalidos(qt, tmp_path):
+    caminho = os.fsdecode(os.fsencode(str(tmp_path)) + b"/a\xff b\n.py")
+    case = isolar(qt, type("P", (), {"write_bytes": lambda self, d: open(caminho, "wb").write(d),
+                                     "__str__": lambda self: caminho})())
+    assert qt.restore(case.id, "ana", 1000) == caminho
+    assert open(caminho, "rb").read() == b"print('x')\n"
+
+
+def test_restaurar_id_inexistente(qt):
+    with pytest.raises(CaseNotFound):
+        qt.restore("0" * 32, "ana", 1000)
+
+
+def test_restaurar_diretorio_original_ausente(qt, tmp_path):
+    d = tmp_path / "sub"
+    d.mkdir()
+    case = isolar(qt, d / "x.py")
+    d.rmdir()
+    with pytest.raises(FileNotFoundError, match="diretorio original"):
+        qt.restore(case.id, "ana", 1000)
+    assert [c.id for c in qt.list()] == [case.id]
+    assert not qt.trust.contains(case.sha256)
+
+
+def test_restaurar_recusa_symlink_no_diretorio_pai(qt, tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    (tmp_path / "d").mkdir()
+    case = isolar(qt, tmp_path / "d" / "x.py")
+    (tmp_path / "d").rmdir()
+    (tmp_path / "d").symlink_to(real)
+    with pytest.raises(qmod.UnsafePath):
+        qt.restore(case.id, "ana", 1000)
+    assert list(real.iterdir()) == []
+    assert [c.id for c in qt.list()] == [case.id]
+    ult = linhas(tmp_path)[-1]
+    assert ult["action"] == "restauracao_recusada" and ult["detail"]["motivo"] == "caminho_com_symlink"
+
+
+def test_confiavel_nao_move_nada(qt, tmp_path):
+    f = tmp_path / "x.py"
+    f.write_bytes(b"abc")
+    qt.trust.add(hashlib.sha256(b"abc").hexdigest(), str(f), "ana")
+    assert qt.isolate(str(f), alerta(f)).status == "confiavel"
+    assert f.read_bytes() == b"abc" and list((tmp_path / "q").iterdir()) == []
+
+
+def test_trustlist_rele_quando_outro_processo_altera(tmp_path):
+    p = tmp_path / "t.json"
+    a, b = TrustList(p, recheck_seconds=0), TrustList(p, recheck_seconds=0)
+    assert not a.contains("aa")
+    b.add("aa", "/x", "ana")
+    assert a.contains("aa")
+    assert (p.stat().st_mode & 0o777) == 0o644
+    b.add("aa", "/x", "ana")  # no-op
+    assert len(json.loads(p.read_text())) == 1
+    assert b.remove("aa") is True and b.remove("aa") is False
+    assert not a.contains("aa")
+
+
+def test_trustlist_corrompida_ou_ausente_e_vazia(tmp_path):
+    p = tmp_path / "t.json"
+    t = TrustList(p, recheck_seconds=0)
+    assert not t.contains("aa")
+    p.write_text("{lixo")
+    assert not t.contains("aa")
+    p.write_text('{"nao": "lista"}')
+    assert not t.contains("aa")
+
+
+def test_trustlist_respeita_recheck_seconds(tmp_path):
+    p = tmp_path / "t.json"
+    agora = [0.0]
+    a = TrustList(p, recheck_seconds=5, now=lambda: agora[0])
+    assert not a.contains("aa")
+    TrustList(p).add("aa", "/x", "ana")
+    assert not a.contains("aa")
+    agora[0] = 6
+    assert a.contains("aa")

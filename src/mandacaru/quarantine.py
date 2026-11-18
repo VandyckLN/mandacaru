@@ -18,6 +18,7 @@ from mandacaru.decisions import DecisionLog
 from mandacaru.events import Alert
 
 DEFAULT_DIR = "/var/lib/mandacaru/quarantine"
+DEFAULT_TRUST = "/var/lib/mandacaru/trusted.json"
 XOR_KEY = 0xA5
 GROUP = "mandacaru"
 BLOCK = 1024 * 1024
@@ -123,8 +124,10 @@ def open_parent_dir(path: str) -> tuple[int, str]:
         raise
 
 
-def xor_stream(src: int, dst: int, key: int = XOR_KEY, limit: int | None = None) -> str:
-    """Copia src -> dst (descritores) aplicando XOR byte a byte; devolve o sha256 hex do conteudo de entrada.
+def xor_stream(src: int, dst: int, key: int = XOR_KEY, limit: int | None = None,
+               hash_output: bool = False) -> str:
+    """Copia src -> dst (descritores) aplicando XOR byte a byte; devolve o sha256 hex do conteudo de entrada
+    (ou do de saida com `hash_output=True`, usado ao desembaralhar).
 
     Com `limit`, levanta LimitExceeded assim que mais de `limit` bytes forem lidos."""
     h = hashlib.sha256()
@@ -137,9 +140,96 @@ def xor_stream(src: int, dst: int, key: int = XOR_KEY, limit: int | None = None)
         total += len(block)
         if limit is not None and total > limit:
             raise LimitExceeded()
-        h.update(block)
-        _write_all(dst, block.translate(table))
+        out = block.translate(table)
+        h.update(out if hash_output else block)
+        _write_all(dst, out)
     return h.hexdigest()
+
+
+def _hash_fd(fd: int, limit: int) -> str:
+    """sha256 hex do que resta ler em `fd`; LimitExceeded se passar de `limit` bytes."""
+    h = hashlib.sha256()
+    total = 0
+    while True:
+        block = os.read(fd, BLOCK)
+        if not block:
+            return h.hexdigest()
+        total += len(block)
+        if total > limit:
+            raise LimitExceeded()
+        h.update(block)
+
+
+class TrustList:
+    """Hashes que o usuario mandou confiar. Arquivo ausente ou corrompido = lista vazia."""
+
+    def __init__(self, path: str | os.PathLike = DEFAULT_TRUST, recheck_seconds: float = 5.0,
+                 now: Callable[[], float] = time.monotonic):
+        self.path = os.fspath(path)
+        self.recheck_seconds = recheck_seconds
+        self.now = now
+        self._sig: tuple | None = None
+        self._hashes: set[str] = set()
+        self._checked: float | None = None
+
+    def _read(self) -> list[dict]:
+        try:
+            with open(self.path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            return []
+        if not isinstance(data, list):
+            return []
+        return [e for e in data if isinstance(e, dict) and isinstance(e.get("sha256"), str)]
+
+    def _refresh(self) -> None:
+        t = self.now()
+        if self._checked is not None and t - self._checked < self.recheck_seconds:
+            return
+        self._checked = t
+        try:
+            st = os.stat(self.path)
+            sig: tuple | None = (st.st_mtime_ns, st.st_size, st.st_ino)
+        except OSError:
+            sig = None
+        if sig != self._sig or sig is None:
+            self._sig = sig
+            self._hashes = {e["sha256"] for e in self._read()} if sig else set()
+
+    def contains(self, sha256: str) -> bool:
+        self._refresh()
+        return sha256 in self._hashes
+
+    def _save(self, entries: list[dict]) -> None:
+        tmp = f"{self.path}.{os.getpid()}.tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        try:
+            try:
+                os.fchmod(fd, 0o644)
+                _write_all(fd, json.dumps(entries, ensure_ascii=True, indent=1).encode("ascii"))
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.rename(tmp, self.path)
+        except BaseException:
+            _unlink_quiet(tmp)
+            raise
+        self._checked = None  # forca reler na proxima consulta
+
+    def add(self, sha256: str, original_path: str, by: str) -> None:
+        entries = self._read()
+        if any(e["sha256"] == sha256 for e in entries):
+            return
+        entries.append({"sha256": sha256, "added_at": time.time(), "original_path": original_path, "by": by})
+        self._save(entries)
+
+    def remove(self, sha256: str) -> bool:
+        entries = self._read()
+        kept = [e for e in entries if e["sha256"] != sha256]
+        if len(kept) == len(entries):
+            return False
+        self._save(kept)
+        return True
 
 
 def _unlink_quiet(path: str) -> None:
@@ -155,7 +245,7 @@ def _reason(e: OSError) -> str:
 
 class Quarantine:
     def __init__(self, root: str | os.PathLike = DEFAULT_DIR, log: DecisionLog | None = None,
-                 trust: object | None = None,  # Task 4 troca por TrustList | None
+                 trust: TrustList | None = None,
                  retention_days: int = 30, max_file_bytes: int = 256 * 1024 * 1024,
                  max_total_bytes: int = 2 * 1024 * 1024 * 1024, now: Callable[[], float] = time.time):
         self.root = os.fspath(root)
@@ -297,6 +387,12 @@ class Quarantine:
             limit = min(self.max_file_bytes, room)
             limit_reason = "tamanho" if self.max_file_bytes <= room else "quarentena_cheia"
             try:
+                if self.trust is not None:
+                    sha = _hash_fd(src, limit)
+                    os.lseek(src, 0, os.SEEK_SET)
+                    if self.trust.contains(sha):
+                        self._record("ignorado_confiavel", sha256=sha, path=path)
+                        return IsolateResult("confiavel")
                 # 2. copia embaralhada + fsync
                 dst = os.open(bin_tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 try:
@@ -345,3 +441,88 @@ class Quarantine:
             detail["metadados_desatualizados"] = True
         self._record("isolar", case_id=case.id, sha256=case.sha256, path=path, detail=detail)
         return IsolateResult("isolado", case=case)
+
+    # --- restauracao ("Confio") ---
+    def restore(self, case_id: str, by: str, uid: int | None) -> str:
+        """Devolve o arquivo ao lugar (ou a <nome>.restaurado-<data>) e poe o hash na lista de confianca."""
+        case = self.load(case_id)
+        try:
+            pfd, name = open_parent_dir(case.original_path)
+        except UnsafePath:
+            self._refuse(case, by, uid, "caminho_com_symlink")
+            raise
+        except FileNotFoundError:
+            self._refuse(case, by, uid, "diretorio_ausente")
+            raise FileNotFoundError(
+                errno.ENOENT, f"o diretorio original nao existe mais: {os.path.dirname(case.original_path)}") from None
+        try:
+            final = self._restore_in(pfd, name, case, by, uid)
+        finally:
+            os.close(pfd)
+        for ext in (".bin", ".json"):
+            _unlink_quiet(self._p(case.id, ext))
+        try:
+            self._fsync_dir()
+        except OSError:
+            pass
+        dest = os.path.join(os.path.dirname(case.original_path), final)
+        self._record("confiar", case_id=case.id, sha256=case.sha256, path=case.original_path, by=by, uid=uid,
+                     detail={"restaurado_em": dest})
+        return dest
+
+    def _refuse(self, case: Case, by: str, uid: int | None, motivo: str) -> None:
+        self._record("restauracao_recusada", case_id=case.id, sha256=case.sha256, path=case.original_path,
+                     by=by, uid=uid, detail={"motivo": motivo})
+
+    def _restore_in(self, pfd: int, name: str, case: Case, by: str, uid: int | None) -> str:
+        tmpname = f".mandacaru-restore-{uuid.uuid4().hex}"
+        try:
+            src = os.open(self._p(case.id, ".bin"), os.O_RDONLY | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            self._refuse(case, by, uid, "bin_ausente")
+            raise Tampered(f"arquivo isolado ausente em {case.id}") from None
+        added = False
+        try:
+            fd = os.open(tmpname, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=pfd)
+            try:
+                try:
+                    digest = xor_stream(src, fd, hash_output=True)
+                    if digest != case.sha256:
+                        self._refuse(case, by, uid, "hash_diferente")
+                        raise Tampered(f"conteudo adulterado em {case.id}")
+                    if os.geteuid() == 0:
+                        os.fchown(fd, case.uid, case.gid)
+                    os.fchmod(fd, stat.S_IMODE(case.mode))
+                    os.utime(fd, (case.mtime, case.mtime))
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+                # o hash entra na lista ANTES do arquivo voltar (senao o scanner o isola de novo)
+                if self.trust is not None and not self.trust.contains(case.sha256):
+                    self.trust.add(case.sha256, case.original_path, by)
+                    added = True
+                final = name
+                try:
+                    os.link(tmpname, final, src_dir_fd=pfd, dst_dir_fd=pfd, follow_symlinks=False)
+                except FileExistsError:
+                    final = f"{name}.restaurado-{time.strftime('%Y-%m-%d', time.gmtime(self.now()))}"
+                    try:
+                        os.link(tmpname, final, src_dir_fd=pfd, dst_dir_fd=pfd, follow_symlinks=False)
+                    except FileExistsError:
+                        self._refuse(case, by, uid, "destino_existe")
+                        raise
+                return final
+            finally:
+                try:
+                    os.unlink(tmpname, dir_fd=pfd)
+                except OSError:
+                    pass
+        except BaseException:
+            if added:
+                try:
+                    self.trust.remove(case.sha256)
+                except OSError:
+                    pass
+            raise
+        finally:
+            os.close(src)
