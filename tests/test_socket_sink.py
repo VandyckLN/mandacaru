@@ -264,3 +264,32 @@ def test_nome_com_utf8_invalido_ainda_sai(path, sem_grupo, capsys):
         assert "erro no socket" not in capsys.readouterr().err
     finally:
         stop()
+
+
+# ------------------------------------------------------- quarentena (0.4.0)
+def test_alerta_com_quarantine_id_passa_pelo_filtro_de_severidade(path, sem_grupo):
+    sink, stop = socket_sink(path, Severity.CRITICAL)
+    try:
+        c = connect(path)
+        a = mk(Severity.HIGH)
+        a.quarantine_id = "ab" * 16
+        sink(a)
+        line = readline(c)
+        assert line["severity"] == "HIGH" and line["quarantine_id"] == "ab" * 16
+    finally:
+        stop()
+
+
+def test_linha_sem_quarantine_id_nao_tem_o_campo():
+    assert "quarantine_id" not in json.loads(alert_line(mk()))
+
+
+def test_console_mostra_alerta_isolado_abaixo_do_min_sev(capsys):
+    from mandacaru.engine import console_sink
+    sink = console_sink(Severity.CRITICAL)
+    sink(mk(Severity.HIGH))
+    assert capsys.readouterr().err == ""
+    a = mk(Severity.HIGH)
+    a.quarantine_id = "ab" * 16
+    sink(a)
+    assert "[HIGH]" in capsys.readouterr().err
