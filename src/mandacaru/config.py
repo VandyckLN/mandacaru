@@ -29,6 +29,7 @@ class Config:
     ebpf: bool = True
     min_severity: Severity = Severity.LOW
     json_path: str | None = None
+    socket_path: str | None = None
     rule_dirs: tuple[str, ...] = ()
     exclude: tuple[str, ...] = ()
 
@@ -61,7 +62,8 @@ def _severity(value, key: str) -> Severity:
 # secao -> chave -> (campo do Config, conversor)
 _SCHEMA = {
     "monitor": {"paths": ("watch_paths", _str_list), "ebpf": ("ebpf", _bool)},
-    "alerts": {"min_severity": ("min_severity", _severity), "json": ("json_path", _str)},
+    "alerts": {"min_severity": ("min_severity", _severity), "json": ("json_path", _str),
+               "socket": ("socket_path", _str)},
     "rules": {"dirs": ("rule_dirs", _str_list)},
     "exclude": {"paths": ("exclude", _str_list)},
 }
