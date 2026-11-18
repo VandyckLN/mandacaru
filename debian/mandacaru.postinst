@@ -4,5 +4,11 @@ set -e
 if [ "$1" = configure ] && ! getent group mandacaru >/dev/null; then
     addgroup --system --quiet mandacaru
 fi
+# o config pode guardar chaves de API (0.4.0); o dpkg preserva as permissoes de um conffile modificado,
+# entao quem atualiza de antes da 0.4.0 ficaria com o 0644 antigo
+if [ "$1" = configure ] && [ -n "$2" ] && dpkg --compare-versions "$2" lt 0.4.0~ \
+        && [ -e /etc/mandacaru/config.toml ]; then
+    chmod 0640 /etc/mandacaru/config.toml
+fi
 #DEBHELPER#
 exit 0

@@ -14,5 +14,5 @@
     compress
     missingok
     notifempty
-    copytruncate
+    create 0640 root root
 }

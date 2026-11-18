@@ -197,9 +197,13 @@ def test_logrotate_guarda_decisoes_um_ano():
     assert set(blocos) == {"/var/log/mandacaru/alerts.jsonl", "/var/log/mandacaru/decisions.jsonl"}
     assert "rotate 8" in blocos["/var/log/mandacaru/alerts.jsonl"]
     dec = blocos["/var/log/mandacaru/decisions.jsonl"].split()
-    for diretiva in ("weekly", "compress", "copytruncate"):
+    for diretiva in ("weekly", "compress"):
         assert diretiva in dec
     assert dec[dec.index("rotate") + 1] == "52"
+    # o DecisionLog reabre o arquivo a cada linha: create basta, e copytruncate perderia linhas
+    assert "copytruncate" not in dec
+    assert "create 0640 root root" in blocos["/var/log/mandacaru/decisions.jsonl"]
+    assert "copytruncate" in blocos["/var/log/mandacaru/alerts.jsonl"].split()
 
 
 def test_install_leva_polkit_e_auxiliares():
@@ -216,3 +220,13 @@ def test_install_leva_polkit_e_auxiliares():
 def test_depende_de_polkit():
     control = (ROOT / "debian" / "control").read_text().split("Package: mandacaru", 1)[1]
     assert "polkitd | policykit-1" in control
+
+
+def test_postinst_fecha_o_config_de_quem_atualiza_de_antes_da_040():
+    # o dpkg preserva as permissoes de um conffile modificado: o 0640 do pacote nao chegaria a quem atualiza
+    post = (ROOT / "debian" / "mandacaru.postinst").read_text()
+    assert 'dpkg --compare-versions "$2" lt 0.4.0~' in post
+    assert "chmod 0640 /etc/mandacaru/config.toml" in post
+    assert post.index("chmod 0640") < post.index("#DEBHELPER#")
+    import subprocess
+    assert subprocess.run(["sh", "-n", str(ROOT / "debian" / "mandacaru.postinst")]).returncode == 0
