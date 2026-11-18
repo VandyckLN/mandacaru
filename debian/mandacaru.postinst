@@ -1,0 +1,8 @@
+#!/bin/sh
+set -e
+# grupo de quem pode ouvir o socket de alertas; criado antes do bloco do debhelper, que sobe o servico
+if [ "$1" = configure ] && ! getent group mandacaru >/dev/null; then
+    addgroup --system --quiet mandacaru
+fi
+#DEBHELPER#
+exit 0
