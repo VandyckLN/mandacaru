@@ -54,3 +54,21 @@ def test_arquivo_vazio_devolve_defaults(tmp_path):
 def test_config_invalido_cita_a_chave(tmp_path, text, trecho):
     with pytest.raises(ConfigError, match=trecho):
         load_config(write(tmp_path, text))
+
+
+# --------------------------------------------------- socket de alertas (0.3.0)
+def test_socket_preenche_socket_path(tmp_path):
+    cfg = load_config(write(tmp_path, '[alerts]\nsocket = "/x"\n'))
+    assert cfg.socket_path == "/x"
+
+
+def test_socket_vazio_desliga(tmp_path):
+    from mandacaru import cli
+    cfg = load_config(write(tmp_path, '[alerts]\nsocket = ""\n'))
+    assert cfg.socket_path == ""
+    assert len(cli.build_sinks(cfg)[0]) == 1
+
+
+def test_socket_com_tipo_errado_e_erro(tmp_path):
+    with pytest.raises(ConfigError, match="alerts.socket: esperava um texto"):
+        load_config(write(tmp_path, "[alerts]\nsocket = 1\n"))

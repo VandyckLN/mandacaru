@@ -12,12 +12,13 @@ from dataclasses import replace
 from pathlib import Path
 
 from . import __version__
+from .alert_socket import socket_sink
 from .collectors import ebpf
 from .collectors.fsmon import FileMonitor
 from .collectors.procmon import ProcessMonitor
 from .config import DEFAULT_PATH, Config, ConfigError, load_config
 from .detectors.static import StaticScanner
-from .engine import Engine, console_sink, jsonl_sink
+from .engine import AlertSink, Engine, console_sink, jsonl_sink
 from .events import Severity
 
 
@@ -117,11 +118,28 @@ def start_process_collector(q: queue.Queue, use_ebpf: bool) -> tuple[str, Callab
     return "psutil", pm.stop
 
 
-def cmd_monitor(args) -> int:
-    cfg = effective_config(args)
-    sinks = [console_sink(cfg.min_severity)]
+def build_sinks(cfg: Config) -> tuple[list[AlertSink], list[Callable[[], None]]]:
+    """Sinks do monitor (console, jsonl, socket) e as funcoes que os encerram."""
+    sinks: list[AlertSink] = [console_sink(cfg.min_severity)]
+    stops: list[Callable[[], None]] = []
     if cfg.json_path:
         sinks.append(jsonl_sink(open_alert_log(cfg.json_path)))
+    if cfg.socket_path:
+        try:
+            sink, stop = socket_sink(cfg.socket_path, cfg.min_severity)
+        except OSError as exc:
+            # sem socket o EDR continua protegendo; so ninguem e avisado em tempo real
+            print(f"[mandacaru] socket de alertas desligado: {exc}", file=sys.stderr)
+        else:
+            sinks.append(sink)
+            stops.append(stop)
+            print(f"[mandacaru] alertas em tempo real: {cfg.socket_path}", file=sys.stderr)
+    return sinks, stops
+
+
+def cmd_monitor(args) -> int:
+    cfg = effective_config(args)
+    sinks, sink_stops = build_sinks(cfg)
     engine = Engine(sinks, scanner=StaticScanner(cfg.rule_dirs, cfg.exclude))
     paths = resolve_watch_paths(list(cfg.watch_paths) or default_watch_paths())
 
@@ -143,6 +161,8 @@ def cmd_monitor(args) -> int:
     for s in stoppers:
         s()
     engine.stop()
+    for s in sink_stops:  # o socket fecha depois dos coletores
+        s()
     return 0
 
 
