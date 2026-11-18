@@ -99,6 +99,10 @@ class LimitExceeded(Exception):
     """A entrada passou do limite de bytes dado a xor_stream."""
 
 
+class _StillWriting(Exception):
+    """O original mudou enquanto era copiado."""
+
+
 def open_parent_dir(path: str) -> tuple[int, str]:
     """Abre o diretorio pai de `path` componente a componente, a partir de "/", sem seguir symlinks.
 
@@ -432,9 +436,21 @@ class Quarantine:
                 self._write_json(case)
                 os.rename(bin_tmp, bin_final)
                 self._fsync_dir()
+                # quem ainda esta escrevendo (cp, curl, unzip, editor) continuaria num inode orfao e a copia
+                # ficaria pela metade: so remove o original se ele nao mudou desde o primeiro fstat
+                fin = os.fstat(src)
+                if copied != st.st_size or ((fin.st_size, fin.st_mtime_ns, fin.st_ctime_ns)
+                                            != (st.st_size, st.st_mtime_ns, st.st_ctime_ns)):
+                    raise _StillWriting()
             except BaseException as e:
                 for p in (bin_tmp, bin_final, json_final, json_final + ".tmp"):
                     _unlink_quiet(p)
+                if isinstance(e, _StillWriting):
+                    try:
+                        self._fsync_dir()
+                    except OSError:
+                        pass
+                    return self._fail(path, alert, "em_escrita")  # o proximo file_write tenta de novo
                 if isinstance(e, LimitExceeded):
                     return self._fail(path, alert, limit_reason)
                 if isinstance(e, OSError):

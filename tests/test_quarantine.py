@@ -256,6 +256,33 @@ def test_falha_ao_reescrever_metadados_vai_para_o_log(q, tmp_path, monkeypatch):
     assert d["metadados_desatualizados"] is True and d["original_removido"] is False
 
 
+@pytest.mark.parametrize("escrita", ["acrescenta", "reescreve_mesmo_tamanho"])
+def test_arquivo_ainda_sendo_escrito_nao_e_isolado(q, tmp_path, monkeypatch, escrita):
+    f = tmp_path / "baixando.py"
+    f.write_bytes(b"a" * 100)
+    real = qmod.xor_stream
+
+    def escritor_continua(src, dst, *a, **k):
+        digest = real(src, dst, *a, **k)
+        if escrita == "acrescenta":       # cp/curl/unzip ainda escrevendo
+            with open(f, "ab") as fh:
+                fh.write(b"b" * 50)
+        else:                             # editor regravando no lugar
+            with open(f, "r+b") as fh:
+                fh.write(b"c" * 100)
+            os.utime(f, ns=(1, 1))
+        return digest
+
+    monkeypatch.setattr(qmod, "xor_stream", escritor_continua)
+    r = q.isolate(str(f), alerta(f))
+    monkeypatch.undo()
+    assert (r.status, r.reason) == ("nao_isolado", "em_escrita")
+    assert f.read_bytes() == (b"a" * 100 + b"b" * 50 if escrita == "acrescenta" else b"c" * 100)
+    assert list((tmp_path / "q").iterdir()) == []
+    ult = linhas(tmp_path)[-1]
+    assert ult["action"] == "nao_isolado" and ult["detail"] == {"motivo": "em_escrita"}
+
+
 # --- Task 4: lista de confianca e restauracao ---
 @pytest.fixture
 def qt(tmp_path):
