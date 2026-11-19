@@ -1,8 +1,18 @@
-/var/log/mandacaru/*.jsonl {
+/var/log/mandacaru/alerts.jsonl {
     weekly
     rotate 8
     compress
     missingok
     notifempty
     copytruncate
+}
+
+# decisoes da quarentena: um ano de historico
+/var/log/mandacaru/decisions.jsonl {
+    weekly
+    rotate 52
+    compress
+    missingok
+    notifempty
+    create 0640 root root
 }

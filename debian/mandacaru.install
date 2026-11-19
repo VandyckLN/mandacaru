@@ -1,2 +1,6 @@
 packaging/config.toml etc/mandacaru
 packaging/icons/64x64/mandacaru.png usr/share/icons/hicolor/64x64/apps/
+packaging/libexec/quarantine-decide usr/libexec/mandacaru/
+packaging/libexec/quarantine-release usr/libexec/mandacaru/
+packaging/polkit/io.github.vandyckln.mandacaru.policy usr/share/polkit-1/actions/
+packaging/polkit/50-mandacaru.rules usr/share/polkit-1/rules.d/

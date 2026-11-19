@@ -1,0 +1,16 @@
+[Unit]
+Description=Mandacaru - apaga arquivos vencidos da quarentena
+Documentation=https://github.com/VandyckLN/mandacaru
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/mandacaru --config /etc/mandacaru/config.toml quarentena limpar
+StateDirectory=mandacaru
+# 0755: membros do grupo mandacaru atravessam ate quarantine/ (0750 root:mandacaru) para listar
+StateDirectoryMode=0755
+LogsDirectory=mandacaru
+LogsDirectoryMode=0750
+UMask=0027
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes

@@ -20,6 +20,7 @@ def test_config_de_exemplo_e_valido():
                          json_path="/var/log/mandacaru/alerts.jsonl",
                          socket_path="/run/mandacaru/alerts.sock",
                          rule_dirs=("/etc/mandacaru/rules.d",))
+    assert "uso NAO comercial" in (ROOT / "packaging" / "config.toml").read_text()
 
 
 def test_versao_do_changelog_debian_bate_com_o_pacote():
@@ -77,3 +78,165 @@ def test_icone_e_png_64_indexado_e_leve():
 def test_icone_vai_para_o_hicolor():
     install = (ROOT / "debian" / "mandacaru.install").read_text()
     assert "packaging/icons/64x64/mandacaru.png usr/share/icons/hicolor/64x64/apps/" in install
+
+
+# --- quarentena (0.4.0) ---
+
+ID_OK = "0123456789abcdef0123456789abcdef"
+DECIDE = ROOT / "packaging" / "libexec" / "quarantine-decide"
+RELEASE = ROOT / "packaging" / "libexec" / "quarantine-release"
+
+
+def test_service_tem_state_directory_e_escrita_em_home():
+    unit = (ROOT / "debian" / "mandacaru.service").read_text()
+    assert "StateDirectory=mandacaru" in unit and "StateDirectoryMode=0755" in unit
+    # ProtectHome=read-only venceria um ReadWritePaths=/home (mesmo caminho): /home fica gravavel e so
+    # /root e /run/user ficam so leitura (verificado com systemd-run --user no systemd 259)
+    linhas = unit.splitlines()
+    assert "ProtectHome=no" in linhas and "ReadOnlyPaths=-/root -/run/user" in linhas
+    assert not [linha for linha in linhas if linha.startswith(("ProtectHome=read-only", "ProtectHome=yes",
+                                                                "ProtectHome=tmpfs", "ReadWritePaths="))]
+    assert ("ExecStartPre=+/usr/bin/install -d -m 0750 -o root -g mandacaru /var/lib/mandacaru/quarantine"
+            in unit)
+
+
+def test_timer_de_limpeza_diario_persistente():
+    timer = (ROOT / "debian" / "mandacaru.mandacaru-quarantine-clean.timer").read_text()
+    assert "OnCalendar=daily" in timer and "Persistent=true" in timer
+    assert "WantedBy=timers.target" in timer
+    svc = (ROOT / "debian" / "mandacaru.mandacaru-quarantine-clean.service").read_text()
+    assert "Type=oneshot" in svc
+    assert "ExecStart=/usr/bin/mandacaru --config /etc/mandacaru/config.toml quarentena limpar" in svc
+    assert "StateDirectory=mandacaru" in svc and "StateDirectoryMode=0755" in svc
+    rules = (ROOT / "debian" / "rules").read_text()
+    assert "dh_installsystemd --name=mandacaru-quarantine-clean" in rules
+
+
+def _acoes_da_policy():
+    import xml.etree.ElementTree as ET
+    root = ET.parse(ROOT / "packaging" / "polkit" / "io.github.vandyckln.mandacaru.policy").getroot()
+    return {a.get("id"): a for a in root.findall("action")}
+
+
+def test_policy_release_exige_admin():
+    acoes = _acoes_da_policy()
+    assert set(acoes) == {"io.github.vandyckln.mandacaru.decide", "io.github.vandyckln.mandacaru.release"}
+    for nome, aux in (("decide", "quarantine-decide"), ("release", "quarantine-release")):
+        acao = acoes[f"io.github.vandyckln.mandacaru.{nome}"]
+        for chave in ("allow_any", "allow_inactive", "allow_active"):
+            assert acao.find(f"defaults/{chave}").text == "auth_admin"   # decide: so a regra libera o grupo
+        exec_path = [a.text for a in acao.findall("annotate")
+                     if a.get("key") == "org.freedesktop.policykit.exec.path"]
+        assert exec_path == [f"/usr/libexec/mandacaru/{aux}"]
+
+
+def test_regra_libera_so_decide_para_o_grupo():
+    regra = (ROOT / "packaging" / "polkit" / "50-mandacaru.rules").read_text()
+    assert 'subject.isInGroup("mandacaru")' in regra
+    assert "subject.active" in regra and "subject.local" in regra
+    assert "io.github.vandyckln.mandacaru.decide" in regra and "polkit.Result.YES" in regra
+    assert "io.github.vandyckln.mandacaru.release" not in regra
+
+
+def _roda(script, *args):
+    import os
+    import subprocess
+    env = dict(os.environ, MANDACARU_BIN="echo")
+    return subprocess.run(["sh", str(script), *args], capture_output=True, text=True, env=env)
+
+
+@pytest.mark.parametrize("script,args,codigo", [
+    (RELEASE, ("manter", ID_OK), 1),
+    (RELEASE, ("analisar", ID_OK), 1),
+    (DECIDE, ("confiar", ID_OK), 1),
+    (DECIDE, ("apagar", ID_OK), 1),
+    (DECIDE, ("limpar",), 1),
+    (DECIDE, (), 1),
+    (DECIDE, ("manter", ID_OK, "--json"), 1),
+    (DECIDE, ("analisar", ID_OK, "--enviar"), 1),
+    (RELEASE, ("confiar", ID_OK, "--json"), 1),
+    (DECIDE, ("manter", "0123"), 3),
+    (DECIDE, ("analisar", ID_OK.upper()), 3),
+    (DECIDE, ("analisar", "../../etc/passwd"), 3),
+    (RELEASE, ("apagar", ID_OK + "0"), 3),
+    (RELEASE, ("confiar", ""), 3),
+])
+def test_auxiliares_aceitam_so_seus_subcomandos(script, args, codigo):
+    r = _roda(script, *args)
+    assert r.returncode == codigo
+    assert r.stdout == ""                       # nao chegou a chamar o mandacaru
+    if codigo == 1:
+        assert "uso:" in r.stderr
+
+
+@pytest.mark.parametrize("script,args", [
+    (DECIDE, ("analisar", ID_OK, "--json")),
+    (DECIDE, ("analisar", ID_OK)),
+    (DECIDE, ("manter", ID_OK)),
+    (RELEASE, ("confiar", ID_OK)),
+    (RELEASE, ("apagar", ID_OK)),
+])
+def test_auxiliares_repassam_para_o_mandacaru(script, args):
+    r = _roda(script, *args)
+    assert r.returncode == 0
+    assert r.stdout.split() == ["--config", "/etc/mandacaru/config.toml", "quarentena", *args]
+
+
+def test_auxiliares_usam_o_binario_instalado_por_padrao():
+    for script in (DECIDE, RELEASE):
+        texto = script.read_text()
+        assert texto.startswith("#!/bin/sh")
+        assert "${MANDACARU_BIN:-/usr/bin/mandacaru}" in texto
+        assert script.stat().st_mode & 0o755 == 0o755
+
+
+def test_logrotate_guarda_decisoes_um_ano():
+    texto = (ROOT / "debian" / "mandacaru.logrotate").read_text()
+    assert "*.jsonl" not in texto                         # senao o decisions.jsonl rodaria duas vezes
+    blocos = dict(re.findall(r"(\S+)\s*\{([^}]*)\}", texto))
+    assert set(blocos) == {"/var/log/mandacaru/alerts.jsonl", "/var/log/mandacaru/decisions.jsonl"}
+    assert "rotate 8" in blocos["/var/log/mandacaru/alerts.jsonl"]
+    dec = blocos["/var/log/mandacaru/decisions.jsonl"].split()
+    for diretiva in ("weekly", "compress"):
+        assert diretiva in dec
+    assert dec[dec.index("rotate") + 1] == "52"
+    # o DecisionLog reabre o arquivo a cada linha: create basta, e copytruncate perderia linhas
+    assert "copytruncate" not in dec
+    assert "create 0640 root root" in blocos["/var/log/mandacaru/decisions.jsonl"]
+    assert "copytruncate" in blocos["/var/log/mandacaru/alerts.jsonl"].split()
+
+
+def test_install_leva_polkit_e_auxiliares():
+    linhas = (ROOT / "debian" / "mandacaru.install").read_text().splitlines()
+    assert "packaging/libexec/quarantine-decide usr/libexec/mandacaru/" in linhas
+    assert "packaging/libexec/quarantine-release usr/libexec/mandacaru/" in linhas
+    assert "packaging/polkit/io.github.vandyckln.mandacaru.policy usr/share/polkit-1/actions/" in linhas
+    assert "packaging/polkit/50-mandacaru.rules usr/share/polkit-1/rules.d/" in linhas
+    rules = (ROOT / "debian" / "rules").read_text()
+    assert "chmod 0755 debian/mandacaru/usr/libexec/mandacaru/quarantine-" in rules
+    assert "chmod 0640 debian/mandacaru/etc/mandacaru/config.toml" in rules
+
+
+def test_depende_de_polkit():
+    control = (ROOT / "debian" / "control").read_text().split("Package: mandacaru", 1)[1]
+    assert "polkitd | policykit-1" in control
+
+
+def test_postinst_fecha_o_config_de_quem_atualiza_de_antes_da_040():
+    # o dpkg preserva as permissoes de um conffile modificado: o 0640 do pacote nao chegaria a quem atualiza
+    post = (ROOT / "debian" / "mandacaru.postinst").read_text()
+    assert 'dpkg --compare-versions "$2" lt 0.4.0~' in post
+    assert "chmod 0640 /etc/mandacaru/config.toml" in post
+    assert post.index("chmod 0640") < post.index("#DEBHELPER#")
+    import subprocess
+    assert subprocess.run(["sh", "-n", str(ROOT / "debian" / "mandacaru.postinst")]).returncode == 0
+
+
+def test_postrm_purge_apaga_o_estado_do_pacote():
+    post = (ROOT / "debian" / "mandacaru.postrm").read_text()
+    assert post.startswith("#!/bin/sh\nset -e\n")
+    assert '[ "$1" = purge ]' in post
+    assert "rm -rf /var/lib/mandacaru /var/log/mandacaru" in post
+    assert "#DEBHELPER#" in post
+    import subprocess
+    assert subprocess.run(["sh", "-n", str(ROOT / "debian" / "mandacaru.postrm")]).returncode == 0

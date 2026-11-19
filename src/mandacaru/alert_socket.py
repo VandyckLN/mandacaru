@@ -37,6 +37,8 @@ def _group_gid(name: str) -> int | None:
 def alert_line(alert: Alert) -> bytes:
     d = {"v": CONTRACT_VERSION, "ts": alert.ts, "severity": alert.severity.name,
          "rule": alert.rule, "summary": alert.summary, "mitre": list(alert.mitre)}
+    if alert.quarantine_id:
+        d["quarantine_id"] = alert.quarantine_id
     return safe_text(json.dumps(d, ensure_ascii=False, separators=(",", ":"))).encode() + b"\n"
 
 
@@ -126,7 +128,10 @@ def socket_sink(path: str, min_sev: Severity) -> tuple[AlertSink, Callable[[], N
 
     def _sink(alert: Alert):
         try:
-            if alert.severity < min_sev or stopped.is_set():
+            if stopped.is_set():
+                return
+            # caso novo de quarentena sempre chega: cada um precisa da pergunta ao usuario
+            if alert.severity < min_sev and not alert.quarantine_id:
                 return
             line = alert_line(alert)
             with lock:

@@ -6,6 +6,7 @@ digitacao nao pode desligar protecao em silencio.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,6 +33,14 @@ class Config:
     socket_path: str | None = None
     rule_dirs: tuple[str, ...] = ()
     exclude: tuple[str, ...] = ()
+    quarantine: bool = True
+    quarantine_min_severity: Severity = Severity.HIGH
+    retention_days: int = 30
+    max_file_mb: int = 256
+    max_total_mb: int = 2048
+    cymru: bool = True
+    virustotal_key: str | None = None
+    malwarebazaar_key: str | None = None
 
 
 def _str_list(value, key: str) -> tuple[str, ...]:
@@ -52,6 +61,12 @@ def _str(value, key: str) -> str:
     return value
 
 
+def _pos_int(value, key: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ConfigError(f"{key}: esperava um inteiro maior que zero")
+    return value
+
+
 def _severity(value, key: str) -> Severity:
     name = _str(value, key).upper()
     if name not in Severity.__members__:
@@ -66,18 +81,36 @@ _SCHEMA = {
                "socket": ("socket_path", _str)},
     "rules": {"dirs": ("rule_dirs", _str_list)},
     "exclude": {"paths": ("exclude", _str_list)},
+    "quarantine": {"enabled": ("quarantine", _bool),
+                   "min_severity": ("quarantine_min_severity", _severity),
+                   "retention_days": ("retention_days", _pos_int),
+                   "max_file_mb": ("max_file_mb", _pos_int),
+                   "max_total_mb": ("max_total_mb", _pos_int)},
+    "analysis": {"cymru": ("cymru", _bool),
+                 "virustotal_key": ("virustotal_key", _str),
+                 "malwarebazaar_key": ("malwarebazaar_key", _str)},
 }
 
 
 def load_config(path: str | os.PathLike | None = None) -> Config:
-    """Le o config. Sem `path`, usa DEFAULT_PATH se existir, senao os padroes."""
-    if path is None:
+    """Le o config. Sem `path`, usa DEFAULT_PATH se existir, senao os padroes.
+
+    O DEFAULT_PATH e 0640 root:root (pode ter chaves de API): sem permissao de leitura, um usuario comum
+    segue com os padroes. Qualquer outro erro, ou um `path` explicito ilegivel, continua sendo erro.
+    """
+    implicit = path is None
+    if implicit:
         if not Path(DEFAULT_PATH).is_file():
             return Config()
         path = DEFAULT_PATH
     try:
         with open(path, "rb") as fh:
             raw = tomllib.load(fh)
+    except PermissionError as exc:
+        if implicit:
+            print(f"[mandacaru] aviso: sem permissao para ler {path}; usando configuracao padrao", file=sys.stderr)
+            return Config()
+        raise ConfigError(f"{path}: nao foi possivel ler ({exc.strerror or exc})") from exc
     except OSError as exc:
         raise ConfigError(f"{path}: nao foi possivel ler ({exc.strerror or exc})") from exc
     except tomllib.TOMLDecodeError as exc:

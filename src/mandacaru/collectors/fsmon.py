@@ -38,6 +38,11 @@ class _Handler(FileSystemEventHandler):
         if not e.is_directory:
             self._emit("file_write", e.src_path)
 
+    def on_closed(self, e: FileSystemEvent):
+        # IN_CLOSE_WRITE: fim de escrita; o motor faz a ultima tentativa de isolar sem debounce
+        if not e.is_directory:
+            self._emit("file_write", e.src_path, closed=True)
+
     def on_moved(self, e: FileSystemEvent):
         if not e.is_directory:
             self._emit("file_rename", e.src_path, dest=e.dest_path)

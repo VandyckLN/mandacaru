@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>Mandacaru</vendor>
+  <vendor_url>https://github.com/VandyckLN/mandacaru</vendor_url>
+  <icon_name>mandacaru</icon_name>
+
+  <!-- analisar/manter: membros do grupo mandacaru em sessao ativa passam sem senha (50-mandacaru.rules) -->
+  <action id="io.github.vandyckln.mandacaru.decide">
+    <description>Analisar ou manter isolado um arquivo da quarentena</description>
+    <message>E preciso autenticar para analisar ou manter um arquivo da quarentena do Mandacaru</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/mandacaru/quarantine-decide</annotate>
+  </action>
+
+  <!-- confiar/apagar: sempre senha de administrador; um malware na sessao nao se liberta sozinho -->
+  <action id="io.github.vandyckln.mandacaru.release">
+    <description>Confiar em (devolver) ou apagar um arquivo da quarentena</description>
+    <message>E preciso a senha de administrador para devolver ou apagar um arquivo da quarentena do Mandacaru</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/mandacaru/quarantine-release</annotate>
+  </action>
+</policyconfig>

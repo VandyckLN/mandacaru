@@ -174,3 +174,34 @@ def test_jsonl_nao_perde_alerta_com_nome_utf8_invalido(tmp_path):
     fh.close()
     assert len(recebidos) == 1               # o sink seguinte ainda recebeu
     assert "payload" in (tmp_path / "a.jsonl").read_text(encoding="utf-8")
+
+
+# ------------------------------------------------------- quarentena (0.4.0)
+def test_quarentena_sem_diretorio_desliga_e_avisa(tmp_path, capsys):
+    from mandacaru.config import Config
+    root = tmp_path / "nao-existe"
+    q = cli.build_quarantine(Config(), root=str(root), log_path=str(tmp_path / "d.jsonl"),
+                             trust_path=str(tmp_path / "t.json"))
+    assert q is None
+    err = capsys.readouterr().err
+    assert err.count("[mandacaru] quarentena desligada: ") == 1
+    assert str(root) in err
+
+
+def test_quarentena_desligada_no_config(tmp_path, capsys):
+    from mandacaru.config import Config
+    root = tmp_path / "q"
+    root.mkdir()
+    assert cli.build_quarantine(Config(quarantine=False), root=str(root)) is None
+    assert "quarentena" not in capsys.readouterr().err
+
+
+def test_quarentena_ligada_usa_os_limites_do_config(tmp_path):
+    from mandacaru.config import Config
+    root = tmp_path / "q"
+    root.mkdir()
+    q = cli.build_quarantine(Config(retention_days=7, max_file_mb=3, max_total_mb=5), root=str(root),
+                             log_path=str(tmp_path / "d.jsonl"), trust_path=str(tmp_path / "t.json"))
+    assert q.root == str(root) and q.retention_days == 7
+    assert q.max_file_bytes == 3 * 1024 * 1024 and q.max_total_bytes == 5 * 1024 * 1024
+    assert q.log.path == str(tmp_path / "d.jsonl") and q.trust.path == str(tmp_path / "t.json")

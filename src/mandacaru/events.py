@@ -43,6 +43,7 @@ class Alert:
     evidence: dict[str, Any] = field(default_factory=dict)
     mitre: list[str] = field(default_factory=list)
     ts: float = field(default_factory=time.time)
+    quarantine_id: str | None = None  # caso aberto quando o arquivo foi isolado
 
     def to_json(self) -> str:
         d = asdict(self)

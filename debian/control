@@ -10,7 +10,7 @@ Rules-Requires-Root: no
 
 Package: mandacaru
 Architecture: all
-Depends: ${python3:Depends}, ${misc:Depends}, adduser, python3-yara, python3-psutil, python3-watchdog
+Depends: ${python3:Depends}, ${misc:Depends}, adduser, python3-yara, python3-psutil, python3-watchdog, polkitd | policykit-1
 Recommends: python3-bpfcc, logrotate
 Description: antivirus/EDR de codigo aberto contra ataques conduzidos por IA
  Detecta tecnicas (ofuscacao + execucao, criptografia em massa, shell aberto

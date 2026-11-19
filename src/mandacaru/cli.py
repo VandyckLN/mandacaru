@@ -1,4 +1,4 @@
-"""CLI: `mandacaru scan CAMINHO` e `mandacaru monitor`."""
+"""CLI: `mandacaru scan CAMINHO`, `mandacaru monitor` e `mandacaru quarentena ...`."""
 from __future__ import annotations
 
 import argparse
@@ -17,9 +17,12 @@ from .collectors import ebpf
 from .collectors.fsmon import FileMonitor
 from .collectors.procmon import ProcessMonitor
 from .config import DEFAULT_PATH, Config, ConfigError, load_config
+from .decisions import DEFAULT_LOG, DecisionLog
 from .detectors.static import StaticScanner
 from .engine import AlertSink, Engine, console_sink, jsonl_sink
 from .events import Severity
+from .quarantine import DEFAULT_DIR, DEFAULT_TRUST, Quarantine, TrustList
+from .quarantine_cli import add_parser as add_quarantine_parser
 
 
 class CliError(Exception):
@@ -137,11 +140,33 @@ def build_sinks(cfg: Config) -> tuple[list[AlertSink], list[Callable[[], None]]]
     return sinks, stops
 
 
+def build_quarantine(cfg: Config, root: str = DEFAULT_DIR, log_path: str = DEFAULT_LOG,
+                     trust_path: str = DEFAULT_TRUST) -> Quarantine | None:
+    """Quarentena do monitor, ou None se desligada no config ou sem diretorio gravavel."""
+    if not cfg.quarantine:
+        return None
+    if not os.path.isdir(root):
+        motivo = f"{root} nao existe"
+    elif not os.access(root, os.W_OK):
+        motivo = f"sem permissao de escrita em {root}"
+    else:
+        mb = 1024 * 1024
+        return Quarantine(root, DecisionLog(log_path), TrustList(trust_path), retention_days=cfg.retention_days,
+                          max_file_bytes=cfg.max_file_mb * mb, max_total_bytes=cfg.max_total_mb * mb)
+    # sem quarentena o EDR continua alertando; so nao isola
+    print(f"[mandacaru] quarentena desligada: {motivo}", file=sys.stderr)
+    return None
+
+
 def cmd_monitor(args) -> int:
     cfg = effective_config(args)
-    sinks, sink_stops = build_sinks(cfg)
-    engine = Engine(sinks, scanner=StaticScanner(cfg.rule_dirs, cfg.exclude))
     paths = resolve_watch_paths(list(cfg.watch_paths) or default_watch_paths())
+    sinks, sink_stops = build_sinks(cfg)
+    quarantine = build_quarantine(cfg)
+    if quarantine is not None:
+        print(f"[mandacaru] quarentena: {quarantine.root}", file=sys.stderr)
+    engine = Engine(sinks, scanner=StaticScanner(cfg.rule_dirs, cfg.exclude), quarantine=quarantine,
+                    quarantine_min_severity=cfg.quarantine_min_severity, watch_paths=paths)
 
     kind, stop_procs = start_process_collector(engine.q, cfg.ebpf)
     stoppers = [stop_procs]
@@ -181,6 +206,7 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("paths", nargs="*", help="pastas a vigiar (padrao: Downloads, Documentos, /tmp...)")
     m.add_argument("--no-ebpf", action="store_true")
     m.set_defaults(fn=cmd_monitor)
+    add_quarantine_parser(sub)
     return ap
 
 

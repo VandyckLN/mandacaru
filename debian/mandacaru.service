@@ -6,6 +6,8 @@ After=local-fs.target
 [Service]
 Type=simple
 Environment=PYTHONUNBUFFERED=1
+# quarentena: /var/lib/mandacaru/quarantine (root:mandacaru 0750); o + roda como root antes do servico
+ExecStartPre=+/usr/bin/install -d -m 0750 -o root -g mandacaru /var/lib/mandacaru/quarantine
 ExecStart=/usr/bin/mandacaru --config /etc/mandacaru/config.toml monitor
 Restart=on-failure
 RestartSec=5
@@ -17,10 +19,16 @@ LogsDirectoryMode=0750
 # socket de alertas em tempo real: /run/mandacaru/alerts.sock (grupo mandacaru)
 RuntimeDirectory=mandacaru
 RuntimeDirectoryMode=0755
+# 0755: membros do grupo mandacaru atravessam ate quarantine/ para listar sem root
+StateDirectory=mandacaru
+StateDirectoryMode=0755
 UMask=0027
 NoNewPrivileges=yes
 ProtectSystem=full
-ProtectHome=read-only
+# a quarentena tira arquivos detectados das pastas vigiadas em /home. ProtectHome=read-only venceria um
+# ReadWritePaths=/home (mesmo caminho), entao /home fica gravavel e o resto do ProtectHome vira so leitura
+ProtectHome=no
+ReadOnlyPaths=-/root -/run/user
 
 [Install]
 WantedBy=multi-user.target
