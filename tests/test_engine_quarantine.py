@@ -7,7 +7,7 @@ import pytest
 from mandacaru.decisions import DecisionLog
 from mandacaru.detectors.static import StaticScanner
 from mandacaru.engine import Engine
-from mandacaru.events import Event, Severity
+from mandacaru.events import Alert, Event, Severity
 from mandacaru.quarantine import Quarantine, TrustList
 
 # regra yara.Py_Exec_Decoded_Payload (HIGH), a mesma amostra inofensiva de tests/test_detectors.py
@@ -242,3 +242,95 @@ def test_alerta_medium_de_arquivo_nao_isolado_diz_o_motivo(scanner, tmp_path, w)
     assert len(out) == 2
     assert all(a.evidence["quarantine"].startswith("nao_isolado: ") for a in out)
     assert all("(NAO isolado: " in a.summary for a in out)
+
+
+# --- debounce de em_escrita e laco de symlink ---
+def _escrevendo(monkeypatch, q):
+    """Faz o isolamento falhar com em_escrita e conta as tentativas."""
+    from mandacaru.quarantine import IsolateResult
+    tentativas = []
+
+    def isolate(path, alert):
+        tentativas.append(path)
+        return IsolateResult("nao_isolado", reason="em_escrita")
+
+    monkeypatch.setattr(q, "isolate", isolate)
+    return tentativas
+
+
+def test_em_escrita_nao_refaz_a_copia_a_cada_modify(setup, q, w, monkeypatch):
+    engine, got = setup
+    tentativas = _escrevendo(monkeypatch, q)
+    f = w / "baixando.py"
+    f.write_text(HIGH)
+    engine.process(fev("file_create", f))
+    for _ in range(20):
+        engine.process(fev("file_write", f))
+    assert len(tentativas) == 1
+
+
+def test_fechamento_da_escrita_tenta_de_novo_sem_debounce(setup, q, w, monkeypatch):
+    engine, got = setup
+    tentativas = _escrevendo(monkeypatch, q)
+    f = w / "baixando.py"
+    f.write_text(HIGH)
+    engine.process(fev("file_create", f))
+    engine.process(fev("file_write", f))
+    engine.process(Event("file_write", {"path": str(f), "closed": True}))
+    assert len(tentativas) == 2
+    monkeypatch.undo()                       # agora o arquivo esta estavel
+    engine.process(Event("file_write", {"path": str(f), "closed": True}))   # ainda pendente: ultima tentativa
+    assert len(q.list()) == 1 and not f.exists()
+    engine.process(Event("file_write", {"path": str(f), "closed": True}))   # nao pendente: nada a refazer
+    assert len(q.list()) == 1
+
+
+def test_em_escrita_tenta_de_novo_depois_do_debounce(setup, q, w, monkeypatch):
+    engine, got = setup
+    tentativas = _escrevendo(monkeypatch, q)
+    f = w / "baixando.py"
+    f.write_text(HIGH)
+    engine.process(fev("file_create", f))
+    engine._writing[str(f)] -= 3
+    engine.process(fev("file_write", f))
+    assert len(tentativas) == 2
+
+
+def test_fsmon_emite_o_fechamento_da_escrita(tmp_path):
+    import queue
+    import time
+
+    from mandacaru.collectors.fsmon import FileMonitor
+    out = queue.Queue()
+    fm = FileMonitor([str(tmp_path)], out)
+    fm.start()
+    try:
+        (tmp_path / "a.bin").write_bytes(b"x" * 10)
+        deadline, visto = time.time() + 5, False
+        while time.time() < deadline and not visto:
+            try:
+                visto = out.get(timeout=0.5).data.get("closed") is True
+            except queue.Empty:
+                pass
+        assert visto
+    finally:
+        fm.stop()
+
+
+def test_resolve_que_levanta_runtimeerror_vira_nao_isolado_com_symlink(scanner, q, w, monkeypatch):
+    from pathlib import Path
+    engine = Engine([], scanner=scanner, quarantine=q, watch_paths=[str(w)])
+    laco = w / "a"
+    laco.symlink_to(laco)
+    f = laco / "x.py"
+    real = Path.resolve
+
+    def resolve(self, *a, **k):
+        if "/a" in str(self):
+            raise RuntimeError("Symlink loop")
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    assert engine._watched(str(f)) is True
+    r = q.isolate(str(f), Alert("yara.X", Severity.HIGH, "s", {"path": str(f)}))
+    assert (r.status, r.reason) == ("nao_isolado", "caminho_com_symlink")
