@@ -12,6 +12,7 @@ Quarentena: o arquivo detectado sai do lugar e você decide o que fazer com ele.
 - **Timer diário** `mandacaru-quarantine-clean.timer`: apaga o que passou de `retention_days` (padrão 30).
 - Seções novas no config: `[quarantine]` e `[analysis]`. O `config.toml` é instalado como `0640`, porque pode guardar chaves de API; quem atualiza de uma versão anterior também passa a ter o arquivo em `0640` (o `dpkg` preservaria o `0644` de um config modificado). Sem `--config`, quem não consegue ler o arquivo recebe um aviso e segue com os padrões; `--config` ilegível e config inválido continuam sendo erro.
 - O pacote passa a depender de `polkitd | policykit-1`.
+- `apt purge mandacaru` apaga também `/var/lib/mandacaru` (quarentena e lista de confiança) e `/var/log/mandacaru` (alertas e log de decisões).
 
 ## 0.3.1
 

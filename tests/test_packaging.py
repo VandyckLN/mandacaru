@@ -230,3 +230,11 @@ def test_postinst_fecha_o_config_de_quem_atualiza_de_antes_da_040():
     assert post.index("chmod 0640") < post.index("#DEBHELPER#")
     import subprocess
     assert subprocess.run(["sh", "-n", str(ROOT / "debian" / "mandacaru.postinst")]).returncode == 0
+
+
+def test_postrm_purge_apaga_o_estado_do_pacote():
+    post = (ROOT / "debian" / "mandacaru.postrm").read_text()
+    assert post.startswith("#!/bin/sh\nset -e\n")
+    assert '[ "$1" = purge ]' in post
+    assert "rm -rf /var/lib/mandacaru /var/log/mandacaru" in post
+    assert "#DEBHELPER#" in post

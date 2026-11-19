@@ -1,0 +1,8 @@
+#!/bin/sh
+set -e
+# purge: estado proprio do pacote (quarentena, lista de confianca, alertas e log de decisoes)
+if [ "$1" = purge ]; then
+    rm -rf /var/lib/mandacaru /var/log/mandacaru
+fi
+#DEBHELPER#
+exit 0
