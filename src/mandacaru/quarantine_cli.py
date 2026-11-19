@@ -5,6 +5,7 @@ Roda como root via os auxiliares do pkexec (ou sudo); o popup le a saida e os co
 """
 from __future__ import annotations
 
+import http.client
 import json
 import math
 import os
@@ -66,7 +67,7 @@ def _check_log(q: Quarantine) -> None:
     if q.log is None:
         return
     try:
-        fd = os.open(q.log.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_CLOEXEC, 0o640)
+        fd = os.open(q.log.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o640)
     except OSError as e:
         raise _Fail(f"log de decisoes indisponivel: {e.strerror or e}") from None
     os.close(fd)
@@ -168,11 +169,13 @@ class _Ctx:
             if args.enviar:
                 if result.verdict != "desconhecido":
                     failure = f"--enviar so vale para hash desconhecido (veredito: {result.verdict})"
-                elif self.input(UPLOAD_PROMPT).strip() in ("s", "S"):
+                elif (answer := self._confirm()) is None:
+                    failure = "envio nao confirmado (entrada encerrada ou interrompida)"
+                elif answer.strip() in ("s", "S"):
                     data = q.read_original(case.id, MAX_UPLOAD)
                     try:
                         vt_id = self.uploader(data, os.path.basename(case.original_path), cfg.virustotal_key)
-                    except (RuntimeError, OSError) as e:
+                    except (RuntimeError, OSError, http.client.HTTPException) as e:
                         failure = f"envio ao VirusTotal falhou: {e}"
                     else:
                         detail = {**detail, "enviado": True, "virustotal_analise": vt_id}
@@ -186,6 +189,12 @@ class _Ctx:
         if failure:
             raise _Fail(failure)
         return 0
+
+    def _confirm(self) -> str | None:
+        try:
+            return self.input(UPLOAD_PROMPT)
+        except (EOFError, KeyboardInterrupt):
+            return None
 
     def _local_scan(self, case, result) -> None:
         """Nenhuma fonte respondeu: varre de novo com as regras YARA atuais (o veredito nao muda)."""

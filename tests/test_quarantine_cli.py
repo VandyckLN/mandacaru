@@ -394,3 +394,41 @@ def test_regra_yara_invalida_no_config_nao_derruba_a_analise(q, tmp_path, capsys
                analyzer=analisador(status="erro")) == 0
     d = json.loads(capsys.readouterr().out)
     assert d["sources"]["yara_local"]["status"] == "erro" and q.load(case.id).analysis == d
+
+
+@pytest.mark.parametrize("exc", [EOFError, KeyboardInterrupt])
+def test_enviar_com_entrada_encerrada_nao_envia_e_sai_com_1(q, tmp_path, capsys, exc):
+    case = isolar(q, tmp_path)
+
+    def input_morto(prompt):
+        raise exc()
+
+    def uploader(*a):
+        raise AssertionError("nao deveria enviar")
+
+    assert run(["analisar", case.id, "--enviar"], tmp_path, '[analysis]\nvirustotal_key = "k"\n', quarantine=q,
+               analyzer=analisador(), stdin_isatty=lambda: True, input_fn=input_morto, uploader=uploader) == 1
+    assert "nao confirmado" in capsys.readouterr().err
+    assert log(tmp_path)[-1]["action"] == "analisar"
+
+
+def test_enviar_com_erro_http_sai_com_1_sem_traceback(q, tmp_path, capsys):
+    import http.client
+    case = isolar(q, tmp_path)
+
+    def uploader(*a):
+        raise http.client.IncompleteRead(b"")
+
+    assert run(["analisar", case.id, "--enviar"], tmp_path, '[analysis]\nvirustotal_key = "k"\n', quarantine=q,
+               analyzer=analisador(), stdin_isatty=lambda: True, input_fn=lambda p: "s", uploader=uploader) == 1
+    assert "envio ao VirusTotal falhou" in capsys.readouterr().err
+
+
+def test_log_que_e_symlink_e_recusado(q, tmp_path, capsys):
+    case = isolar(q, tmp_path)
+    (tmp_path / "alvo").write_text("")
+    (tmp_path / "d2.jsonl").symlink_to(tmp_path / "alvo")
+    q.log = DecisionLog(tmp_path / "d2.jsonl")
+    assert run(["apagar", case.id], tmp_path, quarantine=q) == 1
+    assert "log de decisoes indisponivel" in capsys.readouterr().err
+    assert (tmp_path / "alvo").read_text() == ""

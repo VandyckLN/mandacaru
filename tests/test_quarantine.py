@@ -420,7 +420,7 @@ def test_trustlist_rele_quando_outro_processo_altera(tmp_path):
     assert not a.contains("aa")
     b.add("aa", "/x", "ana")
     assert a.contains("aa")
-    assert (p.stat().st_mode & 0o777) == 0o644
+    assert (p.stat().st_mode & 0o777) == 0o600
     b.add("aa", "/x", "ana")  # no-op
     assert len(json.loads(p.read_text())) == 1
     assert b.remove("aa") is True and b.remove("aa") is False
@@ -681,3 +681,72 @@ def test_read_original_desembaralha_confere_e_limita(q, tmp_path):
         q.read_original(case.id)
     with pytest.raises(CaseNotFound):
         q.read_original("0" * 32)
+
+
+# --- pendencias menores ---
+def test_trustlist_nao_segue_symlink_no_temporario(tmp_path):
+    alvo = tmp_path / "alvo"
+    alvo.write_text("intacto")
+    p = tmp_path / "t.json"
+    os.symlink(alvo, f"{p}.{os.getpid()}.tmp")
+    with pytest.raises(OSError):
+        TrustList(p).add("aa", "/x", "ana")
+    assert alvo.read_text() == "intacto"
+
+
+def test_set_analysis_com_tmp_velho_de_um_crash(qr, tmp_path):
+    c = isolar(qr, tmp_path / "a.py")
+    velho = tmp_path / "q" / f"{c.id}.json.tmp"
+    velho.write_bytes(b"lixo de um crash")
+    qr.set_analysis(c.id, {"verdict": "x"})
+    assert qr.load(c.id).analysis == {"verdict": "x"}
+    assert not velho.exists()
+
+
+def test_set_analysis_tmp_velho_symlink_nao_e_seguido(qr, tmp_path):
+    c = isolar(qr, tmp_path / "a.py")
+    alvo = tmp_path / "alvo"
+    alvo.write_text("intacto")
+    os.symlink(alvo, tmp_path / "q" / f"{c.id}.json.tmp")
+    qr.set_analysis(c.id, {"verdict": "x"})
+    assert alvo.read_text() == "intacto"
+    assert qr.load(c.id).analysis == {"verdict": "x"}
+
+
+def test_purge_avisa_quando_pula_um_caso(qr, tmp_path, monkeypatch, capsys):
+    a = isolar(qr, tmp_path / "a.py")
+    qr.rel.t = a.expires_at + 1
+
+    def falha(self, *args, **kw):
+        raise OSError(errno.EIO, "io")
+
+    monkeypatch.setattr(Quarantine, "delete", falha)
+    assert qr.purge_expired() == 0
+    assert a.id in capsys.readouterr().err
+
+
+def test_apagar_avisa_se_fsync_do_diretorio_falha_e_ainda_loga(qr, tmp_path, monkeypatch, capsys):
+    c = isolar(qr, tmp_path / "a.py")
+
+    def falha(self):
+        raise OSError(errno.EIO, "io")
+
+    monkeypatch.setattr(Quarantine, "_fsync_dir", falha)
+    qr.delete(c.id, "ana", 1000)
+    assert c.id in capsys.readouterr().err
+    assert linhas(tmp_path)[-1]["action"] == "apagar"
+
+
+def test_rollback_de_trust_que_falha_avisa(qt, tmp_path, monkeypatch, capsys):
+    f = tmp_path / "x.py"
+    case = isolar(qt, f)
+    f.write_bytes(b"novo")
+    (tmp_path / "x.py.restaurado-1970-01-01").write_bytes(b"outro")
+
+    def falha(self, sha):
+        raise OSError(errno.EIO, "io")
+
+    monkeypatch.setattr(TrustList, "remove", falha)
+    with pytest.raises(FileExistsError):
+        qt.restore(case.id, "ana", 1000)
+    assert case.sha256 in capsys.readouterr().err

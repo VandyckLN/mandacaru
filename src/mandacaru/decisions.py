@@ -30,10 +30,12 @@ class DecisionLog:
         entry = {"v": 1, "ts": time.time(), "id": case_id, "sha256": sha256, "path": path,
                  "action": action, "by": by, "uid": uid, "detail": detail}
         line = safe_text(json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8")
-        fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o640)
+        fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o640)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
-            os.write(fd, line)
+            view = memoryview(line)
+            while view:  # escrita curta nao pode cortar a linha
+                view = view[os.write(fd, view):]
         finally:
             os.close(fd)  # fecha o fd e solta o flock
 

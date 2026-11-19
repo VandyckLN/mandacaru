@@ -21,7 +21,7 @@ o porquê.
 - Sem dependência nova obrigatória (nada em `dependencies` do `pyproject.toml`, nada em `Depends` além de polkit).
 - Python ≥ 3.10; Linux apenas.
 - Caminhos fixos: quarentena `/var/lib/mandacaru/quarantine/` (root:mandacaru 0750), lista de confiança
-  `/var/lib/mandacaru/trusted.json` (0644), log `/var/log/mandacaru/decisions.jsonl` (root:mandacaru 0640).
+  `/var/lib/mandacaru/trusted.json` (0600), log `/var/log/mandacaru/decisions.jsonl` (root:mandacaru 0640).
   Todos como constantes de módulo e **injetáveis** nos construtores para os testes rodarem sem root.
 - `<id>.bin` 0600 root; `<id>.json` 0640 root:mandacaru; XOR com chave de 1 byte `0xA5`.
 - Padrões: `min_severity = "HIGH"`, `retention_days = 30`, `max_file_mb = 256`, `max_total_mb = 2048`, `cymru = true`.

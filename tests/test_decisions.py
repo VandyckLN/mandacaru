@@ -75,3 +75,26 @@ def test_permissao_do_arquivo_novo_e_0640(tmp_path):
 def test_diretorio_inexistente_levanta_oserror(tmp_path):
     with pytest.raises(OSError):
         DecisionLog(tmp_path / "nao" / "d.jsonl").record("manter")
+
+
+def test_escrita_curta_continua_ate_gravar_a_linha_toda(tmp_path, monkeypatch):
+    real = os.write
+
+    def curta(fd, data):
+        return real(fd, bytes(data)[:7])
+
+    p = tmp_path / "d.jsonl"
+    monkeypatch.setattr(os, "write", curta)
+    DecisionLog(p).record("manter", case_id="c1")
+    monkeypatch.undo()
+    assert _lines(p)[0]["id"] == "c1"
+
+
+def test_nao_segue_symlink_no_log(tmp_path):
+    alvo = tmp_path / "alvo"
+    alvo.write_text("")
+    p = tmp_path / "d.jsonl"
+    os.symlink(alvo, p)
+    with pytest.raises(OSError):
+        DecisionLog(p).record("manter", case_id="c1")
+    assert alvo.read_text() == ""

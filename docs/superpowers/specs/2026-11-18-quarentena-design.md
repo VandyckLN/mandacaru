@@ -155,7 +155,7 @@ histórico fica no log de decisões).
 
 ### 3. Lista de confiança
 
-`/var/lib/mandacaru/trusted.json`, root, 0644: lista de `{"sha256", "added_at", "original_path", "by"}`.
+`/var/lib/mandacaru/trusted.json`, root, 0600 (so o servico e a CLI, ambos root, leem): lista de `{"sha256", "added_at", "original_path", "by"}`.
 Escrita atômica (temporário + `rename`). Lida pelo serviço na inicialização e recarregada quando o mtime mudar
 (checado no máximo uma vez a cada 5 s, para não reler a cada evento). Remover da lista: `sudo mandacaru
 quarentena desconfiar <sha256>`, também registrado.

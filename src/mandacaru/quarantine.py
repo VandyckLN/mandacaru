@@ -9,6 +9,7 @@ import json
 import os
 import re
 import stat
+import sys
 import time
 import uuid
 from collections.abc import Callable
@@ -219,10 +220,10 @@ class TrustList:
 
     def _save(self, entries: list[dict]) -> None:
         tmp = f"{self.path}.{os.getpid()}.tmp"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
         try:
             try:
-                os.fchmod(fd, 0o644)
+                os.fchmod(fd, 0o600)
                 _write_all(fd, json.dumps(entries, ensure_ascii=True, indent=1).encode("ascii"))
                 os.fsync(fd)
             finally:
@@ -256,6 +257,10 @@ def _unlink_quiet(path: str) -> None:
         os.unlink(path)
     except OSError:
         pass
+
+
+def _warn(msg: str) -> None:
+    print(f"mandacaru: aviso: {msg}", file=sys.stderr)
 
 
 def _reason(e: OSError) -> str:
@@ -344,6 +349,7 @@ class Quarantine:
         """Grava <id>.json via temporario + rename (0640; grupo mandacaru se der)."""
         final = self._p(case.id, ".json")
         tmp = final + ".tmp"
+        _unlink_quiet(tmp)  # sobra de um crash; unlink nao segue symlink, e o O_EXCL abaixo recusa corrida
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o640)
         try:
             try:
@@ -569,8 +575,9 @@ class Quarantine:
             if added:
                 try:
                     self.trust.remove(case.sha256)
-                except OSError:
-                    pass
+                except OSError as e2:
+                    _warn(f"nao consegui desfazer a entrada de confianca de {case.sha256} apos falha na "
+                          f"restauracao: {_reason(e2)}")
             if isinstance(e, OSError) and not refused:
                 self._refuse(case, by, uid, _reason(e))
             raise
@@ -591,7 +598,10 @@ class Quarantine:
                 os.unlink(self._p(case.id, ext))
             except FileNotFoundError:
                 pass
-        self._fsync_dir()
+        try:
+            self._fsync_dir()
+        except OSError as e:
+            _warn(f"fsync do diretorio da quarentena falhou ao apagar {case.id}: {_reason(e)}")
         self._record(action, case_id=case.id, sha256=case.sha256, path=case.original_path, by=by, uid=uid)
 
     def read_original(self, case_id: str, max_bytes: int | None = None) -> bytes:
@@ -638,7 +648,8 @@ class Quarantine:
                 self.delete(case.id, "sistema", None, action="expirado")
             except LogNotRecorded:
                 raise
-            except Exception:
+            except Exception as e:  # noqa: BLE001
+                _warn(f"nao consegui expirar o caso {case.id}: {_reason(e) if isinstance(e, OSError) else repr(e)}")
                 continue
             removed += 1
         try:
