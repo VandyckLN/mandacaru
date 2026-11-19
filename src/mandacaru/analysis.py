@@ -36,11 +36,12 @@ def _default_resolver(name: str) -> list[str]:
 
 
 class _KeyStrippingRedirect(urllib.request.HTTPRedirectHandler):
-    """Segue redirect, mas sem levar as chaves de API se o host mudar."""
+    """Segue redirect, mas sem levar as chaves de API se o host ou o esquema (https -> http) mudar."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         new = super().redirect_request(req, fp, code, msg, headers, newurl)
-        if new is not None and urllib.parse.urlsplit(newurl).netloc.lower() != req.host.lower():
+        if new is not None and (urllib.parse.urlsplit(newurl).netloc.lower() != req.host.lower()
+                                or urllib.parse.urlsplit(newurl).scheme != urllib.parse.urlsplit(req.full_url).scheme):
             for k in list(new.headers):
                 if k.lower() in ("x-apikey", "auth-key"):
                     del new.headers[k]

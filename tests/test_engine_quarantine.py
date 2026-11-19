@@ -334,3 +334,36 @@ def test_resolve_que_levanta_runtimeerror_vira_nao_isolado_com_symlink(scanner, 
     assert engine._watched(str(f)) is True
     r = q.isolate(str(f), Alert("yara.X", Severity.HIGH, "s", {"path": str(f)}))
     assert (r.status, r.reason) == ("nao_isolado", "caminho_com_symlink")
+
+
+def test_escritor_que_nunca_fecha_tem_retry_depois_da_janela(setup, q, w, monkeypatch):
+    engine, got = setup
+    tentativas = _escrevendo(monkeypatch, q)
+    f = w / "torrent.py"
+    f.write_text(HIGH)
+    engine.process(fev("file_create", f))
+    engine.process(fev("file_write", f))          # ultimo write, dentro da janela, sem close
+    assert len(tentativas) == 1
+    engine.retry_dropped()                         # janela ainda aberta: nada
+    assert len(tentativas) == 1
+    engine._writing[str(f)] -= 3
+    engine.retry_dropped()                         # borda final
+    assert len(tentativas) == 2
+    engine.retry_dropped()                         # nada mais pendente
+    assert len(tentativas) == 2
+    monkeypatch.undo()
+    engine._writing[str(f)] -= 3
+    engine._dropped.add(str(f))
+    engine.retry_dropped()
+    assert len(q.list()) == 1 and not f.exists()
+
+
+def test_excesso_de_pendentes_descarta_o_mais_antigo_e_mantem_o_resto(setup, q, w, monkeypatch):
+    engine, got = setup
+    _escrevendo(monkeypatch, q)
+    for i in range(10_001):
+        engine._writing[f"/x/{i}"] = 1.0
+    f = w / "novo.py"
+    f.write_text(HIGH)
+    engine.process(fev("file_create", f))
+    assert str(f) in engine._writing and "/x/0" not in engine._writing and "/x/5" in engine._writing

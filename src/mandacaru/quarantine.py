@@ -348,9 +348,10 @@ class Quarantine:
     def _write_json(self, case: Case) -> None:
         """Grava <id>.json via temporario + rename (0640; grupo mandacaru se der)."""
         final = self._p(case.id, ".json")
-        tmp = final + ".tmp"
-        _unlink_quiet(tmp)  # sobra de um crash; unlink nao segue symlink, e o O_EXCL abaixo recusa corrida
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o640)
+        # nome unico por gravacao: duas gravacoes do mesmo caso nao se pisam e uma sobra de crash nao trava;
+        # as sobras (.tmp com mais de 1 h) saem no purge_expired
+        tmp = f"{final}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640)
         try:
             try:
                 os.fchmod(fd, 0o640)

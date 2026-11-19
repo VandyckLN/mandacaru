@@ -65,6 +65,7 @@ class Engine:
         self.dedup_seconds = 30.0
         self.writing_debounce = 2.0
         self._writing: dict[str, float] = {}  # caminho -> ultima tentativa que parou em em_escrita
+        self._dropped: set[str] = set()  # caminhos com file_write descartado pelo debounce (borda final)
         self.quarantine = quarantine
         self.quarantine_min_severity = quarantine_min_severity
         self.watch_paths = [_resolve(p) for p in watch_paths]
@@ -102,11 +103,15 @@ class Engine:
             if r is None:
                 continue
             if r.reason == "em_escrita":
+                self._writing.pop(a.evidence["path"], None)
                 self._writing[a.evidence["path"]] = time.monotonic()
-                if len(self._writing) > 10_000:
-                    self._writing.clear()
+                while len(self._writing) > 10_000:  # descarta o mais antigo, nunca tudo
+                    old = next(iter(self._writing))
+                    del self._writing[old]
+                    self._dropped.discard(old)
             else:
                 self._writing.pop(a.evidence["path"], None)
+                self._dropped.discard(a.evidence["path"])
             if r.status == "isolado":
                 a.quarantine_id = r.case.id
                 a.evidence["quarantine_id"] = r.case.id
@@ -129,9 +134,22 @@ class Engine:
         if pending is None or ev.kind != "file_write":
             return False
         if time.monotonic() - pending < self.writing_debounce:
+            self._dropped.add(path)  # borda final: retry_dropped refaz quando a janela acabar
             return True
         del self._writing[path]
+        self._dropped.discard(path)
         return False
+
+    def retry_dropped(self) -> None:
+        """Refaz a tentativa dos arquivos cujo ultimo file_write foi descartado pelo debounce e que nunca
+        receberam fechamento (torrent, download pausado): chamado a cada volta do laco, sem timer por arquivo."""
+        if not self._dropped:
+            return
+        now = time.monotonic()
+        for path in [p for p in self._dropped if now - self._writing.get(p, 0.0) >= self.writing_debounce]:
+            self._dropped.discard(path)
+            if path in self._writing:
+                self.process(Event("file_write", {"path": path}))
 
     def process(self, ev: Event) -> list[Alert]:
         # o fechamento (closed) repete um file_write ja contado: nao entra de novo na contagem de comportamento
@@ -159,11 +177,19 @@ class Engine:
             try:
                 ev = self.q.get(timeout=0.5)
             except queue.Empty:
+                self._retry_safely()
                 continue
+            self._retry_safely()
             try:
                 self.process(ev)
             except Exception as exc:  # um evento ruim nao derruba o agente
                 print(f"[mandacaru] erro processando evento {ev.kind}: {exc}", file=sys.stderr)
+
+    def _retry_safely(self):
+        try:
+            self.retry_dropped()
+        except Exception as exc:
+            print(f"[mandacaru] erro na nova tentativa de isolar: {exc}", file=sys.stderr)
 
     def stop(self):
         self._stop.set()

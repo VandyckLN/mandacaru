@@ -238,3 +238,5 @@ def test_postrm_purge_apaga_o_estado_do_pacote():
     assert '[ "$1" = purge ]' in post
     assert "rm -rf /var/lib/mandacaru /var/log/mandacaru" in post
     assert "#DEBHELPER#" in post
+    import subprocess
+    assert subprocess.run(["sh", "-n", str(ROOT / "debian" / "mandacaru.postrm")]).returncode == 0

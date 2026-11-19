@@ -700,7 +700,26 @@ def test_set_analysis_com_tmp_velho_de_um_crash(qr, tmp_path):
     velho.write_bytes(b"lixo de um crash")
     qr.set_analysis(c.id, {"verdict": "x"})
     assert qr.load(c.id).analysis == {"verdict": "x"}
-    assert not velho.exists()
+    assert velho.exists()  # nome unico por gravacao: a sobra nao atrapalha (o purge limpa depois de 1 h)
+
+
+def test_gravacoes_do_mesmo_caso_usam_temporarios_distintos(qr, tmp_path, monkeypatch):
+    c = isolar(qr, tmp_path / "a.py")
+    nomes = []
+    real = os.rename
+    monkeypatch.setattr(os, "rename", lambda a, b, *x, **k: (nomes.append(a), real(a, b, *x, **k))[1])
+    qr.set_analysis(c.id, {"v": 1})
+    qr.set_analysis(c.id, {"v": 2})
+    assert len(set(nomes)) == 2 and all(n.endswith(".tmp") and f"{c.id}.json." in n for n in nomes)
+
+
+def test_purge_limpa_temporario_velho_do_json_com_nome_unico(qr, tmp_path):
+    c = isolar(qr, tmp_path / "a.py")
+    velho = tmp_path / "q" / f"{c.id}.json.123.abcd1234.tmp"
+    velho.write_bytes(b"x")
+    os.utime(velho, (qr.rel.t - 3601, qr.rel.t - 3601))
+    qr.purge_expired()
+    assert not velho.exists() and (tmp_path / "q" / f"{c.id}.json").exists()
 
 
 def test_set_analysis_tmp_velho_symlink_nao_e_seguido(qr, tmp_path):

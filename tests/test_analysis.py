@@ -269,3 +269,12 @@ def test_default_http_usa_o_opener_sem_vazar_chave():
     from mandacaru import analysis
     assert any(isinstance(h, analysis._KeyStrippingRedirect) for h in analysis._OPENER.handlers)
     assert isinstance(analysis._OPENER, urllib.request.OpenerDirector)
+
+
+def test_redirect_de_https_para_http_no_mesmo_host_remove_as_chaves():
+    import urllib.request
+
+    from mandacaru.analysis import _KeyStrippingRedirect
+    req = urllib.request.Request("https://www.virustotal.com/api/v3/files/x", headers={"X-apikey": "segredo"})
+    novo = _KeyStrippingRedirect().redirect_request(req, None, 302, "Found", {}, "http://www.virustotal.com/x")
+    assert novo is not None and "x-apikey" not in {k.lower() for k in novo.headers}
