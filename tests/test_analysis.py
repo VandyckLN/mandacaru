@@ -230,3 +230,42 @@ def test_offline_avisa_analise_limitada():
     r = analyze("id1", H, cfg(), res, http)
     assert r.verdict == "desconhecido"
     assert r.summary == "Desconhecido: analise limitada, sem resposta das fontes"
+
+
+def test_cymru_sem_resposta_do_dns_estoura_o_timeout():
+    import threading
+    import time
+    solta = threading.Event()
+
+    def trava(name):
+        solta.wait(5)
+        return ["127.0.0.2"]
+
+    t0 = time.monotonic()
+    res = analyze("c" * 32, H, cfg(cymru=True), resolver=trava, http=Http(), timeout=0.2)
+    solta.set()
+    assert time.monotonic() - t0 < 3
+    assert res.sources["cymru"] == SourceResult("erro", "timeout")
+
+
+def test_redirect_para_outro_host_remove_as_chaves():
+    import urllib.request
+
+    from mandacaru.analysis import _KeyStrippingRedirect
+    req = urllib.request.Request("https://www.virustotal.com/api/v3/files/x",
+                                 headers={"X-apikey": "segredo", "Auth-Key": "outro", "User-Agent": "m"})
+    h = _KeyStrippingRedirect()
+    novo = h.redirect_request(req, None, 302, "Found", {}, "https://evil.example/x")
+    assert novo is not None
+    assert not {k.lower() for k in novo.headers} & {"x-apikey", "auth-key"}
+    assert "User-agent" in novo.headers
+    mesmo = h.redirect_request(req, None, 302, "Found", {}, "https://www.virustotal.com/outro")
+    assert "segredo" in mesmo.headers.values()
+
+
+def test_default_http_usa_o_opener_sem_vazar_chave():
+    import urllib.request
+
+    from mandacaru import analysis
+    assert any(isinstance(h, analysis._KeyStrippingRedirect) for h in analysis._OPENER.handlers)
+    assert isinstance(analysis._OPENER, urllib.request.OpenerDirector)

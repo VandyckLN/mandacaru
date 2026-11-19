@@ -8,7 +8,9 @@ from __future__ import annotations
 import json
 import re
 import socket
+import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import dataclass
@@ -33,9 +35,27 @@ def _default_resolver(name: str) -> list[str]:
     return [info[4][0] for info in infos]
 
 
+class _KeyStrippingRedirect(urllib.request.HTTPRedirectHandler):
+    """Segue redirect, mas sem levar as chaves de API se o host mudar."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and urllib.parse.urlsplit(newurl).netloc.lower() != req.host.lower():
+            for k in list(new.headers):
+                if k.lower() in ("x-apikey", "auth-key"):
+                    del new.headers[k]
+            for k in list(new.unredirected_hdrs):
+                if k.lower() in ("x-apikey", "auth-key"):
+                    del new.unredirected_hdrs[k]
+        return new
+
+
+_OPENER = urllib.request.build_opener(_KeyStrippingRedirect)
+
+
 def _default_http(req: urllib.request.Request, timeout: float) -> tuple[int, bytes]:
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _OPENER.open(req, timeout=timeout) as resp:
             return resp.status, resp.read(MAX_BODY)
     except urllib.error.HTTPError as e:
         return e.code, e.read(MAX_BODY)
@@ -80,8 +100,24 @@ def _json(body: bytes) -> dict:
 def _cymru(h, resolver, http, timeout, cfg):
     # Formato do nome: https://hash.cymru.com/docs_dns (SHA-256 em dois blocos de 32 hex)
     name = f"{h[:32]}.{h[32:]}.hash.cymru.com"
+    box: dict = {}
+
+    def work():
+        try:
+            box["ips"] = resolver(name)
+        except BaseException as e:  # noqa: BLE001 - repassado abaixo
+            box["err"] = e
+
+    # getaddrinfo nao tem timeout: roda numa thread daemon e desiste depois do teto das outras fontes
+    t = threading.Thread(target=work, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        return SourceResult("erro", "timeout")
     try:
-        ips = resolver(name)
+        if "err" in box:
+            raise box["err"]
+        ips = box["ips"]
     except socket.gaierror as e:
         # So "nome inexistente" e nao_achou; EAI_AGAIN/EAI_FAIL (offline, resolvedor morto) e erro.
         if e.errno in _NOT_FOUND_ERRNOS:
