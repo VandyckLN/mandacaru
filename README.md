@@ -152,6 +152,62 @@ cymru = true
 
 O `config.toml` é instalado como `0640`, porque pode guardar chaves de API. Quem não é root e roda sem `--config` (por exemplo `mandacaru scan` ou `quarentena listar`) recebe um aviso e segue com a configuração padrão; um `--config` ilegível ou um config inválido continuam sendo erro.
 
+## Vulnerabilidades (CVEs)
+
+Um timer diário (`mandacaru-vuln-scan.timer`) cruza os pacotes instalados (`/var/lib/dpkg/status`) com o [OSV.dev](https://osv.dev) e o catálogo de vulnerabilidades exploradas da CISA (KEV). Só saem da máquina nome e versão dos pacotes-fonte; nada de usuário, caminho ou hostname.
+
+| Prioridade | Quando |
+|---|---|
+| `CRITICAL_ACTIVE` | CVSS ≥ `alert_min_cvss` (ou na KEV) **e** o pacote está carregado em algum processo agora |
+| `HIGH` | CVSS ≥ `alert_min_cvss`, prioridade alta da distro ou CVE na KEV |
+| `MEDIUM` | CVSS ≥ 4, prioridade média da distro ou aviso de segurança (USN/DSA) com atualização pendente |
+| `LOW` | o resto |
+
+Os achados `HIGH` e `CRITICAL_ACTIVE` novos chegam como alertas `vuln.cve_local` no `alerts.jsonl` e no socket (popup). Uma CVE já avisada não se repete no dia seguinte; mais de 5 novas de uma vez viram um alerta-resumo. O relatório completo da última execução fica em `/var/lib/mandacaru/vuln_cache/last-scan.json`.
+
+```bash
+mandacaru vuln scan --cache-dir ~/.cache/mandacaru     # na hora, com seu usuário (sai 2 se houver HIGH)
+mandacaru vuln scan --cache-dir ~/.cache/mandacaru --json > cves.json
+sudo systemctl start mandacaru-vuln-scan.service       # força a execução do serviço
+```
+
+O scan com rede roda como o usuário `_mandacaru-net`, sem capabilities e com o sistema de arquivos só para leitura. A única parte que precisa de root, ver quais bibliotecas estão carregadas em `/proc`, roda antes, sem rede, e entrega só a lista de pacotes.
+
+```toml
+[vuln]
+enabled = true
+cache_ttl_hours = 24
+kev_enrichment = true
+correlate_running_procs = true
+alert_min_cvss = 7.0
+```
+
+## Telemetria (opt-in)
+
+Desligada por padrão. Ligada, cada arquivo isolado pela quarentena vira um relatório na fila local `/var/lib/mandacaru/telemetry/outbox.db` (só root): hash, tamanho, tipo (ELF, script...), regras YARA, técnicas MITRE, distro e arquitetura. Nunca vai caminho, usuário, hostname, `machine-id` ou IP interno. Nada sai sem você aprovar:
+
+```bash
+sudo mandacaru telemetry status
+sudo mandacaru telemetry review             # o que vai ser enviado, item por item (--json mostra tudo)
+sudo mandacaru telemetry approve <id>       # ou reject <id>; item enviado ou rejeitado nao volta para a fila
+sudo systemctl enable --now mandacaru-telemetry.timer   # envio de hora em hora do que foi aprovado
+```
+
+Destinos: um MISP próprio (compatível com CSIRTs como o CERT.br; a chave fica só em `/etc/mandacaru/secrets.env`, como `MANDACARU_MISP_API_KEY=...`) e o Mandacaru Threat Hub. O envio roda como `_mandacaru-net`: ele recebe só uma cópia dos itens aprovados e devolve o resultado, sem acesso à fila nem à quarentena.
+
+```toml
+[telemetry]
+level = "off"              # off | iocs_only | samples_elf (marca ELF/scripts como amostra elegível)
+require_approval = true
+tlp = "TLP:CLEAR"          # TLP:CLEAR | TLP:GREEN
+max_sample_mb = 15
+hub_enabled = false
+hub_endpoint = ""
+misp_enabled = false
+misp_url = ""
+misp_verify_tls = true
+```
+
 ## Arquitetura
 
 ```
@@ -162,11 +218,13 @@ coletores (procmon | ebpf | fsmon) ──► fila ──► Engine ──► det
 - `detectors/static.py`: YARA + heurísticas. Só alerta ofuscação quando aparecem **juntos** conteúdo codificado, decodificação e execução dinâmica.
 - `detectors/behavior.py`: regras com janela de tempo e *cooldown* para não inundar o usuário.
 - `rules/yara/base.yar`: regras base.
+- `vuln/`: inventário dpkg, cliente OSV.dev com cache SQLite, cache da CISA KEV, CVSS 3.1 local e publicação dos achados no monitor.
+- `telemetry/`: sanitização (LGPD), fila com aprovação, produtor ligado à quarentena, spool root ↔ `_mandacaru-net` e envio para MISP/Threat Hub.
 
 ## Testes e falsos positivos
 
 ```bash
-pytest -q          # 54 testes, com amostras inofensivas que imitam as técnicas
+pytest -q          # 325 testes, com amostras inofensivas que imitam as técnicas
 ```
 
 Varredura de cerca de 91 mil arquivos legítimos (stdlib do Python, dist-packages e `/usr/share`): **0 alertas HIGH/CRITICAL**. Ficaram 1 MEDIUM (documentação com `curl | bash`) e 1 LOW (bundle JS grande).
@@ -181,6 +239,9 @@ Varredura de cerca de 91 mil arquivos legítimos (stdlib do Python, dist-package
 - [ ] Proteção do próprio agente: binário em Rust, assinatura das regras
 - [ ] Coletor Windows via ETW
 - [x] Serviço systemd + pacote `.deb`
+- [x] Auditoria diária de CVEs dos pacotes instalados (OSV.dev + CISA KEV), priorizando o que está em execução
+- [x] Telemetria opt-in com aprovação manual para MISP/Threat Hub
+- [ ] Envio de amostras ELF ao Threat Hub (hoje só a marcação de elegibilidade)
 
 ## Contribuindo
 

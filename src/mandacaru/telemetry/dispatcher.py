@@ -15,6 +15,7 @@ from .. import __version__
 from ..config import Config
 from .mappers import payload_to_misp_event
 from .outbox import OutboxItem, TelemetryOutbox
+from .producer import SAMPLE_MIMES
 from .sanitizer import is_sample_allowed
 
 MAX_RESP_BYTES = 1024 * 1024
@@ -76,14 +77,22 @@ class TelemetryDispatcher:
         return self.cfg.telemetry_level != "off" and bool(self._configured_destinations())
 
     def sample_eligible(self, item: OutboxItem) -> bool:
-        """Decidido por quem le a amostra (root); o envio sem privilegio so recebe o resultado."""
-        if self.cfg.telemetry_level != "samples_elf" or not item.sample_path:
+        """Elegivel = nivel samples_elf, ELF ou shell script e dentro do limite. Decidido pelos metadados
+        do relatorio (o arquivo fica embaralhado na quarentena); com sample_path legivel, confere tambem
+        o proprio arquivo (bloqueio de documentos pessoais)."""
+        if self.cfg.telemetry_level != "samples_elf":
             return False
+        ind = item.payload.get("indicator", {})
         max_bytes = self.cfg.telemetry_max_sample_mb * 1024 * 1024
-        try:
-            return is_sample_allowed(Path(item.sample_path), max_size_bytes=max_bytes)
-        except OSError:
+        size = ind.get("size_bytes")
+        if ind.get("mime") not in SAMPLE_MIMES or type(size) is not int or not 0 < size <= max_bytes:
             return False
+        if item.sample_path:
+            try:
+                return is_sample_allowed(Path(item.sample_path), max_size_bytes=max_bytes)
+            except OSError:
+                return False
+        return True
 
     def flush(self) -> DispatchResult:
         approved = self.outbox.list_items("APPROVED")

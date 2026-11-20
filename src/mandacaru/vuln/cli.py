@@ -17,7 +17,7 @@ from .inventory import (
 )
 from .kev_cache import DEFAULT_KEV_DB, KevCache
 from .osv_client import DEFAULT_OSV_DB, OsvClient
-from .scorer import ScoredVulnerability, classify_finding, finding_to_alert
+from .scorer import ScoredVulnerability, classify_finding, drop_redundant_advisories, finding_to_alert
 
 
 def add_parser(sub) -> None:
@@ -90,6 +90,7 @@ def run_vuln_scan(
                 )
             )
 
+    scored = drop_redundant_advisories(scored)
     order = {"CRITICAL_ACTIVE": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
     scored.sort(key=lambda f: (order.get(f.priority, 9), -f.cvss_score, f.package))
     return scored
@@ -133,7 +134,8 @@ def cmd_vuln(args) -> int:
         for f in findings:
             cves = ",".join(f.cve_ids) if f.cve_ids else f.vuln_id
             flags = " ".join(x for x in ("KEV" if f.in_kev else "", "ACTIVE" if f.is_running else "") if x)
-            print(f"[{f.priority:15}] CVSS {f.cvss_score:4.1f}  {f.package} ({f.version})  {cves}  {flags}".rstrip())
+            score = f"CVSS {f.cvss_score:4.1f}" if f.cvss_score else "sem CVSS"
+            print(f"[{f.priority:15}] {score:9}  {f.package} ({f.version})  {cves}  {flags}".rstrip())
         print(f"{len(findings)} vulnerabilidade(s) encontrada(s).", file=sys.stderr)
 
     if args.report:

@@ -400,3 +400,34 @@ def test_falha_no_pos_isolamento_nao_derruba_o_motor(scanner, q, w):
     f = w / "loader.py"
     f.write_text(HIGH)
     assert engine.process(fev("file_create", f)) and got[0].quarantine_id
+
+
+def test_tipo_do_arquivo_vem_do_conteudo_isolado(tmp_path, q):
+    from mandacaru.config import Config
+    from mandacaru.telemetry.dispatcher import TelemetryDispatcher
+    from mandacaru.telemetry.outbox import TelemetryOutbox
+    from mandacaru.telemetry.producer import detect_mime, make_enqueuer
+
+    assert detect_mime(b"\x7fELF") == "application/x-elf"
+    assert detect_mime(b"#!/b") == "text/x-shellscript"
+    assert detect_mime(b"impo", "/home/ana/x.py") == "text/x-python"
+    assert detect_mime(b"", "/home/ana/x") == "application/octet-stream"
+
+    w = tmp_path / "w2"
+    w.mkdir()
+    f = w / "dropper"
+    body = b"\x7fELF" + b"\0" * 60
+    f.write_bytes(body)
+    r = q.isolate(str(f), Alert("yara.X", Severity.HIGH, "x", {"path": str(f)}))
+    outbox = TelemetryOutbox(tmp_path / "t" / "outbox.db")
+    cfg = Config(telemetry_level="samples_elf", telemetry_require_approval=False)
+    make_enqueuer(cfg, outbox, q)(r.case, [])
+    [item] = outbox.list_items()
+    assert item.payload["indicator"]["mime"] == "application/x-elf"
+
+    assert TelemetryDispatcher(cfg, outbox).sample_eligible(item) is True
+    assert TelemetryDispatcher(Config(telemetry_level="iocs_only"), outbox).sample_eligible(item) is False
+    small = Config(telemetry_level="samples_elf", telemetry_max_sample_mb=1)
+    big = item.__class__(**{**item.__dict__, "payload": {"indicator": {"mime": "application/x-elf",
+                                                                       "size_bytes": 2 * 1024 * 1024}}})
+    assert TelemetryDispatcher(small, outbox).sample_eligible(big) is False

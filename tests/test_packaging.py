@@ -272,3 +272,9 @@ def test_unit_da_telemetria_separa_fila_e_rede():
     assert "WantedBy=timers.target" in timer
     rules = (ROOT / "debian" / "rules").read_text()
     assert "dh_installsystemd --no-enable --no-start --name=mandacaru-telemetry" in rules
+
+
+def test_relatorio_do_scan_e_o_que_o_monitor_publica():
+    from mandacaru.vuln.publish import DEFAULT_REPORT
+    unit = (ROOT / "debian" / "mandacaru.mandacaru-vuln-scan.service").read_text()
+    assert f"--report {DEFAULT_REPORT}" in unit

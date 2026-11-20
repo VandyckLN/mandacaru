@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0
+
+Auditoria de CVEs e telemetria opt-in, sem rede no serviço privilegiado.
+
+- **`mandacaru vuln scan`**: cruza os pacotes do dpkg com o OSV.dev e a CISA KEV, calcula o CVSS 3.1 localmente e prioriza o que está carregado em processos (`CRITICAL_ACTIVE`). Entende avisos de distro (USN, DSA, `UBUNTU-CVE-*`): tira as CVEs de `upstream`/`related`, usa a prioridade do Ubuntu quando não há CVSS e descarta aviso que só repete CVEs já listadas. Detalhes em paralelo; falha de rede usa o cache antigo. Saída `2` se houver achado alto. Ubuntu, Debian e derivados (Mint, Pop!_OS, LMDE).
+- **Timer diário** `mandacaru-vuln-scan.timer`, rodando como o usuário novo `_mandacaru-net` (sem capabilities, `ProtectSystem=strict`). A leitura do `/proc` roda antes, como root e sem rede (`vuln snapshot-running`). O relatório fica em `/var/lib/mandacaru/vuln_cache/last-scan.json` e o monitor transforma os achados altos novos em alertas `vuln.cve_local` (arquivo e socket), com resumo acima de 5.
+- **`mandacaru telemetry`** (`status`, `review`, `approve`, `reject`, `flush`): fila local com aprovação manual. Cada arquivo isolado entra como relatório sanitizado (hash, tamanho, tipo, regras, MITRE; sem caminho, usuário ou IP interno). Destinos: MISP próprio (chave só em `/etc/mandacaru/secrets.env`) e Threat Hub. O envio roda como `_mandacaru-net` via spool (`export`/`send`/`import`), sem acesso à fila nem à quarentena. Timer `mandacaru-telemetry.timer`, desligado na instalação.
+- Seções novas no config: `[vuln]` e `[telemetry]` (desligada por padrão). O `config.toml` passa a `root:_mandacaru-net 0640`.
+
 ## 0.4.0
 
 Quarentena: o arquivo detectado sai do lugar e você decide o que fazer com ele.

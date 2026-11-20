@@ -31,14 +31,22 @@ gratuito e completo, capaz de:
 - `inventory.py`: lê `/var/lib/dpkg/status` sem invocar subprocessos, resolve o campo `Source:`
   (exigido pelo OSV.dev para evitar falsos positivos/negativos em pacotes binários Debian/Ubuntu) e
   identifica pacotes com executáveis/bibliotecas ativamente mapeados em `/proc/<pid>/{exe,maps}`.
+  Agrupa todos os binários da mesma fonte (`libssl3` e `openssl` → `openssl`) e compara caminhos com `/usr`
+  unificado. Derivados usam a versão base (`UBUNTU_CODENAME`, `DEBIAN_CODENAME`).
 - `osv_client.py`: envia consultas em lote (`POST https://api.osv.dev/v1/querybatch`, até 500 pacotes por
   requisição) e persiste detalhes das vulnerabilidades em SQLite (`/var/lib/mandacaru/vuln_cache/osv.db`, TTL 24h).
+  Detalhes buscados em paralelo; falha cai no cache vencido e, sem ele, só aquele id fica de fora.
 - `kev_cache.py`: mantém cache SQLite local do catálogo CISA KEV; falhas de rede caem silenciosamente no cache.
 - `scorer.py`: implementa o cálculo oficial de Base Score **CVSS v3.1** (sem libs externas) e classifica:
   - `CRITICAL_ACTIVE`: CVSS >= 7.0 (ou presente no CISA KEV) **e** pacote ativo em `/proc`.
   - `HIGH`: CVSS >= 7.0 (ou KEV), sem execução ativa detectada.
   - `MEDIUM` / `LOW`: abaixo do limiar de alerta imediato.
-- `cli.py`: subcomando `mandacaru vuln scan` com saída humana, `--json` e `--emit-alerts`.
+  - Sem vetor CVSS, vale a prioridade textual da distro (`Ubuntu: high/medium/low`); aviso agregado
+    (USN/DSA) sem nota vira `MEDIUM` e sai da lista se todas as suas CVEs já aparecem em outro achado.
+- `cli.py`: `mandacaru vuln scan` (saída humana, `--json`, `--report`, `--running-file`, `--emit-alerts`)
+  e `mandacaru vuln snapshot-running` (root, sem rede).
+- `publish.py`: thread do monitor (root) que lê `last-scan.json` sem seguir symlink e emite os achados
+  altos **novos** nos sinks (`alerts.jsonl` + socket), com resumo acima de 5 por leitura.
 
 ### 2. Módulo `src/mandacaru/telemetry/`
 - `sanitizer.py`:
@@ -55,12 +63,19 @@ gratuito e completo, capaz de:
   - Modo comunitário: envia para o endpoint do Mandacaru Threat Hub (sem API key global no agente).
   - Modo self-hosted: envia para MISP privado usando chave lida exclusivamente de `MANDACARU_MISP_API_KEY`
     (via `/etc/mandacaru/secrets.env`), com `HTTPRedirectHandler` que remove cabeçalhos sensíveis em redirects.
-- `cli.py`: subcomandos `mandacaru telemetry status|review|approve|reject|flush`.
+- `producer.py`: `Engine(on_isolated=...)` — cada caso isolado entra na fila; o tipo (ELF, script) vem do
+  conteúdo desembaralhado da quarentena, sem caminho no payload.
+- `spool.py`: a fila é do root; o envio sem privilégio recebe `batch.json` e devolve `results.json`.
+  Root escreve com rename atômico (não segue symlink) e só aplica resultado a itens ainda `APPROVED`.
+- Transições: `approve` só de `PENDING`/`FAILED`; `reject` nunca mexe em `SENT`; `SENT`/`FAILED` só de `APPROVED`.
+- `cli.py`: subcomandos `mandacaru telemetry status|review|approve|reject|flush|export|send|import`.
 
 ## Empacotamento Debian (`debian/`)
 
 - `debian/mandacaru.mandacaru-vuln-scan.service` + `.timer`: auditoria diária (`RandomizedDelaySec=1h`,
-  `OnBootSec=10min`) sob `_mandacaru-net`.
-- `debian/mandacaru.mandacaru-telemetry.service`: instalado desabilitado (`--no-enable --no-start`)
-  para respeitar o modelo estritamente opt-in.
-- `debian/mandacaru.postinst`: cria o usuário de sistema `_mandacaru-net` antes do `#DEBHELPER#`.
+  `OnBootSec=10min`) sob `_mandacaru-net`; `ExecStartPre=+` tira o snapshot do `/proc` como root;
+  `SuccessExitStatus=2` (achou CVE alta não é falha).
+- `debian/mandacaru.mandacaru-telemetry.service` + `.timer`: `export` (root) → `send` (`_mandacaru-net`) →
+  `import` (root), instalados desabilitados (`--no-enable --no-start`) para respeitar o opt-in.
+- `debian/mandacaru.postinst`: cria o usuário de sistema `_mandacaru-net` e passa o `config.toml` a
+  `root:_mandacaru-net 0640` antes do `#DEBHELPER#`.

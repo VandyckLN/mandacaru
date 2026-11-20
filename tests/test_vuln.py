@@ -267,3 +267,85 @@ def test_config_recusa_vuln_mode_removido(tmp_path: Path) -> None:
     p.write_text('[vuln]\nmode = "offline_dump"\n')
     with pytest.raises(ConfigError):
         load_config(p)
+
+
+def _report(path: Path, findings: list[dict]) -> None:
+    path.write_text(json.dumps(findings))
+
+
+def _f(vid: str, prio: str = "HIGH", pkg: str = "openssl", cvss: float = 8.1) -> dict:
+    return {"vuln_id": vid, "cve_ids": [f"CVE-2026-{vid}"], "package": pkg, "version": "1.0",
+            "cvss_score": cvss, "in_kev": False, "is_running": prio == "CRITICAL_ACTIVE", "priority": prio,
+            "summary": ""}
+
+
+def test_publicador_alerta_so_o_que_e_novo_e_alto(tmp_path: Path) -> None:
+    import os
+
+    from mandacaru.vuln.publish import VulnReportPublisher
+
+    got: list = []
+    rep = tmp_path / "last-scan.json"
+    pub = VulnReportPublisher(got.append, report=rep, seen_path=tmp_path / "seen.json")
+    assert pub.poll() == 0                                   # sem relatorio ainda
+
+    _report(rep, [_f("1"), _f("2", "CRITICAL_ACTIVE", cvss=9.8), _f("3", "MEDIUM", cvss=5.0)])
+    assert pub.poll() == 2
+    assert [a.severity for a in got] == [Severity.CRITICAL, Severity.HIGH]   # ativo primeiro; MEDIUM fora
+    assert all(a.rule == "vuln.cve_local" for a in got)
+    assert pub.poll() == 0                                   # arquivo nao mudou
+
+    got.clear()
+    _report(rep, [_f("1"), _f("2", "CRITICAL_ACTIVE", cvss=9.8), _f("4")])
+    os.utime(rep, ns=(1, 1))
+    assert pub.poll() == 1 and "CVE-2026-4" in got[0].summary
+
+    # um monitor reiniciado nao repete o que ja foi alertado
+    got.clear()
+    assert VulnReportPublisher(got.append, report=rep, seen_path=tmp_path / "seen.json").poll() == 0
+
+
+def test_publicador_resume_rajadas_e_ignora_lixo(tmp_path: Path) -> None:
+    from mandacaru.vuln.publish import MAX_INDIVIDUAL, VulnReportPublisher
+
+    got: list = []
+    rep = tmp_path / "last-scan.json"
+    _report(rep, [_f(str(i), pkg=f"p{i}") for i in range(MAX_INDIVIDUAL + 7)] + ["lixo", {"vuln_id": "x"}])
+    VulnReportPublisher(got.append, report=rep, seen_path=tmp_path / "seen.json").poll()
+    assert len(got) == MAX_INDIVIDUAL + 1
+    assert got[-1].rule == "vuln.cve_local_resumo" and got[-1].evidence["count"] == 7
+
+
+def test_publicador_nao_segue_symlink(tmp_path: Path) -> None:
+    from mandacaru.vuln.publish import VulnReportPublisher
+
+    real = tmp_path / "real.json"
+    _report(real, [_f("1")])
+    rep = tmp_path / "last-scan.json"
+    rep.symlink_to(real)
+    got: list = []
+    assert VulnReportPublisher(got.append, report=rep, seen_path=tmp_path / "seen.json").poll() == 0
+
+
+def test_avisos_de_distro_sem_cvss() -> None:
+    from mandacaru.vuln.scorer import drop_redundant_advisories
+
+    ubu = classify_finding({"id": "UBUNTU-CVE-2026-1", "upstream": ["CVE-2026-1"],
+                            "severity": [{"type": "Ubuntu", "score": "high"}]}, "openssl", "1", set(), set())
+    assert ubu.cve_ids == ("CVE-2026-1",) and ubu.priority == "HIGH" and ubu.cvss_score == 0.0
+    med = classify_finding({"id": "UBUNTU-CVE-2026-2", "severity": [{"type": "Ubuntu", "score": "medium"}]},
+                           "openssl", "1", set(), set())
+    assert med.priority == "MEDIUM"
+
+    # USN que so repete CVEs ja listadas sai; o que traz CVE nova fica, como atualizacao pendente
+    dup = classify_finding({"id": "USN-1-1", "related": ["UBUNTU-CVE-2026-1"]}, "openssl", "1", set(), set())
+    new = classify_finding({"id": "USN-2-1", "related": ["UBUNTU-CVE-2026-9"]}, "openssl", "1", {"CVE-2026-9"},
+                           set())
+    assert dup.cve_ids == ("CVE-2026-1",)
+    assert new.in_kev is True and new.priority == "HIGH"   # CVE do aviso cruza com o KEV
+    kept = drop_redundant_advisories([ubu, dup, new])
+    assert [f.vuln_id for f in kept] == ["UBUNTU-CVE-2026-1", "USN-2-1"]
+    assert classify_finding({"id": "USN-3-1"}, "x", "1", set(), set()).priority == "MEDIUM"
+
+    alert = finding_to_alert(ubu)
+    assert "sem CVSS" in alert.summary and alert.severity == Severity.HIGH

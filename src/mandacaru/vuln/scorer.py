@@ -21,6 +21,13 @@ _PRIORITY_TO_SEVERITY = {
 }
 
 
+# sem vetor CVSS, o Ubuntu (e outras distros) informa so uma prioridade textual
+_DISTRO_PRIORITY = {"critical": "HIGH", "high": "HIGH", "important": "HIGH", "medium": "MEDIUM",
+                    "moderate": "MEDIUM", "low": "LOW", "negligible": "LOW"}
+_RANK = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
+_ADVISORY_PREFIXES = ("USN-", "DSA-", "DLA-", "DTSA-")
+
+
 def _roundup_cvss31(value: float) -> float:
     int_input = round(value * 100000)
     if (int_input % 10000) == 0:
@@ -84,11 +91,19 @@ def classify_finding(
     alert_min_cvss: float = 7.0,
 ) -> ScoredVulnerability:
     vuln_id = str(vuln_payload.get("id", "UNKNOWN"))
-    aliases = [str(a) for a in vuln_payload.get("aliases", []) if str(a).startswith("CVE-")]
+    # avisos de distro (DSA, USN, UBUNTU-CVE-...) trazem as CVEs em upstream/related, nao em aliases
+    aliases: list[str] = []
+    for field in ("aliases", "upstream", "related"):
+        for a in vuln_payload.get(field) or []:
+            a = str(a).removeprefix("UBUNTU-").removeprefix("DEBIAN-")
+            if a.startswith("CVE-") and a not in aliases:
+                aliases.append(a)
     if vuln_id.startswith("CVE-") and vuln_id not in aliases:
         aliases.insert(0, vuln_id)
 
     best_score = 0.0
+    has_cvss = False
+    distro_priority: str | None = None
     for sev in vuln_payload.get("severity", []):
         if not isinstance(sev, dict):
             continue
@@ -96,18 +111,33 @@ def classify_finding(
         parsed = parse_cvss31_base_score(score_raw)
         if parsed is not None:
             best_score = max(best_score, parsed)
+            has_cvss = True
+        elif score_raw.lower() in _DISTRO_PRIORITY:
+            level = _DISTRO_PRIORITY[score_raw.lower()]
+            if distro_priority is None or _RANK[level] > _RANK[distro_priority]:
+                distro_priority = level
 
     in_kev = any(cve.upper() in kev_cves for cve in aliases)
     is_running = package_name in running_packages
 
-    if (best_score >= alert_min_cvss or in_kev) and is_running:
-        priority = "CRITICAL_ACTIVE"
-    elif best_score >= alert_min_cvss or in_kev:
-        priority = "HIGH"
-    elif best_score >= 4.0:
-        priority = "MEDIUM"
+    if has_cvss:
+        high = best_score >= alert_min_cvss
+        base = "MEDIUM" if best_score >= 4.0 else "LOW"
     else:
-        priority = "LOW"
+        high = distro_priority == "HIGH"
+        if distro_priority in ("MEDIUM", "LOW"):
+            base = distro_priority
+        elif vuln_id.startswith(_ADVISORY_PREFIXES):
+            base = "MEDIUM"  # aviso de seguranca da distro sem nota: ha atualizacao de seguranca pendente
+        else:
+            base = "LOW"
+
+    if (high or in_kev) and is_running:
+        priority = "CRITICAL_ACTIVE"
+    elif high or in_kev:
+        priority = "HIGH"
+    else:
+        priority = base
 
     summary = str(vuln_payload.get("summary") or "")
     return ScoredVulnerability(
@@ -132,10 +162,29 @@ def finding_to_alert(finding: ScoredVulnerability) -> Alert:
     if finding.is_running:
         flags.append("em execucao")
     flag_txt = f" [{', '.join(flags)}]" if flags else ""
+    score = f"CVSS {finding.cvss_score:.1f}" if finding.cvss_score else "sem CVSS"
     return Alert(
         rule="vuln.cve_local",
         severity=_PRIORITY_TO_SEVERITY.get(finding.priority, Severity.LOW),
-        summary=f"{finding.package} {finding.version}: {cves} (CVSS {finding.cvss_score:.1f}){flag_txt}",
+        summary=f"{finding.package} {finding.version}: {cves} ({score}){flag_txt}",
         evidence=finding.to_dict(),
         mitre=["T1190"] if finding.is_running else [],
     )
+
+
+def drop_redundant_advisories(findings: list[ScoredVulnerability]) -> list[ScoredVulnerability]:
+    """Tira avisos agregados (USN, DSA...) sem nota propria cujas CVEs ja aparecem, no mesmo pacote,
+    em outro achado: a mesma falha nao entra duas vezes na contagem nem no popup."""
+    covered: dict[str, set[str]] = {}
+    for f in findings:
+        if f.cvss_score or not _is_aggregate(f):
+            covered.setdefault(f.package, set()).update(f.cve_ids)
+    return [
+        f for f in findings
+        if not (_is_aggregate(f) and not f.cvss_score and f.cve_ids
+                and set(f.cve_ids) <= covered.get(f.package, set()))
+    ]
+
+
+def _is_aggregate(f: ScoredVulnerability) -> bool:
+    return len(f.cve_ids) != 1 or f.cve_ids[0] not in f.vuln_id
