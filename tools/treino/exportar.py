@@ -136,11 +136,12 @@ def _gravar(path: Path, dados: bytes) -> None:
         fh.write(dados)
 
 
-def gravar_saida(saida: Path, *, model_id: str, treinados: dict[str, Treinado], tabelas: dict[str, Tabela],
+def gravar_saida(pasta: Path, *, model_id: str, treinados: dict[str, Treinado], tabelas: dict[str, Tabela],
                  portoes: dict[str, dict[str, Portao]], manifesto: list[str], contagens: dict) -> Path:
-    """Escreve em saida/<model_id>/ exatamente: elf.json, script.json, golden.json, relatorio e manifesto."""
-    pasta = saida / model_id
-    pasta.mkdir(parents=True, exist_ok=False)
+    """Escreve na pasta (nova; FileExistsError se ja existir) exatamente: elf.json, script.json, golden.json,
+    relatorio-<model_id>.md e manifesto-<model_id>.txt. Tudo e conferido antes de qualquer gravacao."""
+    if pasta.exists():
+        raise FileExistsError(f"{pasta} ja existe: um modelo anterior nunca e sobrescrito")
     texto_manifesto = "".join(f"{h}\n" for h in sorted(manifesto)).encode("ascii")
     manifesto_sha = hashlib.sha256(texto_manifesto).hexdigest()
     code_sha = feature_code_sha()[:40]
@@ -159,6 +160,7 @@ def gravar_saida(saida: Path, *, model_id: str, treinados: dict[str, Treinado], 
             raise ValueError(f"{fam}.json com {len(dados)} bytes (limite {MAX_JSON})")
         modelos[fam] = dados
         goldens[fam] = {"family": fam, "model_id": m["model_id"], **g}
+    pasta.mkdir(parents=True)
     for fam, dados in modelos.items():
         _gravar(pasta / f"{fam}.json", dados)
     _gravar(pasta / "golden.json", serializar_json(goldens))
@@ -172,7 +174,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m tools.treino.exportar",
                                  description="treina, avalia e exporta a partir das tabelas salvas pela extracao")
     ap.add_argument("--tabelas", required=True, type=Path)
-    ap.add_argument("--saida", required=True, type=Path)
+    ap.add_argument("--saida", required=True, type=Path, help="pasta nova do modelo (ex.: ~/saida/<model_id>)")
     ap.add_argument("--model-id", required=True)
     args = ap.parse_args(argv)
     tabelas = carregar(args.tabelas)
