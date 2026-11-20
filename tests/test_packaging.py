@@ -23,6 +23,15 @@ def test_config_de_exemplo_e_valido():
     assert "uso NAO comercial" in (ROOT / "packaging" / "config.toml").read_text()
 
 
+def test_exemplos_de_endereco_nunca_usam_dominio_registravel():
+    # um dominio de exemplo que alguem registre receberia os relatorios de quem copiar o exemplo
+    for arq in ("packaging/config.toml", "docs/novidades-0.5.md"):
+        texto = (ROOT / arq).read_text()
+        hosts = re.findall(r'(?:hub_endpoint|misp_url)\s*=\s*"https?://([^/"]+)', texto)
+        hosts += re.findall(r'ex\.:\s*"https?://([^/"]+)', texto)
+        assert hosts and all(h.endswith(".invalid") for h in hosts), (arq, hosts)
+
+
 def test_versao_do_changelog_debian_bate_com_o_pacote():
     first = (ROOT / "debian" / "changelog").read_text().splitlines()[0]
     assert re.match(r"mandacaru \(([^)]+)\)", first).group(1) == mandacaru.__version__
@@ -240,3 +249,49 @@ def test_postrm_purge_apaga_o_estado_do_pacote():
     assert "#DEBHELPER#" in post
     import subprocess
     assert subprocess.run(["sh", "-n", str(ROOT / "debian" / "mandacaru.postrm")]).returncode == 0
+
+
+def test_usuario_de_rede_consegue_ler_o_config():
+    post = (ROOT / "debian" / "mandacaru.postinst").read_text()
+    assert "chgrp _mandacaru-net /etc/mandacaru/config.toml" in post
+    assert post.index("adduser --system") < post.index("chgrp _mandacaru-net") < post.index("#DEBHELPER#")
+    rules = (ROOT / "debian" / "rules").read_text()
+    assert "chmod 0640 debian/mandacaru/etc/mandacaru/config.toml" in rules
+
+
+def test_unit_do_scan_de_cves():
+    unit = (ROOT / "debian" / "mandacaru.mandacaru-vuln-scan.service").read_text()
+    assert "User=_mandacaru-net" in unit
+    assert "SuccessExitStatus=2" in unit                       # achar CVE alta nao e falha do servico
+    assert "ExecStartPre=+/usr/bin/mandacaru" in unit and "snapshot-running --output " in unit
+    start = next(line for line in unit.splitlines() if line.startswith("ExecStart="))
+    assert "--running-file /var/lib/mandacaru/vuln_cache/running.json" in start
+    assert "--report /var/lib/mandacaru/vuln_cache/" in start
+    assert "--emit-alerts" not in start                       # /var/log/mandacaru e so do root
+
+
+def test_unit_da_telemetria_separa_fila_e_rede():
+    unit = (ROOT / "debian" / "mandacaru.mandacaru-telemetry.service").read_text()
+    assert "User=_mandacaru-net" in unit
+    assert "ExecStartPre=+/usr/bin/mandacaru --config /etc/mandacaru/config.toml telemetry export" in unit
+    assert "ExecStart=/usr/bin/mandacaru --config /etc/mandacaru/config.toml telemetry send" in unit
+    assert "ExecStartPost=+/usr/bin/mandacaru --config /etc/mandacaru/config.toml telemetry import" in unit
+    assert "StateDirectory=mandacaru/telemetry-spool" in unit  # nunca a pasta da fila do root
+    timer = (ROOT / "debian" / "mandacaru.mandacaru-telemetry.timer").read_text()
+    assert "WantedBy=timers.target" in timer
+    rules = (ROOT / "debian" / "rules").read_text()
+    assert "dh_installsystemd --no-enable --no-start --name=mandacaru-telemetry" in rules
+
+
+def test_relatorio_do_scan_e_o_que_o_monitor_publica():
+    from mandacaru.vuln.publish import DEFAULT_REPORT
+    unit = (ROOT / "debian" / "mandacaru.mandacaru-vuln-scan.service").read_text()
+    assert f"--report {DEFAULT_REPORT}" in unit
+
+
+def test_instalacao_nao_roda_o_scan_dentro_do_apt():
+    rules = (ROOT / "debian" / "rules").read_text()
+    assert "dh_installsystemd --no-start --name=mandacaru-vuln-scan" in rules
+    post = (ROOT / "debian" / "mandacaru.postinst").read_text()
+    assert "deb-systemd-invoke start mandacaru-vuln-scan.timer" in post
+    assert "mandacaru-vuln-scan.service" not in post

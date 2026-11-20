@@ -19,6 +19,9 @@ from .events import Severity
 
 DEFAULT_PATH = "/etc/mandacaru/config.toml"
 
+_TELEMETRY_LEVELS = ("off", "iocs_only", "samples_elf")
+_TLP_LEVELS = ("TLP:CLEAR", "TLP:GREEN")
+
 
 class ConfigError(ValueError):
     """Arquivo de configuracao ausente, ilegivel ou invalido."""
@@ -41,6 +44,20 @@ class Config:
     cymru: bool = True
     virustotal_key: str | None = None
     malwarebazaar_key: str | None = None
+    vuln_enabled: bool = True
+    vuln_cache_ttl_hours: int = 24
+    vuln_kev_enrichment: bool = True
+    vuln_correlate_running_procs: bool = True
+    vuln_alert_min_cvss: float = 7.0
+    telemetry_level: str = "off"
+    telemetry_require_approval: bool = True
+    telemetry_tlp: str = "TLP:CLEAR"
+    telemetry_max_sample_mb: int = 15
+    telemetry_hub_enabled: bool = False
+    telemetry_hub_endpoint: str = ""
+    telemetry_misp_enabled: bool = False
+    telemetry_misp_url: str = ""
+    telemetry_misp_verify_tls: bool = True
 
 
 def _str_list(value, key: str) -> tuple[str, ...]:
@@ -67,6 +84,22 @@ def _pos_int(value, key: str) -> int:
     return value
 
 
+def _cvss_threshold(value, key: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not (0.0 <= float(value) <= 10.0):
+        raise ConfigError(f"{key}: esperava um numero entre 0.0 e 10.0")
+    return float(value)
+
+
+def _enum(choices: tuple[str, ...], *, upper: bool = False):
+    def _convert(value, key: str) -> str:
+        raw = _str(value, key)
+        norm = raw.upper() if upper else raw.lower()
+        if norm not in choices:
+            raise ConfigError(f"{key}: valor invalido {value!r}; use um de {', '.join(choices)}")
+        return norm
+    return _convert
+
+
 def _severity(value, key: str) -> Severity:
     name = _str(value, key).upper()
     if name not in Severity.__members__:
@@ -89,6 +122,20 @@ _SCHEMA = {
     "analysis": {"cymru": ("cymru", _bool),
                  "virustotal_key": ("virustotal_key", _str),
                  "malwarebazaar_key": ("malwarebazaar_key", _str)},
+    "vuln": {"enabled": ("vuln_enabled", _bool),
+             "cache_ttl_hours": ("vuln_cache_ttl_hours", _pos_int),
+             "kev_enrichment": ("vuln_kev_enrichment", _bool),
+             "correlate_running_procs": ("vuln_correlate_running_procs", _bool),
+             "alert_min_cvss": ("vuln_alert_min_cvss", _cvss_threshold)},
+    "telemetry": {"level": ("telemetry_level", _enum(_TELEMETRY_LEVELS)),
+                  "require_approval": ("telemetry_require_approval", _bool),
+                  "tlp": ("telemetry_tlp", _enum(_TLP_LEVELS, upper=True)),
+                  "max_sample_mb": ("telemetry_max_sample_mb", _pos_int),
+                  "hub_enabled": ("telemetry_hub_enabled", _bool),
+                  "hub_endpoint": ("telemetry_hub_endpoint", _str),
+                  "misp_enabled": ("telemetry_misp_enabled", _bool),
+                  "misp_url": ("telemetry_misp_url", _str),
+                  "misp_verify_tls": ("telemetry_misp_verify_tls", _bool)},
 }
 
 

@@ -5,6 +5,7 @@ import argparse
 import os
 import queue
 import signal
+import sqlite3
 import sys
 import threading
 from collections.abc import Callable
@@ -23,6 +24,11 @@ from .engine import AlertSink, Engine, console_sink, jsonl_sink
 from .events import Severity
 from .quarantine import DEFAULT_DIR, DEFAULT_TRUST, Quarantine, TrustList
 from .quarantine_cli import add_parser as add_quarantine_parser
+from .telemetry.cli import add_parser as add_telemetry_parser
+from .telemetry.outbox import DEFAULT_OUTBOX_DB, TelemetryOutbox
+from .telemetry.producer import make_enqueuer
+from .vuln.cli import add_parser as add_vuln_parser
+from .vuln.publish import VulnReportPublisher
 
 
 class CliError(Exception):
@@ -158,6 +164,19 @@ def build_quarantine(cfg: Config, root: str = DEFAULT_DIR, log_path: str = DEFAU
     return None
 
 
+def build_telemetry_hook(cfg: Config, quarantine: Quarantine | None = None):
+    """Com telemetria ligada, cada caso isolado entra na fila local (envio so depois de aprovado)."""
+    if cfg.telemetry_level == "off":
+        return None
+    try:
+        outbox = TelemetryOutbox(DEFAULT_OUTBOX_DB)
+    except (OSError, sqlite3.Error) as exc:
+        print(f"[mandacaru] telemetria desligada: fila indisponivel ({exc})", file=sys.stderr)
+        return None
+    print(f"[mandacaru] telemetria: casos isolados vao para {DEFAULT_OUTBOX_DB}", file=sys.stderr)
+    return make_enqueuer(cfg, outbox, quarantine)
+
+
 def cmd_monitor(args) -> int:
     cfg = effective_config(args)
     paths = resolve_watch_paths(list(cfg.watch_paths) or default_watch_paths())
@@ -166,7 +185,8 @@ def cmd_monitor(args) -> int:
     if quarantine is not None:
         print(f"[mandacaru] quarentena: {quarantine.root}", file=sys.stderr)
     engine = Engine(sinks, scanner=StaticScanner(cfg.rule_dirs, cfg.exclude), quarantine=quarantine,
-                    quarantine_min_severity=cfg.quarantine_min_severity, watch_paths=paths)
+                    quarantine_min_severity=cfg.quarantine_min_severity, watch_paths=paths,
+                    on_isolated=build_telemetry_hook(cfg, quarantine))
 
     kind, stop_procs = start_process_collector(engine.q, cfg.ebpf)
     stoppers = [stop_procs]
@@ -177,6 +197,10 @@ def cmd_monitor(args) -> int:
     print(f"[mandacaru] vigiando arquivos em: {', '.join(paths)}", file=sys.stderr)
 
     done = threading.Event()
+    if cfg.vuln_enabled:
+        # achados do scan diario de CVEs (servico mandacaru-vuln-scan) entram nos mesmos sinks
+        publisher = VulnReportPublisher(lambda a: [s(a) for s in sinks])
+        threading.Thread(target=publisher.run, args=(done,), daemon=True).start()
     signal.signal(signal.SIGINT, lambda *_: done.set())
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, lambda *_: done.set())
@@ -207,6 +231,8 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--no-ebpf", action="store_true")
     m.set_defaults(fn=cmd_monitor)
     add_quarantine_parser(sub)
+    add_vuln_parser(sub)
+    add_telemetry_parser(sub)
     return ap
 
 

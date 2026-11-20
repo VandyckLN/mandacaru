@@ -1,6 +1,7 @@
 """Monitor: arquivo detectado em pasta vigiada vai para a quarentena e o alerta sempre chega."""
 import base64
 import hashlib
+import json
 
 import pytest
 
@@ -367,3 +368,66 @@ def test_excesso_de_pendentes_descarta_o_mais_antigo_e_mantem_o_resto(setup, q, 
     f.write_text(HIGH)
     engine.process(fev("file_create", f))
     assert str(f) in engine._writing and "/x/0" not in engine._writing and "/x/5" in engine._writing
+
+
+def test_caso_isolado_vai_para_a_fila_de_telemetria(scanner, q, w, tmp_path):
+    from mandacaru.config import Config
+    from mandacaru.telemetry.outbox import TelemetryOutbox
+    from mandacaru.telemetry.producer import make_enqueuer
+
+    outbox = TelemetryOutbox(tmp_path / "t" / "outbox.db")
+    cfg = Config(telemetry_level="iocs_only", telemetry_tlp="TLP:GREEN")
+    engine = Engine([lambda a: None], scanner=scanner, quarantine=q, watch_paths=[str(w)],
+                    on_isolated=make_enqueuer(cfg, outbox))
+    f = w / "loader.py"
+    f.write_text(HIGH)
+    engine.process(fev("file_create", f))
+
+    [item] = outbox.list_items()
+    assert item.status == "PENDING"                       # require_approval padrao
+    assert item.sha256 == hashlib.sha256(HIGH.encode()).hexdigest()
+    assert item.payload["tlp"] == "TLP:GREEN"
+    assert "Py_Exec_Decoded_Payload" in item.payload["detection"]["yara_rules"]
+    assert str(tmp_path) not in json.dumps(item.payload)  # nada de caminho local no relatorio
+
+
+def test_falha_no_pos_isolamento_nao_derruba_o_motor(scanner, q, w):
+    def explode(case, alerts):
+        raise RuntimeError("fila quebrada")
+
+    got = []
+    engine = Engine([got.append], scanner=scanner, quarantine=q, watch_paths=[str(w)], on_isolated=explode)
+    f = w / "loader.py"
+    f.write_text(HIGH)
+    assert engine.process(fev("file_create", f)) and got[0].quarantine_id
+
+
+def test_tipo_do_arquivo_vem_do_conteudo_isolado(tmp_path, q):
+    from mandacaru.config import Config
+    from mandacaru.telemetry.dispatcher import TelemetryDispatcher
+    from mandacaru.telemetry.outbox import TelemetryOutbox
+    from mandacaru.telemetry.producer import detect_mime, make_enqueuer
+
+    assert detect_mime(b"\x7fELF") == "application/x-elf"
+    assert detect_mime(b"#!/b") == "text/x-shellscript"
+    assert detect_mime(b"impo", "/home/ana/x.py") == "text/x-python"
+    assert detect_mime(b"", "/home/ana/x") == "application/octet-stream"
+
+    w = tmp_path / "w2"
+    w.mkdir()
+    f = w / "dropper"
+    body = b"\x7fELF" + b"\0" * 60
+    f.write_bytes(body)
+    r = q.isolate(str(f), Alert("yara.X", Severity.HIGH, "x", {"path": str(f)}))
+    outbox = TelemetryOutbox(tmp_path / "t" / "outbox.db")
+    cfg = Config(telemetry_level="samples_elf", telemetry_require_approval=False)
+    make_enqueuer(cfg, outbox, q)(r.case, [])
+    [item] = outbox.list_items()
+    assert item.payload["indicator"]["mime"] == "application/x-elf"
+
+    assert TelemetryDispatcher(cfg, outbox).sample_eligible(item) is True
+    assert TelemetryDispatcher(Config(telemetry_level="iocs_only"), outbox).sample_eligible(item) is False
+    small = Config(telemetry_level="samples_elf", telemetry_max_sample_mb=1)
+    big = item.__class__(**{**item.__dict__, "payload": {"indicator": {"mime": "application/x-elf",
+                                                                       "size_bytes": 2 * 1024 * 1024}}})
+    assert TelemetryDispatcher(small, outbox).sample_eligible(big) is False

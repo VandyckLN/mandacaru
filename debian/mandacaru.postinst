@@ -10,5 +10,18 @@ if [ "$1" = configure ] && [ -n "$2" ] && dpkg --compare-versions "$2" lt 0.4.0~
         && [ -e /etc/mandacaru/config.toml ]; then
     chmod 0640 /etc/mandacaru/config.toml
 fi
+# usuario sem privilegios dedicado aos servicos com acesso de rede (scanner CVE e telemetria)
+if [ "$1" = configure ] && ! getent passwd _mandacaru-net >/dev/null; then
+    adduser --system --group --no-create-home --quiet _mandacaru-net
+fi
+# os servicos de rede rodam como _mandacaru-net e precisam ler o config (0640): o grupo dele vira o dono.
+# Roda em todo configure: o dpkg nao guarda o grupo de um conffile modificado
+if [ "$1" = configure ] && [ -e /etc/mandacaru/config.toml ]; then
+    chgrp _mandacaru-net /etc/mandacaru/config.toml
+fi
 #DEBHELPER#
+# so o timer: o primeiro scan roda em segundo plano (OnBootSec ja passou), sem prender o apt
+if [ "$1" = configure ] && [ -d /run/systemd/system ]; then
+    deb-systemd-invoke start mandacaru-vuln-scan.timer >/dev/null || true
+fi
 exit 0

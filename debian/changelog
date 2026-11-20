@@ -1,3 +1,15 @@
+mandacaru (0.5.0) unstable; urgency=medium
+
+  * Auditoria de CVEs: mandacaru vuln scan (OSV.dev + CISA KEV, CVSS 3.1 local,
+    prioridade para pacotes em execucao) e timer diario mandacaru-vuln-scan.
+  * Achados altos novos viram alertas vuln.cve_local no monitor.
+  * Telemetria opt-in com aprovacao manual (mandacaru telemetry) para MISP e
+    Threat Hub; timer mandacaru-telemetry, desligado na instalacao.
+  * Usuario _mandacaru-net para os servicos com rede; config.toml passa a
+    root:_mandacaru-net 0640.
+
+ -- Vandyck Diniz <noreply@users.noreply.github.com>  Thu, 19 Nov 2026 23:30:00 -0300
+
 mandacaru (0.4.0) unstable; urgency=medium
 
   * Quarentena: o servico isola arquivos detectados (HIGH ou mais) em

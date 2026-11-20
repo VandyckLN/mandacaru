@@ -1,0 +1,29 @@
+[Unit]
+Description=Mandacaru - envio seguro da fila de telemetria aprovada (MISP / Threat Hub)
+Documentation=https://github.com/VandyckLN/mandacaru
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=_mandacaru-net
+Group=_mandacaru-net
+EnvironmentFile=-/etc/mandacaru/secrets.env
+# a fila (/var/lib/mandacaru/telemetry) e do root; o envio sem privilegio so ve o spool
+ExecStartPre=+/usr/bin/mandacaru --config /etc/mandacaru/config.toml telemetry export --spool /var/lib/mandacaru/telemetry-spool
+ExecStart=/usr/bin/mandacaru --config /etc/mandacaru/config.toml telemetry send --spool /var/lib/mandacaru/telemetry-spool
+ExecStartPost=+/usr/bin/mandacaru --config /etc/mandacaru/config.toml telemetry import --spool /var/lib/mandacaru/telemetry-spool
+StateDirectory=mandacaru/telemetry-spool
+StateDirectoryMode=0750
+UMask=0027
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+ReadOnlyPaths=/etc/mandacaru
+ReadWritePaths=/var/lib/mandacaru/telemetry-spool

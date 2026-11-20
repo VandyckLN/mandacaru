@@ -29,3 +29,22 @@ cymru = true
 # opcionais; sem elas a analise usa so Team Cymru + CIRCL (gratuitos, sem chave)
 # virustotal_key = ""
 # malwarebazaar_key = ""
+
+[vuln]
+enabled = true
+cache_ttl_hours = 24
+kev_enrichment = true          # cruza CVEs encontradas com o catalogo CISA KEV
+correlate_running_procs = true # eleva para CRITICAL_ACTIVE se o pacote estiver carregado em /proc
+alert_min_cvss = 7.0
+
+[telemetry]
+# Privacidade por padrao (LGPD): desligada ate opt-in explicito
+level = "off"                  # off | iocs_only | samples_elf
+require_approval = true        # exige `mandacaru telemetry approve <id>` antes de enviar
+tlp = "TLP:CLEAR"              # TLP:CLEAR | TLP:GREEN
+max_sample_mb = 15
+hub_enabled = false
+hub_endpoint = ""              # ex.: "https://hub.example.invalid/v1/reports" (troque pelo seu)
+misp_enabled = false
+misp_url = ""                  # chave API lida apenas de MANDACARU_MISP_API_KEY (nunca no TOML)
+misp_verify_tls = true
