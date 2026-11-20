@@ -10,15 +10,20 @@ import fnmatch
 import math
 import os
 import re
+import sys
 from collections import Counter
 from importlib import resources
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import TYPE_CHECKING, Callable, Iterable, Iterator
 
 import yara
 
 from ..config import ConfigError
 from ..events import Alert, Severity
+from ..ml.alerts import shadow_record, verdict_alert
+
+if TYPE_CHECKING:
+    from ..ml import Classifier
 
 MAX_BYTES = 8 * 1024 * 1024          # nao le arquivos gigantes inteiros
 SCRIPT_EXT = {".py", ".ps1", ".psm1", ".js", ".mjs", ".vbs", ".sh", ".bash", ".bat", ".cmd", ".php", ".rb", ".pl"}
@@ -107,9 +112,12 @@ def script_heuristics(path: Path, data: bytes) -> list[Alert]:
 
 
 class StaticScanner:
-    def __init__(self, extra_rule_dirs: Iterable[str] = (), exclude: Iterable[str] = ()):
+    def __init__(self, extra_rule_dirs: Iterable[str] = (), exclude: Iterable[str] = (),
+                 classifier: Classifier | None = None, shadow_sink: Callable[[dict], None] | None = None):
         self.rules = load_rules(extra_rule_dirs)
         self.exclude = tuple(exclude)
+        self.classifier = classifier
+        self.shadow_sink = shadow_sink
 
     def is_excluded(self, path: str | os.PathLike) -> bool:
         """Compara o caminho absoluto com cada glob (`*` atravessa `/`)."""
@@ -132,7 +140,25 @@ class StaticScanner:
                 mitre=[t for t in str(meta.get("mitre", "")).split(",") if t],
             ))
         alerts += script_heuristics(path, data)
+        if self.classifier is not None and len(data) < MAX_BYTES:
+            alerts += self._ml(path, data, alerts)
         return alerts
+
+    def _ml(self, path: Path, data: bytes, rule_alerts: list[Alert]) -> list[Alert]:
+        """O classificador so acrescenta alertas; um erro nele nunca afeta as regras."""
+        try:
+            v = self.classifier.score(data, path=str(path), rule_alerts=rule_alerts)
+            if v is None:
+                return []
+            if self.classifier.mode == "shadow":
+                if v.band != "baixo" and self.shadow_sink is not None:
+                    self.shadow_sink(shadow_record(v, path))
+                return []
+            alert = verdict_alert(v, path)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[mandacaru] aviso: classificador de IA falhou em {path.name}: {exc}", file=sys.stderr)
+            return []
+        return [alert] if alert is not None else []
 
     def scan_file(self, path: str | os.PathLike) -> list[Alert]:
         p = Path(path)
