@@ -1,6 +1,7 @@
 """Monitor: arquivo detectado em pasta vigiada vai para a quarentena e o alerta sempre chega."""
 import base64
 import hashlib
+import json
 
 import pytest
 
@@ -367,3 +368,35 @@ def test_excesso_de_pendentes_descarta_o_mais_antigo_e_mantem_o_resto(setup, q, 
     f.write_text(HIGH)
     engine.process(fev("file_create", f))
     assert str(f) in engine._writing and "/x/0" not in engine._writing and "/x/5" in engine._writing
+
+
+def test_caso_isolado_vai_para_a_fila_de_telemetria(scanner, q, w, tmp_path):
+    from mandacaru.config import Config
+    from mandacaru.telemetry.outbox import TelemetryOutbox
+    from mandacaru.telemetry.producer import make_enqueuer
+
+    outbox = TelemetryOutbox(tmp_path / "t" / "outbox.db")
+    cfg = Config(telemetry_level="iocs_only", telemetry_tlp="TLP:GREEN")
+    engine = Engine([lambda a: None], scanner=scanner, quarantine=q, watch_paths=[str(w)],
+                    on_isolated=make_enqueuer(cfg, outbox))
+    f = w / "loader.py"
+    f.write_text(HIGH)
+    engine.process(fev("file_create", f))
+
+    [item] = outbox.list_items()
+    assert item.status == "PENDING"                       # require_approval padrao
+    assert item.sha256 == hashlib.sha256(HIGH.encode()).hexdigest()
+    assert item.payload["tlp"] == "TLP:GREEN"
+    assert "Py_Exec_Decoded_Payload" in item.payload["detection"]["yara_rules"]
+    assert str(tmp_path) not in json.dumps(item.payload)  # nada de caminho local no relatorio
+
+
+def test_falha_no_pos_isolamento_nao_derruba_o_motor(scanner, q, w):
+    def explode(case, alerts):
+        raise RuntimeError("fila quebrada")
+
+    got = []
+    engine = Engine([got.append], scanner=scanner, quarantine=q, watch_paths=[str(w)], on_isolated=explode)
+    f = w / "loader.py"
+    f.write_text(HIGH)
+    assert engine.process(fev("file_create", f)) and got[0].quarantine_id

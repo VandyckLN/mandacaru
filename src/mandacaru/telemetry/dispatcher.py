@@ -60,7 +60,7 @@ class TelemetryDispatcher:
     def __init__(
         self,
         cfg: Config,
-        outbox: TelemetryOutbox,
+        outbox: TelemetryOutbox | None,
         *,
         http: HttpSender = _default_http,
         timeout_sec: float = 20.0,
@@ -72,19 +72,29 @@ class TelemetryDispatcher:
         self.timeout_sec = timeout_sec
         self._misp_api_key = misp_api_key if misp_api_key is not None else os.environ.get("MANDACARU_MISP_API_KEY", "")
 
-    def flush(self) -> DispatchResult:
-        if self.cfg.telemetry_level == "off":
-            return DispatchResult(sent=0, failed=0, skipped=len(self.outbox.list_items("APPROVED")))
+    def enabled(self) -> bool:
+        return self.cfg.telemetry_level != "off" and bool(self._configured_destinations())
 
-        destinations = self._configured_destinations()
-        if not destinations:
-            return DispatchResult(sent=0, failed=0, skipped=len(self.outbox.list_items("APPROVED")))
+    def sample_eligible(self, item: OutboxItem) -> bool:
+        """Decidido por quem le a amostra (root); o envio sem privilegio so recebe o resultado."""
+        if self.cfg.telemetry_level != "samples_elf" or not item.sample_path:
+            return False
+        max_bytes = self.cfg.telemetry_max_sample_mb * 1024 * 1024
+        try:
+            return is_sample_allowed(Path(item.sample_path), max_size_bytes=max_bytes)
+        except OSError:
+            return False
+
+    def flush(self) -> DispatchResult:
+        approved = self.outbox.list_items("APPROVED")
+        if not self.enabled():
+            return DispatchResult(sent=0, failed=0, skipped=len(approved))
 
         sent = 0
         failed = 0
-        for item in self.outbox.list_items("APPROVED"):
+        for item in approved:
             try:
-                self._send_item(item, destinations)
+                self.send(item.payload, self.sample_eligible(item))
                 self.outbox.mark_sent(item.id)
                 sent += 1
             except Exception as exc:  # noqa: BLE001
@@ -100,20 +110,17 @@ class TelemetryDispatcher:
             dests.append("misp")
         return dests
 
-    def _send_item(self, item: OutboxItem, destinations: list[str]) -> None:
+    def send(self, payload: dict, sample_eligible: bool = False) -> None:
+        """Envia um payload ja sanitizado a todos os destinos ligados; levanta no primeiro que recusar."""
+        destinations = self._configured_destinations()
         if "hub" in destinations:
-            self._send_hub(item)
+            self._send_hub(payload, sample_eligible)
         if "misp" in destinations:
-            self._send_misp(item)
+            self._send_misp(payload)
 
-    def _send_hub(self, item: OutboxItem) -> None:
-        body_obj = dict(item.payload)
-        if self.cfg.telemetry_level == "samples_elf" and item.sample_path:
-            sample = Path(item.sample_path)
-            max_bytes = self.cfg.telemetry_max_sample_mb * 1024 * 1024
-            body_obj["sample_eligible"] = is_sample_allowed(sample, max_size_bytes=max_bytes)
-        else:
-            body_obj["sample_eligible"] = False
+    def _send_hub(self, payload: dict, sample_eligible: bool) -> None:
+        body_obj = dict(payload)
+        body_obj["sample_eligible"] = bool(sample_eligible)
 
         req = urllib.request.Request(
             self.cfg.telemetry_hub_endpoint,
@@ -129,11 +136,11 @@ class TelemetryDispatcher:
         if status not in (200, 201, 202):
             raise RuntimeError(f"Threat Hub recusou envio (status {status})")
 
-    def _send_misp(self, item: OutboxItem) -> None:
+    def _send_misp(self, payload: dict) -> None:
         if not self._misp_api_key:
             raise RuntimeError("MANDACARU_MISP_API_KEY ausente no ambiente")
         url = self.cfg.telemetry_misp_url.rstrip("/") + "/events/add"
-        misp_payload = payload_to_misp_event(item.payload, distribution=0)
+        misp_payload = payload_to_misp_event(payload, distribution=0)
         req = urllib.request.Request(
             url,
             data=json.dumps(misp_payload, ensure_ascii=False).encode("utf-8"),

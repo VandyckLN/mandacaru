@@ -8,7 +8,11 @@ Wants=network-online.target
 Type=oneshot
 User=_mandacaru-net
 Group=_mandacaru-net
-ExecStart=/usr/bin/mandacaru --config /etc/mandacaru/config.toml vuln scan --emit-alerts
+# o /proc dos processos de outros usuarios so e legivel por root: o + tira o snapshot sem rede nem sandbox
+ExecStartPre=+/usr/bin/mandacaru --config /etc/mandacaru/config.toml vuln snapshot-running --output /var/lib/mandacaru/vuln_cache/running.json
+ExecStart=/usr/bin/mandacaru --config /etc/mandacaru/config.toml vuln scan --running-file /var/lib/mandacaru/vuln_cache/running.json --report /var/lib/mandacaru/vuln_cache/last-scan.json
+# saida 2 = achou vulnerabilidade alta: o scan funcionou
+SuccessExitStatus=2
 StateDirectory=mandacaru/vuln_cache
 StateDirectoryMode=0750
 UMask=0027

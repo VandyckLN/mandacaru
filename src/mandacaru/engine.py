@@ -15,7 +15,7 @@ from .detectors.static import StaticScanner
 from .events import Alert, Event, Severity
 
 if TYPE_CHECKING:
-    from .quarantine import IsolateResult, Quarantine
+    from .quarantine import Case, IsolateResult, Quarantine
 
 AlertSink = Callable[[Alert], None]
 
@@ -54,7 +54,8 @@ class Engine:
     def __init__(self, sinks: list[AlertSink], scanner: StaticScanner | None = None,
                  behavior: BehaviorEngine | None = None, scan_new_files: bool = True,
                  quarantine: Quarantine | None = None, quarantine_min_severity: Severity = Severity.HIGH,
-                 watch_paths: Sequence[str] = ()):
+                 watch_paths: Sequence[str] = (),
+                 on_isolated: Callable[[Case, list[Alert]], None] | None = None):
         self.q: queue.Queue[Event] = queue.Queue(maxsize=50_000)
         self.sinks = sinks
         self.scanner = scanner or StaticScanner()
@@ -69,6 +70,7 @@ class Engine:
         self.quarantine = quarantine
         self.quarantine_min_severity = quarantine_min_severity
         self.watch_paths = [_resolve(p) for p in watch_paths]
+        self.on_isolated = on_isolated  # ex.: telemetria enfileira o caso recem-aberto
 
     def emit(self, alert: Alert, force: bool = False) -> bool:
         """Entrega o alerta aos sinks. `force` pula o dedup (caso novo de quarentena sempre chega)."""
@@ -97,6 +99,12 @@ class Engine:
             p = a.evidence.get("path")
             if p and p not in results and a.severity >= self.quarantine_min_severity and self._watched(p):
                 results[p] = self.quarantine.isolate(p, a)
+                r = results[p]
+                if r.status == "isolado" and r.case is not None and self.on_isolated is not None:
+                    try:
+                        self.on_isolated(r.case, [x for x in found if x.evidence.get("path") == p])
+                    except Exception as exc:  # noqa: BLE001 - extra opcional nunca derruba o motor
+                        print(f"[mandacaru] aviso: pos-isolamento falhou: {exc}", file=sys.stderr)
         # todos os alertas do arquivo herdam o resultado, inclusive os abaixo do min_severity
         for a in found:
             r = results.get(a.evidence.get("path"))

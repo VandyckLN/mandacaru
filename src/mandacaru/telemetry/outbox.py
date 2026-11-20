@@ -29,7 +29,8 @@ class TelemetryOutbox:
 
     def __init__(self, db_path: Path = DEFAULT_OUTBOX_DB) -> None:
         self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # so root (o monitor) escreve aqui; o envio sem privilegio recebe uma copia via spool
+        self.db_path.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
         self._init_db()
 
     def _init_db(self) -> None:
@@ -122,14 +123,26 @@ class TelemetryOutbox:
             )
             return cur.rowcount > 0
 
+    def _transition(self, item_id: int, status: str, allowed_from: tuple[str, ...], error: str = "") -> bool:
+        """Muda o estado so se o item estiver num dos `allowed_from` (False: inexistente ou estado errado)."""
+        now = datetime.now(timezone.utc).isoformat()
+        marks = ",".join("?" * len(allowed_from))
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(
+                f"UPDATE outbox SET status = ?, updated_at = ?, last_error = ? WHERE id = ? AND status IN ({marks})",
+                (status, now, error, item_id, *allowed_from),
+            )
+            return cur.rowcount > 0
+
     def approve(self, item_id: int) -> bool:
-        return self.set_status(item_id, "APPROVED")
+        """PENDING ou FAILED (nova tentativa) -> APPROVED. Enviado ou rejeitado nao volta para a fila."""
+        return self._transition(item_id, "APPROVED", ("PENDING", "FAILED"))
 
     def reject(self, item_id: int) -> bool:
-        return self.set_status(item_id, "REJECTED")
+        return self._transition(item_id, "REJECTED", ("PENDING", "APPROVED", "FAILED"))
 
     def mark_sent(self, item_id: int) -> bool:
-        return self.set_status(item_id, "SENT", error="")
+        return self._transition(item_id, "SENT", ("APPROVED",))
 
     def mark_failed(self, item_id: int, error: str) -> bool:
-        return self.set_status(item_id, "FAILED", error=error)
+        return self._transition(item_id, "FAILED", ("APPROVED",), error=error[:500])

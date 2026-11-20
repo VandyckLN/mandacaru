@@ -1,12 +1,21 @@
 """Inventario de pacotes instalados (Debian/Ubuntu) e correlacao com processos ativos."""
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..fsutil import atomic_write_text, read_text_nofollow
+
 _SOURCE_RE = re.compile(r"^([^\s(]+)(?:\s+\(([^)]+)\))?")
+# derivados (Mint, Pop!_OS, elementary...) trazem a versao propria em VERSION_ID; o OSV quer a do Ubuntu base
+_UBUNTU_CODENAMES = {
+    "bionic": "18.04", "focal": "20.04", "jammy": "22.04", "noble": "24.04",
+    "oracular": "24.10", "plucky": "25.04", "questing": "25.10", "resolute": "26.04",
+}
+_DEBIAN_CODENAMES = {"buster": "10", "bullseye": "11", "bookworm": "12", "trixie": "13", "forky": "14"}
 
 
 @dataclass(frozen=True)
@@ -15,6 +24,8 @@ class InstalledPackage:
     source_name: str
     version: str
     ecosystem: str
+    # todos os pacotes binarios da mesma fonte/versao (libssl3 e openssl vem de "openssl")
+    binaries: tuple[str, ...] = ()
 
 
 def detect_ecosystem(os_release_path: Path = Path("/etc/os-release")) -> str:
@@ -30,12 +41,17 @@ def detect_ecosystem(os_release_path: Path = Path("/etc/os-release")) -> str:
 
     distro_id = data.get("ID", "").lower()
     version_id = data.get("VERSION_ID", "").strip()
+    like = data.get("ID_LIKE", "").lower().split()
 
     if distro_id == "debian":
         return f"Debian:{version_id}" if version_id else "Debian"
-    if distro_id in {"ubuntu", "pop", "linuxmint", "elementary"}:
+    if distro_id == "ubuntu":
         return f"Ubuntu:{version_id}" if version_id else "Ubuntu"
-    return "Debian"
+    if "ubuntu" in like or data.get("UBUNTU_CODENAME"):
+        base = data.get("UBUNTU_VERSION_ID") or _UBUNTU_CODENAMES.get(data.get("UBUNTU_CODENAME", "").lower())
+        return f"Ubuntu:{base}" if base else "Ubuntu"
+    base = _DEBIAN_CODENAMES.get(data.get("DEBIAN_CODENAME", "").lower())
+    return f"Debian:{base}" if base else "Debian"
 
 
 def parse_dpkg_status(
@@ -45,8 +61,7 @@ def parse_dpkg_status(
     """Extrai pacotes instalados de /var/lib/dpkg/status deduplicados por (source_name, version)."""
     eco = ecosystem or detect_ecosystem()
     raw = status_path.read_text(encoding="utf-8", errors="ignore")
-    seen: set[tuple[str, str]] = set()
-    packages: list[InstalledPackage] = []
+    groups: dict[tuple[str, str], list[str]] = {}
 
     for stanza in raw.strip().split("\n\n"):
         fields: dict[str, str] = {}
@@ -74,21 +89,19 @@ def parse_dpkg_status(
                 if match.group(2):
                     source_version = match.group(2)
 
-        dedup_key = (source_name, source_version)
-        if dedup_key in seen:
-            continue
-        seen.add(dedup_key)
+        groups.setdefault((source_name, source_version), []).append(binary)
 
-        packages.append(
-            InstalledPackage(
-                binary_name=binary,
-                source_name=source_name,
-                version=source_version,
-                ecosystem=eco,
-            )
-        )
+    return [
+        InstalledPackage(binary_name=bins[0], source_name=src, version=ver, ecosystem=eco, binaries=tuple(bins))
+        for (src, ver), bins in groups.items()
+    ]
 
-    return packages
+
+def _canon(path: str) -> str:
+    """Caminho com /usr unificado: o .list do dpkg pode dizer /lib/... e o /proc/<pid>/maps /usr/lib/..."""
+    if path.startswith(("/bin/", "/sbin/", "/lib")):
+        return "/usr" + path
+    return path
 
 
 def _read_dpkg_file_index(dpkg_info_dir: Path = Path("/var/lib/dpkg/info")) -> dict[str, str]:
@@ -103,8 +116,8 @@ def _read_dpkg_file_index(dpkg_info_dir: Path = Path("/var/lib/dpkg/info")) -> d
         except OSError:
             continue
         for line in content.splitlines():
-            if line.startswith(("/usr/", "/bin/", "/sbin/", "/lib/")):
-                index[line] = pkg_name
+            if line.startswith(("/usr/", "/bin/", "/sbin/", "/lib")):
+                index[_canon(line)] = pkg_name
     return index
 
 
@@ -117,7 +130,7 @@ def find_running_packages(
     if not proc_root.is_dir():
         return set()
 
-    bin_to_source = {p.binary_name: p.source_name for p in packages}
+    bin_to_source = {b: p.source_name for p in packages for b in (p.binaries or (p.binary_name,))}
     file_index = _read_dpkg_file_index(dpkg_info_dir)
     if not file_index:
         return set()
@@ -128,7 +141,7 @@ def find_running_packages(
             continue
         try:
             exe = os.readlink(entry / "exe")
-            active_paths.add(exe.removesuffix(" (deleted)"))
+            active_paths.add(_canon(exe.removesuffix(" (deleted)")))
         except OSError:
             pass
         maps_file = entry / "maps"
@@ -136,7 +149,7 @@ def find_running_packages(
             for line in maps_file.read_text(encoding="utf-8", errors="ignore").splitlines():
                 parts = line.split(None, 5)
                 if len(parts) == 6 and parts[5].startswith("/"):
-                    active_paths.add(parts[5].removesuffix(" (deleted)"))
+                    active_paths.add(_canon(parts[5].removesuffix(" (deleted)")))
         except OSError:
             pass
 
@@ -146,3 +159,17 @@ def find_running_packages(
         if bin_pkg and bin_pkg in bin_to_source:
             running_sources.add(bin_to_source[bin_pkg])
     return running_sources
+
+
+def write_running_snapshot(running: set[str], out_path: Path) -> None:
+    """Grava os pacotes-fonte em execucao. Roda como root (o /proc dos outros usuarios) numa pasta do
+    _mandacaru-net, por isso a escrita atomica que nao segue symlink."""
+    atomic_write_text(out_path, json.dumps({"v": 1, "running": sorted(running)}), mode=0o644)
+
+
+def load_running_snapshot(path: Path) -> set[str]:
+    data = json.loads(read_text_nofollow(path))
+    names = data.get("running") if isinstance(data, dict) else None
+    if not isinstance(names, list):
+        raise ValueError(f"{path}: formato invalido")
+    return {n for n in names if isinstance(n, str)}

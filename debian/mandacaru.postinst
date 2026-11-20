@@ -14,5 +14,10 @@ fi
 if [ "$1" = configure ] && ! getent passwd _mandacaru-net >/dev/null; then
     adduser --system --group --no-create-home --quiet _mandacaru-net
 fi
+# os servicos de rede rodam como _mandacaru-net e precisam ler o config (0640): o grupo dele vira o dono.
+# Roda em todo configure: o dpkg nao guarda o grupo de um conffile modificado
+if [ "$1" = configure ] && [ -e /etc/mandacaru/config.toml ]; then
+    chgrp _mandacaru-net /etc/mandacaru/config.toml
+fi
 #DEBHELPER#
 exit 0

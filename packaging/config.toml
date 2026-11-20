@@ -32,7 +32,6 @@ cymru = true
 
 [vuln]
 enabled = true
-mode = "online_batch"          # online_batch | offline_dump
 cache_ttl_hours = 24
 kev_enrichment = true          # cruza CVEs encontradas com o catalogo CISA KEV
 correlate_running_procs = true # eleva para CRITICAL_ACTIVE se o pacote estiver carregado em /proc

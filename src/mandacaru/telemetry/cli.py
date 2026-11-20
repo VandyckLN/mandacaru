@@ -8,6 +8,7 @@ from pathlib import Path
 from ..config import load_config
 from .dispatcher import TelemetryDispatcher
 from .outbox import DEFAULT_OUTBOX_DB, TelemetryOutbox
+from .spool import export_batch, import_results, send_batch
 
 
 def add_parser(sub) -> None:
@@ -21,12 +22,32 @@ def add_parser(sub) -> None:
     ts.add_parser("approve", help="aprova um item pendente para envio").add_argument("id", type=int)
     ts.add_parser("reject", help="rejeita e descarta um item pendente").add_argument("id", type=int)
     ts.add_parser("flush", help="envia itens aprovados para os destinos configurados")
+    for name, help_ in (("export", "root: copia os itens aprovados para o spool"),
+                        ("send", "usuario de rede: envia o lote do spool e grava os resultados"),
+                        ("import", "root: aplica os resultados do spool na fila")):
+        ts.add_parser(name, help=help_).add_argument("--spool", required=True, help="pasta de troca")
     p.set_defaults(fn=cmd_telemetry)
 
 
 def cmd_telemetry(args) -> int:
     cfg = load_config(args.config)
+    if args.tcmd == "send":
+        # roda como _mandacaru-net: nao abre a fila (dono root), so o spool
+        res = send_batch(TelemetryDispatcher(cfg, None), Path(args.spool))
+        print(f"enviados={res.sent} falhas={res.failed} ignorados={res.skipped}")
+        return 0  # falhas viajam no results.json; saida != 0 impediria o import (ExecStartPost)
+
     outbox = TelemetryOutbox(Path(args.outbox_db))
+
+    if args.tcmd == "export":
+        n = export_batch(TelemetryDispatcher(cfg, outbox), Path(args.spool))
+        print(f"{n} item(ns) exportado(s) para envio.", file=sys.stderr)
+        return 0
+
+    if args.tcmd == "import":
+        sent, failed = import_results(outbox, Path(args.spool))
+        print(f"enviados={sent} falhas={failed}")
+        return 0
 
     if args.tcmd == "status":
         items = outbox.list_items()
@@ -63,14 +84,14 @@ def cmd_telemetry(args) -> int:
 
     if args.tcmd == "approve":
         if not outbox.approve(args.id):
-            print(f"mandacaru: item #{args.id} nao encontrado", file=sys.stderr)
+            print(f"mandacaru: item #{args.id} nao encontrado ou nao esta PENDING/FAILED", file=sys.stderr)
             return 3
         print(f"Item #{args.id} aprovado para envio.")
         return 0
 
     if args.tcmd == "reject":
         if not outbox.reject(args.id):
-            print(f"mandacaru: item #{args.id} nao encontrado", file=sys.stderr)
+            print(f"mandacaru: item #{args.id} nao encontrado ou ja enviado/rejeitado", file=sys.stderr)
             return 3
         print(f"Item #{args.id} rejeitado.")
         return 0

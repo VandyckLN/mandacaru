@@ -240,3 +240,35 @@ def test_postrm_purge_apaga_o_estado_do_pacote():
     assert "#DEBHELPER#" in post
     import subprocess
     assert subprocess.run(["sh", "-n", str(ROOT / "debian" / "mandacaru.postrm")]).returncode == 0
+
+
+def test_usuario_de_rede_consegue_ler_o_config():
+    post = (ROOT / "debian" / "mandacaru.postinst").read_text()
+    assert "chgrp _mandacaru-net /etc/mandacaru/config.toml" in post
+    assert post.index("adduser --system") < post.index("chgrp _mandacaru-net") < post.index("#DEBHELPER#")
+    rules = (ROOT / "debian" / "rules").read_text()
+    assert "chmod 0640 debian/mandacaru/etc/mandacaru/config.toml" in rules
+
+
+def test_unit_do_scan_de_cves():
+    unit = (ROOT / "debian" / "mandacaru.mandacaru-vuln-scan.service").read_text()
+    assert "User=_mandacaru-net" in unit
+    assert "SuccessExitStatus=2" in unit                       # achar CVE alta nao e falha do servico
+    assert "ExecStartPre=+/usr/bin/mandacaru" in unit and "snapshot-running --output " in unit
+    start = next(line for line in unit.splitlines() if line.startswith("ExecStart="))
+    assert "--running-file /var/lib/mandacaru/vuln_cache/running.json" in start
+    assert "--report /var/lib/mandacaru/vuln_cache/" in start
+    assert "--emit-alerts" not in start                       # /var/log/mandacaru e so do root
+
+
+def test_unit_da_telemetria_separa_fila_e_rede():
+    unit = (ROOT / "debian" / "mandacaru.mandacaru-telemetry.service").read_text()
+    assert "User=_mandacaru-net" in unit
+    assert "ExecStartPre=+/usr/bin/mandacaru --config /etc/mandacaru/config.toml telemetry export" in unit
+    assert "ExecStart=/usr/bin/mandacaru --config /etc/mandacaru/config.toml telemetry send" in unit
+    assert "ExecStartPost=+/usr/bin/mandacaru --config /etc/mandacaru/config.toml telemetry import" in unit
+    assert "StateDirectory=mandacaru/telemetry-spool" in unit  # nunca a pasta da fila do root
+    timer = (ROOT / "debian" / "mandacaru.mandacaru-telemetry.timer").read_text()
+    assert "WantedBy=timers.target" in timer
+    rules = (ROOT / "debian" / "rules").read_text()
+    assert "dh_installsystemd --no-enable --no-start --name=mandacaru-telemetry" in rules

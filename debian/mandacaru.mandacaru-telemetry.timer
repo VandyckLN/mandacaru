@@ -1,0 +1,13 @@
+[Unit]
+Description=Mandacaru - envio periodico da telemetria aprovada (opt-in)
+Documentation=https://github.com/VandyckLN/mandacaru
+
+# desligado na instalacao: `systemctl enable --now mandacaru-telemetry.timer` depois de ligar [telemetry]
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=1h
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

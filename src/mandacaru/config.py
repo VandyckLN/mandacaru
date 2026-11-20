@@ -19,7 +19,6 @@ from .events import Severity
 
 DEFAULT_PATH = "/etc/mandacaru/config.toml"
 
-_VULN_MODES = ("online_batch", "offline_dump")
 _TELEMETRY_LEVELS = ("off", "iocs_only", "samples_elf")
 _TLP_LEVELS = ("TLP:CLEAR", "TLP:GREEN")
 
@@ -46,7 +45,6 @@ class Config:
     virustotal_key: str | None = None
     malwarebazaar_key: str | None = None
     vuln_enabled: bool = True
-    vuln_mode: str = "online_batch"
     vuln_cache_ttl_hours: int = 24
     vuln_kev_enrichment: bool = True
     vuln_correlate_running_procs: bool = True
@@ -109,6 +107,7 @@ def _severity(value, key: str) -> Severity:
     return Severity[name]
 
 
+# secao -> chave -> (campo do Config, conversor)
 _SCHEMA = {
     "monitor": {"paths": ("watch_paths", _str_list), "ebpf": ("ebpf", _bool)},
     "alerts": {"min_severity": ("min_severity", _severity), "json": ("json_path", _str),
@@ -124,7 +123,6 @@ _SCHEMA = {
                  "virustotal_key": ("virustotal_key", _str),
                  "malwarebazaar_key": ("malwarebazaar_key", _str)},
     "vuln": {"enabled": ("vuln_enabled", _bool),
-             "mode": ("vuln_mode", _enum(_VULN_MODES)),
              "cache_ttl_hours": ("vuln_cache_ttl_hours", _pos_int),
              "kev_enrichment": ("vuln_kev_enrichment", _bool),
              "correlate_running_procs": ("vuln_correlate_running_procs", _bool),

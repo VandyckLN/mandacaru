@@ -4,7 +4,9 @@ from __future__ import annotations
 import json
 import sqlite3
 import urllib.error
+import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable
@@ -36,11 +38,14 @@ class OsvClient:
         ttl_hours: int = 24,
         timeout_sec: float = 15.0,
         http: HttpFetcher = _default_http,
+        workers: int = 8,
     ) -> None:
         self.cache_db = Path(cache_db)
         self.ttl = timedelta(hours=ttl_hours)
         self.timeout_sec = timeout_sec
         self.http = http
+        self.workers = max(1, workers)
+        self.errors: list[str] = []  # detalhes que nao vieram nem da rede nem do cache antigo
         self.cache_db.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -136,13 +141,36 @@ class OsvClient:
         return findings
 
     def _fetch_details(self, vuln_ids: Iterable[str]) -> dict[str, dict]:
+        """Cache fresco primeiro; o resto vem da rede em paralelo. Uma falha cai no cache vencido e,
+        sem ele, fica de fora e vai para `errors`: um detalhe faltando nao descarta o scan inteiro."""
+        self.errors = []
         resolved: dict[str, dict] = {}
+        missing: list[str] = []
         for vid in sorted(set(vuln_ids)):
             cached = self._get_cached(vid)
             if cached is not None:
                 resolved[vid] = cached
-                continue
-            detail = self._http_json(OSV_VULN_URL.format(vuln_id=vid))
-            self._set_cached(vid, detail)
-            resolved[vid] = detail
+            else:
+                missing.append(vid)
+        if not missing:
+            return resolved
+
+        with ThreadPoolExecutor(max_workers=min(self.workers, len(missing))) as ex:
+            futures = {
+                ex.submit(self._http_json, OSV_VULN_URL.format(vuln_id=urllib.parse.quote(vid, safe=""))): vid
+                for vid in missing
+            }
+            for fut in as_completed(futures):
+                vid = futures[fut]
+                try:
+                    detail = fut.result()
+                except Exception as exc:  # noqa: BLE001 - rede/HTTP/JSON: tenta o cache vencido
+                    stale = self._get_cached(vid, allow_stale=True)
+                    if stale is not None:
+                        resolved[vid] = stale
+                    else:
+                        self.errors.append(f"{vid}: {exc}")
+                    continue
+                self._set_cached(vid, detail)
+                resolved[vid] = detail
         return resolved

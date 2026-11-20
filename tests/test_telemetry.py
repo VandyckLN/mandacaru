@@ -126,12 +126,11 @@ def test_dispatcher_nao_envia_quando_off_e_envia_para_misp_quando_aprovado(tmp_p
 def test_config_valida_secoes_vuln_e_telemetry(tmp_path: Path) -> None:
     p = tmp_path / "c.toml"
     p.write_text(
-        '[vuln]\nmode = "offline_dump"\nalert_min_cvss = 8.5\n'
+        '[vuln]\nalert_min_cvss = 8.5\n'
         '[telemetry]\nlevel = "iocs_only"\ntlp = "tlp:green"\nmisp_enabled = true\n',
         encoding="utf-8",
     )
     cfg = load_config(p)
-    assert cfg.vuln_mode == "offline_dump"
     assert cfg.vuln_alert_min_cvss == 8.5
     assert cfg.telemetry_level == "iocs_only"
     assert cfg.telemetry_tlp == "TLP:GREEN"
@@ -144,3 +143,69 @@ def test_config_valida_secoes_vuln_e_telemetry(tmp_path: Path) -> None:
         raise AssertionError("esperava ConfigError")
     except ConfigError as exc:
         assert "telemetry.level" in str(exc)
+
+
+def _payload(ch: str) -> dict:
+    return sanitize_event_payload(sha256=ch * 64, mime="application/x-elf", size_bytes=10,
+                                  yara_rules=["R"], mitre_attack=[])
+
+
+def test_aprovar_so_vale_para_pendente_ou_falho(tmp_path: Path) -> None:
+    outbox = TelemetryOutbox(tmp_path / "outbox.db")
+    sent, _ = outbox.enqueue(_payload("1"), require_approval=False)
+    assert outbox.mark_sent(sent)
+    assert outbox.approve(sent) is False and outbox.get(sent).status == "SENT"   # nao reenvia
+    assert outbox.reject(sent) is False
+
+    rej, _ = outbox.enqueue(_payload("2"))
+    assert outbox.reject(rej)
+    assert outbox.approve(rej) is False and outbox.get(rej).status == "REJECTED"  # opt-out e definitivo
+
+    fail, _ = outbox.enqueue(_payload("3"), require_approval=False)
+    assert outbox.mark_failed(fail, "timeout")
+    assert outbox.approve(fail) is True                                          # nova tentativa
+    assert outbox.mark_sent(9999) is False
+
+
+def test_spool_exporta_envia_e_importa(tmp_path: Path) -> None:
+    from mandacaru.telemetry.spool import BATCH, RESULTS, export_batch, import_results, send_batch
+
+    outbox = TelemetryOutbox(tmp_path / "fila" / "outbox.db")
+    ok_id, _ = outbox.enqueue(_payload("a"), require_approval=False)
+    bad_id, _ = outbox.enqueue(_payload("b"), require_approval=False)
+    pend_id, _ = outbox.enqueue(_payload("c"))                                   # nao aprovado: fica
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    cfg = Config(telemetry_level="iocs_only", telemetry_hub_enabled=True,
+                 telemetry_hub_endpoint="https://hub.exemplo.org/v1/reports")
+
+    assert export_batch(TelemetryDispatcher(cfg, outbox), spool) == 2
+
+    def fake_http(req, timeout, verify_tls):
+        sha = json.loads(req.data)["indicator"]["sha256"]
+        return (202, b"") if sha.startswith("a") else (500, b"")
+
+    res = send_batch(TelemetryDispatcher(cfg, None, http=fake_http), spool)  # sem acesso a fila
+    assert (res.sent, res.failed) == (1, 1)
+
+    # results.json forjado tentando marcar o item pendente como enviado
+    data = json.loads((spool / RESULTS).read_text())
+    data["results"].append({"id": pend_id, "ok": True})
+    (spool / RESULTS).write_text(json.dumps(data))
+
+    assert import_results(outbox, spool) == (1, 1)
+    assert outbox.get(ok_id).status == "SENT"
+    assert outbox.get(bad_id).status == "FAILED" and "500" in outbox.get(bad_id).last_error
+    assert outbox.get(pend_id).status == "PENDING"
+    assert not (spool / RESULTS).exists() and not (spool / BATCH).exists()
+
+
+def test_spool_desligado_nao_exporta_nada(tmp_path: Path) -> None:
+    from mandacaru.telemetry.spool import export_batch
+
+    outbox = TelemetryOutbox(tmp_path / "outbox.db")
+    outbox.enqueue(_payload("d"), require_approval=False)
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    assert export_batch(TelemetryDispatcher(Config(), outbox), spool) == 0
+    assert json.loads((spool / "batch.json").read_text())["items"] == []

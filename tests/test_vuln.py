@@ -4,9 +4,19 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from mandacaru.config import ConfigError, load_config
 from mandacaru.events import Severity
-from mandacaru.vuln.cli import run_vuln_scan
-from mandacaru.vuln.inventory import detect_ecosystem, parse_dpkg_status
+from mandacaru.vuln.cli import cmd_vuln, run_vuln_scan
+from mandacaru.vuln.inventory import (
+    InstalledPackage,
+    detect_ecosystem,
+    find_running_packages,
+    load_running_snapshot,
+    parse_dpkg_status,
+    write_running_snapshot,
+)
 from mandacaru.vuln.kev_cache import KevCache
 from mandacaru.vuln.osv_client import OsvClient
 from mandacaru.vuln.scorer import classify_finding, finding_to_alert, parse_cvss31_base_score
@@ -39,6 +49,7 @@ def test_parse_dpkg_resolve_source_e_deduplica(tmp_path: Path) -> None:
     )
     pkgs = parse_dpkg_status(status_path=status, ecosystem="Debian:12")
     assert len(pkgs) == 1
+    assert pkgs[0].binaries == ("libssl3", "openssl")
     assert pkgs[0].source_name == "openssl"
     assert pkgs[0].version == "3.0.11-1~deb12u2"
     assert pkgs[0].ecosystem == "Debian:12"
@@ -134,3 +145,125 @@ def test_kev_cache_e_fluxo_completo_run_vuln_scan(tmp_path: Path) -> None:
     assert len(findings) == 1
     assert findings[0].in_kev is True
     assert findings[0].priority == "HIGH"
+
+
+def test_derivados_do_ubuntu_usam_a_versao_base(tmp_path: Path) -> None:
+    mint = tmp_path / "mint"
+    mint.write_text('ID=linuxmint\nID_LIKE="ubuntu debian"\nVERSION_ID="21.3"\nUBUNTU_CODENAME=jammy\n')
+    assert detect_ecosystem(mint) == "Ubuntu:22.04"
+
+    pop = tmp_path / "pop"
+    pop.write_text('ID=pop\nID_LIKE="ubuntu debian"\nVERSION_ID="24.04"\nUBUNTU_CODENAME=noble\n')
+    assert detect_ecosystem(pop) == "Ubuntu:24.04"
+
+    kali = tmp_path / "kali"
+    kali.write_text('ID=kali\nID_LIKE=debian\nVERSION_ID="2026.1"\n')
+    assert detect_ecosystem(kali) == "Debian"
+
+    lmde = tmp_path / "lmde"
+    lmde.write_text('ID=linuxmint\nID_LIKE=debian\nVERSION_ID="6"\nDEBIAN_CODENAME=bookworm\n')
+    assert detect_ecosystem(lmde) == "Debian:12"
+
+
+def _fake_proc(tmp_path: Path, mapped: list[str]) -> Path:
+    proc = tmp_path / "proc"
+    pid = proc / "123"
+    pid.mkdir(parents=True)
+    (pid / "maps").write_text("".join(f"7f00-7f01 r-xp 00000000 08:01 1 {m}\n" for m in mapped))
+    (proc / "self").mkdir()
+    return proc
+
+
+def test_biblioteca_carregada_marca_a_fonte_inteira_como_ativa(tmp_path: Path) -> None:
+    # libssl3 e openssl vem da mesma fonte; so a lib esta carregada
+    pkg = InstalledPackage("openssl", "openssl", "3.0.11", "Debian:12", binaries=("openssl", "libssl3"))
+    info = tmp_path / "info"
+    info.mkdir()
+    (info / "openssl.list").write_text("/usr/bin/openssl\n")
+    (info / "libssl3:amd64.list").write_text("/lib/x86_64-linux-gnu/libssl.so.3\n")  # .list pre-usrmerge
+    proc = _fake_proc(tmp_path, ["/usr/lib/x86_64-linux-gnu/libssl.so.3"])
+    assert find_running_packages([pkg], proc_root=proc, dpkg_info_dir=info) == {"openssl"}
+
+
+def test_snapshot_de_processos_ida_e_volta_sem_seguir_symlink(tmp_path: Path) -> None:
+    alvo = tmp_path / "nao-tocar"
+    alvo.write_text("original")
+    snap = tmp_path / "running.json"
+    snap.symlink_to(alvo)                 # plantado pelo usuario sem privilegio
+    write_running_snapshot({"openssl", "curl"}, snap)
+    assert alvo.read_text() == "original"
+    assert not snap.is_symlink()
+    assert load_running_snapshot(snap) == {"curl", "openssl"}
+
+
+def test_scan_usa_snapshot_em_vez_do_proc(tmp_path: Path) -> None:
+    def fake_osv_http(req, timeout):
+        if req.full_url.endswith("/v1/querybatch"):
+            return 200, json.dumps({"results": [{"vulns": [{"id": "OSV-1"}]}]}).encode()
+        return 200, json.dumps({"id": "OSV-1", "severity": [
+            {"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}]}).encode()
+
+    status = tmp_path / "status"
+    status.write_text("Package: curl\nStatus: install ok installed\nVersion: 7.88.1\n")
+    found = run_vuln_scan(status_path=status, ecosystem="Debian:12", cache_dir=tmp_path, kev_enabled=False,
+                          osv_client=OsvClient(cache_db=tmp_path / "osv.db", http=fake_osv_http),
+                          running={"curl"})
+    assert found[0].priority == "CRITICAL_ACTIVE"
+
+
+def test_falha_num_detalhe_usa_cache_vencido_e_nao_aborta(tmp_path: Path) -> None:
+    def make_http(fail: set[str]):
+        def fake(req, timeout):
+            if req.full_url.endswith("/v1/querybatch"):
+                return 200, json.dumps({"results": [{"vulns": [{"id": "A-1"}, {"id": "B-2"}, {"id": "C-3"}]}]}).encode()
+            vid = req.full_url.rsplit("/", 1)[1]
+            if vid in fail:
+                return 503, b""
+            return 200, json.dumps({"id": vid}).encode()
+        return fake
+
+    status = tmp_path / "status"
+    status.write_text("Package: curl\nStatus: install ok installed\nVersion: 7.88.1\n")
+    pkgs = parse_dpkg_status(status, ecosystem="Debian:12")
+    OsvClient(cache_db=tmp_path / "osv.db", http=make_http(set())).query_packages(pkgs[:1])  # aquece o cache
+
+    client = OsvClient(cache_db=tmp_path / "osv.db", ttl_hours=0, http=make_http({"A-1", "B-2"}))
+    import sqlite3
+    with sqlite3.connect(tmp_path / "osv.db") as conn:
+        conn.execute("DELETE FROM vuln_cache WHERE vuln_id = 'B-2'")   # B-2 sem cache nenhum
+    got = client.query_packages(pkgs)[pkgs[0]]
+    assert sorted(v["id"] for v in got) == ["A-1", "C-3"]          # A-1 do cache vencido, C-3 da rede
+    assert len(client.errors) == 1 and client.errors[0].startswith("B-2")
+
+
+def _vuln_args(tmp_path: Path, **kw):
+    import argparse
+    base = dict(config=str(tmp_path / "c.toml"), vcmd="scan", status_file=str(tmp_path / "status"),
+                ecosystem="Debian:12", cache_dir=str(tmp_path), as_json=False, emit_alerts=False,
+                no_kev=True, no_running=True, running_file=None, alerts_file=None, report=None)
+    base.update(kw)
+    return argparse.Namespace(**base)
+
+
+def test_cli_report_grava_resultado_e_snapshot_honra_config(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "c.toml").write_text("[vuln]\ncorrelate_running_procs = false\n")
+    (tmp_path / "status").write_text("Package: curl\nStatus: install ok installed\nVersion: 7.88.1\n")
+
+    def fake_osv_http(req, timeout):
+        return 200, json.dumps({"results": [{}]}).encode()
+
+    monkeypatch.setattr("mandacaru.vuln.cli.OsvClient", lambda **kw: OsvClient(**kw, http=fake_osv_http))
+    report = tmp_path / "last-scan.json"
+    assert cmd_vuln(_vuln_args(tmp_path, report=str(report))) == 0
+    assert json.loads(report.read_text()) == []
+
+    out = tmp_path / "running.json"
+    assert cmd_vuln(_vuln_args(tmp_path, vcmd="snapshot-running", output=str(out))) == 0
+    assert load_running_snapshot(out) == set()   # correlacao desligada: nao le o /proc
+
+
+def test_config_recusa_vuln_mode_removido(tmp_path: Path) -> None:
+    p = tmp_path / "c.toml"
+    p.write_text('[vuln]\nmode = "offline_dump"\n')
+    with pytest.raises(ConfigError):
+        load_config(p)
