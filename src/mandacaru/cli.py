@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import queue
 import signal
@@ -12,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
-from . import __version__
+from . import __version__, ml
 from .alert_socket import socket_sink
 from .collectors import ebpf
 from .collectors.fsmon import FileMonitor
@@ -21,7 +22,7 @@ from .config import DEFAULT_PATH, Config, ConfigError, load_config
 from .decisions import DEFAULT_LOG, DecisionLog
 from .detectors.static import StaticScanner
 from .engine import AlertSink, Engine, console_sink, jsonl_sink
-from .events import Severity
+from .events import Alert, Severity
 from .quarantine import DEFAULT_DIR, DEFAULT_TRUST, Quarantine, TrustList
 from .quarantine_cli import add_parser as add_quarantine_parser
 from .telemetry.cli import add_parser as add_telemetry_parser
@@ -95,9 +96,54 @@ def open_alert_log(path: str):
         raise CliError(f"nao foi possivel gravar alertas em {path}: {exc.strerror or exc}") from exc
 
 
+def effective_ml_mode(cfg: Config, *, for_scan: bool = False) -> str:
+    """No scan avulso: shadow vira off (o registro e do monitor) e isolate vira alert (scan nunca isola)."""
+    if not cfg.ml_enabled:
+        return "off"
+    if for_scan:
+        return {"shadow": "off", "isolate": "alert"}.get(cfg.ml_mode, cfg.ml_mode)
+    return cfg.ml_mode
+
+
+def build_classifier(cfg: Config, *, for_scan: bool) -> tuple[ml.Classifier | None, Alert | None]:
+    """(classificador, alerta ml.modelo_invalido). Sem modelo ou modo off, o resto segue igual."""
+    mode = effective_ml_mode(cfg, for_scan=for_scan)
+    if mode == "off":
+        return None, None
+    result = ml.load_default(mode)
+    if result.classifier is not None:
+        return result.classifier, None
+    if for_scan:
+        return None, None
+    if result.invalid:
+        return None, Alert("ml.modelo_invalido", Severity.HIGH, f"Classificador de IA desligado: {result.problem}",
+                           {"problema": result.problem})
+    print(f"[mandacaru] classificador de IA desligado: {result.problem}", file=sys.stderr)
+    return None, None
+
+
+def shadow_writer(path: str) -> Callable[[dict], None] | None:
+    """Grava o modo sombra em JSON Lines (0640). Sem permissao, avisa e o modo sombra so nao registra."""
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_CLOEXEC, 0o640)
+        os.fchmod(fd, 0o640)
+    except OSError as exc:
+        print(f"[mandacaru] aviso: modo sombra sem registro ({path}: {exc.strerror or exc})", file=sys.stderr)
+        return None
+    fh = os.fdopen(fd, "a", encoding="utf-8")
+    lock = threading.Lock()
+
+    def _write(record: dict) -> None:
+        with lock:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+            fh.flush()
+    return _write
+
+
 def cmd_scan(args) -> int:
     cfg = effective_config(args)
-    scanner = StaticScanner(cfg.rule_dirs, cfg.exclude)
+    clf, _ = build_classifier(cfg, for_scan=True)
+    scanner = StaticScanner(cfg.rule_dirs, cfg.exclude, classifier=clf)
     sink = console_sink(cfg.min_severity)
     out = jsonl_sink(open_alert_log(cfg.json_path)) if cfg.json_path else None
     worst = Severity.INFO
@@ -184,7 +230,16 @@ def cmd_monitor(args) -> int:
     quarantine = build_quarantine(cfg)
     if quarantine is not None:
         print(f"[mandacaru] quarentena: {quarantine.root}", file=sys.stderr)
-    engine = Engine(sinks, scanner=StaticScanner(cfg.rule_dirs, cfg.exclude), quarantine=quarantine,
+    clf, ml_alert = build_classifier(cfg, for_scan=False)
+    if clf is not None:
+        ids = ", ".join(m.model_id for m in clf.models.values())
+        print(f"[mandacaru] classificador de IA: modo {clf.mode}, modelos: {ids}", file=sys.stderr)
+    shadow = shadow_writer(ml.SHADOW_LOG) if clf is not None and clf.mode == "shadow" else None
+    if ml_alert is not None:
+        for s in sinks:
+            s(ml_alert)
+    engine = Engine(sinks, scanner=StaticScanner(cfg.rule_dirs, cfg.exclude, classifier=clf, shadow_sink=shadow),
+                    quarantine=quarantine,
                     quarantine_min_severity=cfg.quarantine_min_severity, watch_paths=paths,
                     on_isolated=build_telemetry_hook(cfg, quarantine))
 

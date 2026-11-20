@@ -194,7 +194,8 @@ def test_logrotate_guarda_decisoes_um_ano():
     texto = (ROOT / "debian" / "mandacaru.logrotate").read_text()
     assert "*.jsonl" not in texto                         # senao o decisions.jsonl rodaria duas vezes
     blocos = dict(re.findall(r"(\S+)\s*\{([^}]*)\}", texto))
-    assert set(blocos) == {"/var/log/mandacaru/alerts.jsonl", "/var/log/mandacaru/decisions.jsonl"}
+    assert set(blocos) == {"/var/log/mandacaru/alerts.jsonl", "/var/log/mandacaru/decisions.jsonl",
+                           "/var/log/mandacaru/ml-shadow.jsonl"}
     assert "rotate 8" in blocos["/var/log/mandacaru/alerts.jsonl"]
     dec = blocos["/var/log/mandacaru/decisions.jsonl"].split()
     for diretiva in ("weekly", "compress"):
@@ -286,3 +287,13 @@ def test_instalacao_nao_roda_o_scan_dentro_do_apt():
     post = (ROOT / "debian" / "mandacaru.postinst").read_text()
     assert "deb-systemd-invoke start mandacaru-vuln-scan.timer" in post
     assert "mandacaru-vuln-scan.service" not in post
+
+
+def test_config_traz_ml_com_modo_comentado():
+    txt = (ROOT / "packaging" / "config.toml").read_text()
+    assert "[ml]" in txt and '# mode = "shadow"' in txt
+    assert load_config(ROOT / "packaging" / "config.toml").ml_mode == "shadow"
+
+
+def test_logrotate_do_modo_sombra():
+    assert "/var/log/mandacaru/ml-shadow.jsonl" in (ROOT / "debian" / "mandacaru.logrotate").read_text()
