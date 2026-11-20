@@ -23,6 +23,7 @@ from .decisions import DEFAULT_LOG, DecisionLog
 from .detectors.static import StaticScanner
 from .engine import AlertSink, Engine, console_sink, jsonl_sink
 from .events import Alert, Severity
+from .ml.cli import add_parser as add_ml_parser
 from .quarantine import DEFAULT_DIR, DEFAULT_TRUST, Quarantine, TrustList
 from .quarantine_cli import add_parser as add_quarantine_parser
 from .telemetry.cli import add_parser as add_telemetry_parser
@@ -288,6 +289,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_quarantine_parser(sub)
     add_vuln_parser(sub)
     add_telemetry_parser(sub)
+    add_ml_parser(sub)
     return ap
 
 
