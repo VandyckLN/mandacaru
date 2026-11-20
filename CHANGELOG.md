@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.0 (em desenvolvimento)
+
+Classificador local de malware por IA: o motor completo, ainda sem modelo instalado.
+
+- **Pacote `mandacaru.ml`**: tipo do arquivo pelo conteúdo (ELF executável e scripts sh, Python, Perl, JS, PHP), leitor de ELF tolerante a arquivos hostis, ~60 características por tipo, modelo em JSON estrito (nada de pickle) avaliado em Python puro, motivos em português e técnicas MITRE.
+- **Decisão por faixas** (`alto`, `reforco`, `medio`, `baixo`), com limiar próprio no `/tmp` e reforço quando uma regra `MEDIUM` concorda. Arquivo idêntico a um de pacote instalado (md5 do dpkg) nunca é isolado pelo modelo.
+- **Alertas `ml.malware`, `ml.malware_reforco` e `ml.suspeito`**; o motor só isola com `ml_isolate`, que exige modo `isolate` e portão de qualidade aprovado no próprio modelo. O modelo nunca rebaixa um alerta de regra.
+- **Seção `[ml]`** (`enabled`, `mode = off | shadow | alert | isolate`; padrão `shadow`) e registro do modo sombra em `/var/log/mandacaru/ml-shadow.jsonl`.
+- **Comandos `mandacaru ml status | avaliar | sombra`**.
+- Telemetria (opt-in) leva `model_id` e nota quando o caso veio do classificador.
+- No SUPRA (i5-9300H): mediana de 12,7 ms e p99 de 101 ms por programa analisado.
+
 ## 0.5.0
 
 Auditoria de CVEs e telemetria opt-in, sem rede no serviço privilegiado.

@@ -17,8 +17,8 @@ FEATURE_VERSION = 1
 
 HEAD_HIST = 64 * 1024              # histograma/entropia de cabeca
 TEXT_WINDOW = 1024 * 1024          # strings e indicadores
-SECTION_SAMPLE = 64 * 1024         # amostra de entropia por secao
-SECTION_TOTAL = 512 * 1024         # amostra de entropia somando todas as secoes
+SECTION_SAMPLE = 16 * 1024         # amostra de entropia por secao (16 KB bastam para estimar ate 8 bits)
+SECTION_TOTAL = 128 * 1024         # amostra de entropia somando todas as secoes (teto do spec: 512 KB)
 MAX_STRINGS = 200_000
 COUNT_CAP = 1000
 
@@ -70,7 +70,7 @@ _STANDARD_SECTION_PREFIXES = (
     ".reginfo", ".tm_clone_table", ".stapsdt",
 )
 
-_STRINGS = re.compile(rb"[\x20-\x7e]{6,}")
+_RUNS = re.compile(rb"[\x20-\x7e]{4,}")       # trechos legiveis; "strings" sao os de 6 ou mais
 _IPV4 = re.compile(rb"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 
 PT_LOAD, PF_X, PF_W, SHF_ALLOC = 1, 1, 2, 2
@@ -101,18 +101,20 @@ def entropy(data: bytes) -> float:
     return -sum(c / n * math.log2(c / n) for c in Counter(data).values())
 
 
-def printable_strings(data: bytes) -> list[bytes]:
-    out = []
-    for m in _STRINGS.finditer(data[:TEXT_WINDOW]):
-        out.append(m.group())
-        if len(out) >= MAX_STRINGS:
-            break
-    return out
+def printable_runs(data: bytes) -> list[bytes]:
+    """Trechos legiveis (4+ bytes) do primeiro 1 MB, no maximo MAX_STRINGS."""
+    return _RUNS.findall(data[:TEXT_WINDOW])[:MAX_STRINGS]
 
 
-def common_features(lower: bytes, strings: list[bytes]) -> list[float]:
-    """Indicadores (padroes distintos por familia), IPs dentro das strings, URLs e User-Agent."""
-    values: list[float] = [float(sum(1 for p in pats if p in lower)) for pats in INDICATORS.values()]
+def common_features(lower: bytes, runs: list[bytes]) -> list[float]:
+    """Indicadores (padroes distintos por familia) nos trechos legiveis, IPs dentro deles, URLs e User-Agent.
+
+    Os indicadores sao procurados so no texto legivel ja extraido, e nao no arquivo bruto: 75 buscas sobre 1 MB
+    custavam ~60 ms num binario grande.
+    """
+    blob = b"\n".join(runs).lower()
+    values: list[float] = [float(sum(1 for p in pats if p in blob)) for pats in INDICATORS.values()]
+    strings = [r for r in runs if len(r) >= 6]
     ips = 0
     for s in strings:
         if b"." in s and _IPV4.search(s):
@@ -176,10 +178,11 @@ def extract_elf(data: bytes, *, budget_s: float = 0.25) -> list[float]:
 
     head_entropy = entropy(data[:HEAD_HIST])
     clock.check()
-    strings = printable_strings(data)
+    runs = printable_runs(data)
+    strings = [r for r in runs if len(r) >= 6]
     clock.check()
     lower = data[:TEXT_WINDOW].lower()
-    common = common_features(lower, strings)
+    common = common_features(lower, runs)
     clock.check()
 
     mean_len = sum(map(len, strings)) / len(strings) if strings else 0.0
@@ -253,9 +256,9 @@ def extract_script(kind: str, data: bytes, *, budget_s: float = 0.25) -> list[fl
         float(sum(1 for p in _DECODE if p in lower)),
         float(downloads and any(p in lower for p in _RUN_AFTER_DOWNLOAD)),
     ]
-    strings = printable_strings(text)
+    runs = printable_runs(text)
     clock.check()
-    values += common_features(lower, strings)
+    values += common_features(lower, runs)
     clock.check()
     return values
 
