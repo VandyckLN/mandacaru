@@ -16,7 +16,8 @@ from .kind import SCRIPT_KINDS
 FEATURE_VERSION = 1
 
 HEAD_HIST = 64 * 1024              # histograma/entropia de cabeca
-TEXT_WINDOW = 1024 * 1024          # strings e indicadores
+TEXT_WINDOW = 1024 * 1024          # strings e indicadores (ELF)
+SCRIPT_WINDOW = 256 * 1024         # regex e indicadores de scripts: o texto inteiro sao "trechos legiveis"
 SECTION_SAMPLE = 16 * 1024         # amostra de entropia por secao (16 KB bastam para estimar ate 8 bits)
 SECTION_TOTAL = 128 * 1024         # amostra de entropia somando todas as secoes (teto do spec: 512 KB)
 MAX_STRINGS = 200_000
@@ -227,14 +228,19 @@ def extract_script(kind: str, data: bytes, *, budget_s: float = 0.25) -> list[fl
     if kind not in SCRIPT_KINDS:
         raise ValueError(f"tipo de script desconhecido: {kind!r}")
     clock = _Clock(budget_s)
-    text = data[:TEXT_WINDOW]
+    # num script, cada byte e "texto": as regex e os 75 indicadores sobre 1 MB custavam ~350 ms (JS minificado),
+    # e um enchimento de 1 MB bastaria para o arquivo nunca receber nota. Por isso olham so a janela inicial;
+    # tamanho e linhas continuam medidos sobre o primeiro 1 MB, com bytes.count (C).
+    text = data[:SCRIPT_WINDOW]
     lower = text.lower()
     head = data[:HEAD_HIST]
-    lines = text.split(b"\n")
+    n_lines = data[:TEXT_WINDOW].count(b"\n") + 1
+    longest_line = max(map(len, text.split(b"\n")))
     non_alnum = sum(1 for b in head if b not in _ALNUM_OR_SPACE) / len(head) if head else 0.0
     clock.check()
 
     b64_n, b64_max = _count_capped(_B64, text, _B64_CAP)
+    clock.check()
     hex_n, _ = _count_capped(_HEX, text, _B64_CAP)
     esc_n, _ = _count_capped(_HEX_ESCAPE, text, _ESCAPE_CAP)
     clock.check()
@@ -243,8 +249,8 @@ def extract_script(kind: str, data: bytes, *, budget_s: float = 0.25) -> list[fl
     values = [float(kind == k) for k in SCRIPT_KINDS] + [
         float(data.startswith(b"#!")),
         log2p(len(data)),
-        log2p(len(lines)),
-        log2p(max(map(len, lines))),
+        log2p(n_lines),
+        log2p(longest_line),
         entropy(head),
         non_alnum,
         float(b64_n),

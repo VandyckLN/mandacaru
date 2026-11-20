@@ -120,17 +120,25 @@ def parse_elf(data: bytes) -> ElfInfo | None:
         if s_type != SHT_NOBITS and 0 <= s_off <= n:
             end = max(end, min(n, s_off + s_size))
 
+    # o teto vale para simbolos EXAMINADOS (spec 8), somando todas as secoes DYNSYM; secoes repetidas (mesmo
+    # deslocamento e tamanho) sao lidas uma vez so, senao N secoes sobrepostas multiplicariam o custo
     imports: list[str] = []
+    examined = 0
+    seen: set[tuple[int, int]] = set()
     sym_fmt = struct.Struct(e + ("IBBHQQ" if is64 else "IIIBBH"))
     for row in raw_secs:
-        if row[1] != SHT_DYNSYM or len(imports) >= MAX_IMPORTS:
+        if row[1] != SHT_DYNSYM or examined >= MAX_IMPORTS:
             continue
         s_off, s_size, link, entsize = row[4], row[5], row[6], row[9]
+        if (s_off, s_size) in seen:
+            continue
+        seen.add((s_off, s_size))
         entsize = entsize if entsize >= sym_fmt.size else sym_fmt.size
         if not 0 <= link < len(raw_secs) or raw_secs[link][1] != SHT_STRTAB:
             continue
         str_off = raw_secs[link][4]
-        count = min(s_size // entsize, MAX_IMPORTS - len(imports), max(0, (n - s_off) // entsize))
+        count = min(s_size // entsize, MAX_IMPORTS - examined, max(0, (n - s_off) // entsize))
+        examined += count
         for k in range(1, count):                       # o simbolo 0 e sempre nulo
             sym = _unpack(sym_fmt, data, s_off + k * entsize)
             if sym is None:

@@ -1,4 +1,8 @@
-"""Frase curta (sem acento, padrao do projeto) e tecnica MITRE de cada caracteristica."""
+"""Frase curta (sem acento, padrao do projeto) e tecnica MITRE de cada caracteristica.
+
+Uma arvore pode empurrar a nota para cima pelo lado "contrario" de um corte (ex.: tem_symtab=1). A frase so
+vale quando o valor do arquivo confirma o que ela afirma: CONDITIONS diz qual e o teste; sem entrada, vale > 0.
+"""
 from __future__ import annotations
 
 REASONS: dict[str, tuple[str, str | None]] = {
@@ -68,3 +72,33 @@ REASONS: dict[str, tuple[str, str | None]] = {
     "urls": ("enderecos de internet", None),
     "user_agent": ("se passa por navegador", None),
 }
+
+
+# caracteristica -> (operador, limite). Padrao: (">", 0) — a frase afirma presenca.
+CONDITIONS: dict[str, tuple[str, float]] = {
+    "tem_symtab": ("==", 0.0),                 # "sem simbolos"
+    "entropia_cabeca": (">=", 7.0),
+    "entropia_max_secao": (">=", 7.0),
+    "entropia": (">=", 6.0),
+    "nao_alnum": (">=", 0.3),
+    "maior_linha_log2": (">=", 10.0),          # 1 KB ou mais numa linha
+    "n_importacoes": ("any", 0.0),
+    "n_secoes": ("any", 0.0),
+    "n_segmentos": ("any", 0.0),
+    "tamanho_log2": ("any", 0.0),
+    "linhas_log2": ("any", 0.0),
+    "n_strings_log2": ("any", 0.0),
+    "strings_tam_medio": ("any", 0.0),
+}
+
+
+def applies(feature: str, value: float) -> bool:
+    """A frase de `feature` e verdadeira para este valor?"""
+    op, limit = CONDITIONS.get(feature, (">", 0.0))
+    if op == "any":
+        return True
+    if op == "==":
+        return value == limit
+    if op == ">=":
+        return value >= limit
+    return value > limit

@@ -124,20 +124,34 @@ def build_classifier(cfg: Config, *, for_scan: bool) -> tuple[ml.Classifier | No
 
 
 def shadow_writer(path: str) -> Callable[[dict], None] | None:
-    """Grava o modo sombra em JSON Lines (0640). Sem permissao, avisa e o modo sombra so nao registra."""
-    try:
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_CLOEXEC, 0o640)
+    """Grava o modo sombra em JSON Lines (0640).
+
+    Abre o arquivo a cada gravacao (O_APPEND, sem seguir symlink), como o DecisionLog: o logrotate renomeia e
+    compacta o arquivo toda semana, e um descritor mantido aberto passaria a gravar num arquivo ja apagado.
+    Sem permissao, avisa uma vez e o modo sombra so nao registra.
+    """
+    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW
+    lock = threading.Lock()
+
+    def _open() -> int:
+        fd = os.open(path, flags, 0o640)
         os.fchmod(fd, 0o640)
+        return fd
+
+    try:
+        os.close(_open())
     except OSError as exc:
         print(f"[mandacaru] aviso: modo sombra sem registro ({path}: {exc.strerror or exc})", file=sys.stderr)
         return None
-    fh = os.fdopen(fd, "a", encoding="utf-8")
-    lock = threading.Lock()
 
     def _write(record: dict) -> None:
+        line = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8", "backslashreplace")
         with lock:
-            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
-            fh.flush()
+            fd = _open()
+            try:
+                os.write(fd, line)
+            finally:
+                os.close(fd)
     return _write
 
 

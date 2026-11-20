@@ -17,7 +17,8 @@ _MARKERS: tuple[tuple[str, re.Pattern[bytes]], ...] = (
     ("python", re.compile(rb"(?m)^(?:import [\w.]+|from [\w.]+ import |def \w+\()")),
     ("js", re.compile(rb"require\(|module\.exports|=> \{")),
     ("perl", re.compile(rb"use strict;|my \$")),
-    ("sh", re.compile(rb"(?m)^\s*(?:fi|then|esac)\b|\$\(")),
+    # [ \t]* e nao \s*: \s* tambem consome \n e a busca vira quadratica (4 KB de linhas vazias = ~340 ms)
+    ("sh", re.compile(rb"(?m)^[ \t]*(?:fi|then|esac)\b|\$\(")),
 )
 
 
@@ -61,7 +62,7 @@ def detect_kind(data: bytes) -> str | None:
     if data.startswith(b"#!"):
         return _from_shebang(data[:256].split(b"\n", 1)[0])
     head = data[:_HEAD]
-    if not _is_text(head):
+    if len(head) < 4 or not _is_text(head):
         return None
     for kind, marker in _MARKERS:
         if marker.search(head):

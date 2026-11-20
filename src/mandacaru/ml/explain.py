@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from .model import Model
-from .reasons import REASONS
+from .reasons import REASONS, applies
 
 
 @dataclass(frozen=True)
@@ -19,7 +19,9 @@ class Reason:
 
 def top_reasons(model: Model, x: Sequence[float], k: int = 5) -> list[Reason]:
     contrib = model.contributions(x)
-    order = sorted((i for i, c in enumerate(contrib) if c > 0), key=lambda i: -contrib[i])[:k]
+    names = model.feature_names
+    order = sorted((i for i, c in enumerate(contrib) if c > 0 and applies(names[i], float(x[i]))),
+                   key=lambda i: -contrib[i])[:k]
     out = []
     for i in order:
         name = model.feature_names[i]
