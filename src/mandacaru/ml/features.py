@@ -11,6 +11,7 @@ import time
 from collections import Counter
 
 from .elf import SHT_NOBITS, parse_elf
+from .kind import SCRIPT_KINDS
 
 FEATURE_VERSION = 1
 
@@ -186,3 +187,82 @@ def extract_elf(data: bytes, *, budget_s: float = 0.25) -> list[float]:
               log2p(len(strings)), mean_len, *common]
     assert len(values) == len(ELF_FEATURE_NAMES)
     return values
+
+
+SCRIPT_FEATURE_NAMES: tuple[str, ...] = tuple(f"tipo_{k}" for k in SCRIPT_KINDS) + (
+    "tem_shebang", "tamanho_log2", "linhas_log2", "maior_linha_log2", "entropia", "nao_alnum", "blocos_b64",
+    "maior_b64_log2", "blocos_hex", "escapes_hex", "char_codes", "exec_dinamico", "decodificacao", "baixa_e_executa",
+) + COMMON_NAMES
+
+FAMILY: dict[str, str] = {"elf": "elf", **{k: "script" for k in SCRIPT_KINDS}}
+
+_B64 = re.compile(rb"[A-Za-z0-9+/]{40,}={0,2}")
+_HEX = re.compile(rb"[0-9a-fA-F]{64,}")
+_HEX_ESCAPE = re.compile(rb"\\x[0-9a-fA-F]{2}")
+_ALNUM_OR_SPACE = frozenset(b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 \t\r\n")
+_EXEC_DYNAMIC = (b"eval(", b"exec(", b"compile(", b"new function(", b"source <(", b"create_function(", b"assert($")
+_DECODE = (b"base64 -d", b"base64 --decode", b"b64decode", b"atob(", b"fromcharcode", b"zlib", b"marshal.loads",
+           b"gzinflate", b"str_rot13", b"bytes.fromhex", b"xxd -r")
+_RUN_AFTER_DOWNLOAD = (b"| sh", b"| bash", b"|sh", b"|bash", b"chmod +x", b"exec(", b"eval(", b"os.system",
+                       b"subprocess", b"child_process", b"popen")
+_B64_CAP = 10_000
+_ESCAPE_CAP = 100_000
+
+
+def _count_capped(pattern: re.Pattern[bytes], text: bytes, cap: int) -> tuple[int, int]:
+    """(quantidade, maior tamanho), parando no teto."""
+    n = longest = 0
+    for m in pattern.finditer(text):
+        n += 1
+        longest = max(longest, m.end() - m.start())
+        if n >= cap:
+            break
+    return n, longest
+
+
+def extract_script(kind: str, data: bytes, *, budget_s: float = 0.25) -> list[float]:
+    if kind not in SCRIPT_KINDS:
+        raise ValueError(f"tipo de script desconhecido: {kind!r}")
+    clock = _Clock(budget_s)
+    text = data[:TEXT_WINDOW]
+    lower = text.lower()
+    head = data[:HEAD_HIST]
+    lines = text.split(b"\n")
+    non_alnum = sum(1 for b in head if b not in _ALNUM_OR_SPACE) / len(head) if head else 0.0
+    clock.check()
+
+    b64_n, b64_max = _count_capped(_B64, text, _B64_CAP)
+    hex_n, _ = _count_capped(_HEX, text, _B64_CAP)
+    esc_n, _ = _count_capped(_HEX_ESCAPE, text, _ESCAPE_CAP)
+    clock.check()
+
+    downloads = any(p in lower for p in INDICATORS["download"])
+    values = [float(kind == k) for k in SCRIPT_KINDS] + [
+        float(data.startswith(b"#!")),
+        log2p(len(data)),
+        log2p(len(lines)),
+        log2p(max(map(len, lines))),
+        entropy(head),
+        non_alnum,
+        float(b64_n),
+        log2p(b64_max),
+        float(hex_n),
+        float(esc_n),
+        float(min(COUNT_CAP, lower.count(b"fromcharcode") + lower.count(b"chr("))),
+        float(sum(1 for p in _EXEC_DYNAMIC if p in lower)),
+        float(sum(1 for p in _DECODE if p in lower)),
+        float(downloads and any(p in lower for p in _RUN_AFTER_DOWNLOAD)),
+    ]
+    strings = printable_strings(text)
+    clock.check()
+    values += common_features(lower, strings)
+    clock.check()
+    return values
+
+
+def extract(kind: str, data: bytes, *, budget_s: float = 0.25) -> list[float]:
+    if kind == "elf":
+        return extract_elf(data, budget_s=budget_s)
+    if kind in SCRIPT_KINDS:
+        return extract_script(kind, data, budget_s=budget_s)
+    raise ValueError(f"tipo nao suportado: {kind!r}")
