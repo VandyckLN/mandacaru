@@ -103,15 +103,25 @@ def probabilidade(tr: Treinado, X: np.ndarray) -> np.ndarray:
     return np.interp(_sigmoide(tr.clf.decision_function(X)), tr.calib_x, tr.calib_y)
 
 
-def limiar_fp(probs_legitimos: np.ndarray, meta: float) -> float:
-    """Menor limiar com no maximo floor(meta * N) legitimos >= limiar. Sem legitimos: 1.0 (conservador)."""
+def limiar_fp(probs_legitimos: np.ndarray, meta: float, probs_maliciosos: np.ndarray | None = None) -> float:
+    """Limiar com no maximo floor(meta * N) legitimos >= limiar, com margem maxima.
+
+    Em vez de colar no k-esimo maior legitimo (nextafter), fica no meio do caminho ate o menor malicioso acima
+    dele: o FP e a deteccao na calibracao nao mudam, e o teste ganha folga (colado, qualquer legitimo novo um
+    pouco acima, pela interpolacao da calibracao, virava falso positivo). Sem legitimos: 1.0 (conservador).
+    """
     p = np.sort(np.asarray(probs_legitimos, dtype=float))[::-1]
     if len(p) == 0:
         return 1.0
     k = math.floor(meta * len(p))
     if k >= len(p):
         return 0.0
-    return float(min(1.0, np.nextafter(p[k], np.inf)))
+    base = float(p[k])
+    acima = np.asarray(probs_maliciosos if probs_maliciosos is not None else [], dtype=float)
+    acima = acima[acima > base]
+    if len(acima):
+        return float(min(1.0, (base + float(acima.min())) / 2))
+    return float(min(1.0, np.nextafter(base, np.inf)))
 
 
 def treinar(t: Tabela, *, semente: int = 7, max_iter: int = 300) -> Treinado:
@@ -135,12 +145,13 @@ def treinar(t: Tabela, *, semente: int = 7, max_iter: int = 300) -> Treinado:
     media = t.regra_media[limiar]
     for kind in sorted(set(t.kind)):
         leg = (kinds == kind) & (y == 0)
-        alto = limiar_fp(probs[leg], FP_ALTO)
-        alto_tmp = max(alto, limiar_fp(probs[leg & np.isin(cat, CATEGORIAS_TMP)], FP_ALTO_TMP)) \
-            if (leg & np.isin(cat, CATEGORIAS_TMP)).any() else alto
-        medio = min(limiar_fp(probs[leg], FP_MEDIO), alto)
+        mal = probs[(kinds == kind) & (y == 1)]
+        alto = limiar_fp(probs[leg], FP_ALTO, mal)
+        leg_tmp = leg & np.isin(cat, CATEGORIAS_TMP)
+        alto_tmp = max(alto, limiar_fp(probs[leg_tmp], FP_ALTO_TMP, mal)) if leg_tmp.any() else alto
+        medio = min(limiar_fp(probs[leg], FP_MEDIO, mal), alto)
         leg_regra = leg & media
-        reforco = limiar_fp(probs[leg_regra], FP_ALTO) if leg_regra.sum() >= MIN_REFORCO else alto
+        reforco = limiar_fp(probs[leg_regra], FP_ALTO, mal) if leg_regra.sum() >= MIN_REFORCO else alto
         reforco = min(max(reforco, medio), alto)
         tr.limiares[kind] = {"alto": alto, "alto_tmp": alto_tmp, "reforco": reforco, "medio": medio}
     return tr

@@ -36,7 +36,7 @@ def sintetico_script(n=2000, semente=0, *, regra_media=True, separavel=False, ca
     dim = len(SCRIPT_FEATURE_NAMES)
     y = (rnd.random(n) < 0.5).astype(np.int8)
     X = rnd.normal(0, 1, (n, dim)).astype(np.float32)
-    gap = 6.0 if separavel else 2.5
+    gap = 12.0 if separavel else 2.5           # 12 desvios: separavel de verdade, sem cauda cruzada
     X[:, 0] += y * gap
     X[:, 1] += y * (gap / 2)
     sha = tuple(hashlib.sha256(f"{semente}:{i}".encode()).hexdigest() for i in range(n))
