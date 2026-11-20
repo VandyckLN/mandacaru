@@ -9,6 +9,8 @@ override_dh_installsystemd:
 	dh_installsystemd
 	# timer de limpeza: habilitado e iniciado na instalacao; o servico oneshot (sem [Install]) so roda por ele
 	dh_installsystemd --name=mandacaru-quarantine-clean
+	dh_installsystemd --name=mandacaru-vuln-scan
+	dh_installsystemd --no-enable --no-start --name=mandacaru-telemetry
 
 execute_after_dh_fixperms:
 	# o config pode trazer chaves de API (VirusTotal, MalwareBazaar)

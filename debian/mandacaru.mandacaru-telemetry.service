@@ -1,0 +1,26 @@
+[Unit]
+Description=Mandacaru - envio seguro da fila de telemetria aprovada (MISP / Threat Hub)
+Documentation=https://github.com/VandyckLN/mandacaru
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=_mandacaru-net
+Group=_mandacaru-net
+EnvironmentFile=-/etc/mandacaru/secrets.env
+ExecStart=/usr/bin/mandacaru --config /etc/mandacaru/config.toml telemetry flush
+StateDirectory=mandacaru/telemetry
+StateDirectoryMode=0750
+UMask=0027
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+ReadOnlyPaths=/etc/mandacaru
+ReadWritePaths=/var/lib/mandacaru/telemetry

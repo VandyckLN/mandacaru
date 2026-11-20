@@ -1,0 +1,12 @@
+[Unit]
+Description=Mandacaru - auditoria diaria de CVEs locais
+Documentation=https://github.com/VandyckLN/mandacaru
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=24h
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

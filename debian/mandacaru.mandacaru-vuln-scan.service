@@ -1,0 +1,25 @@
+[Unit]
+Description=Mandacaru - auditoria local de vulnerabilidades (CVE/CVSS via OSV.dev)
+Documentation=https://github.com/VandyckLN/mandacaru
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=_mandacaru-net
+Group=_mandacaru-net
+ExecStart=/usr/bin/mandacaru --config /etc/mandacaru/config.toml vuln scan --emit-alerts
+StateDirectory=mandacaru/vuln_cache
+StateDirectoryMode=0750
+UMask=0027
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+ReadOnlyPaths=/var/lib/dpkg/status /var/lib/dpkg/info /etc/os-release /etc/mandacaru
+ReadWritePaths=/var/lib/mandacaru/vuln_cache

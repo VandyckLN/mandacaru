@@ -23,6 +23,8 @@ from .engine import AlertSink, Engine, console_sink, jsonl_sink
 from .events import Severity
 from .quarantine import DEFAULT_DIR, DEFAULT_TRUST, Quarantine, TrustList
 from .quarantine_cli import add_parser as add_quarantine_parser
+from .telemetry.cli import add_parser as add_telemetry_parser
+from .vuln.cli import add_parser as add_vuln_parser
 
 
 class CliError(Exception):
@@ -207,6 +209,8 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--no-ebpf", action="store_true")
     m.set_defaults(fn=cmd_monitor)
     add_quarantine_parser(sub)
+    add_vuln_parser(sub)
+    add_telemetry_parser(sub)
     return ap
 
 

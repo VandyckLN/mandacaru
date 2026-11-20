@@ -10,5 +10,9 @@ if [ "$1" = configure ] && [ -n "$2" ] && dpkg --compare-versions "$2" lt 0.4.0~
         && [ -e /etc/mandacaru/config.toml ]; then
     chmod 0640 /etc/mandacaru/config.toml
 fi
+# usuario sem privilegios dedicado aos servicos com acesso de rede (scanner CVE e telemetria)
+if [ "$1" = configure ] && ! getent passwd _mandacaru-net >/dev/null; then
+    adduser --system --group --no-create-home --quiet _mandacaru-net
+fi
 #DEBHELPER#
 exit 0
