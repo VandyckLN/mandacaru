@@ -20,4 +20,8 @@ if [ "$1" = configure ] && [ -e /etc/mandacaru/config.toml ]; then
     chgrp _mandacaru-net /etc/mandacaru/config.toml
 fi
 #DEBHELPER#
+# so o timer: o primeiro scan roda em segundo plano (OnBootSec ja passou), sem prender o apt
+if [ "$1" = configure ] && [ -d /run/systemd/system ]; then
+    deb-systemd-invoke start mandacaru-vuln-scan.timer >/dev/null || true
+fi
 exit 0

@@ -278,3 +278,11 @@ def test_relatorio_do_scan_e_o_que_o_monitor_publica():
     from mandacaru.vuln.publish import DEFAULT_REPORT
     unit = (ROOT / "debian" / "mandacaru.mandacaru-vuln-scan.service").read_text()
     assert f"--report {DEFAULT_REPORT}" in unit
+
+
+def test_instalacao_nao_roda_o_scan_dentro_do_apt():
+    rules = (ROOT / "debian" / "rules").read_text()
+    assert "dh_installsystemd --no-start --name=mandacaru-vuln-scan" in rules
+    post = (ROOT / "debian" / "mandacaru.postinst").read_text()
+    assert "deb-systemd-invoke start mandacaru-vuln-scan.timer" in post
+    assert "mandacaru-vuln-scan.service" not in post
