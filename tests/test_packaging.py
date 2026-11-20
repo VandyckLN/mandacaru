@@ -23,6 +23,15 @@ def test_config_de_exemplo_e_valido():
     assert "uso NAO comercial" in (ROOT / "packaging" / "config.toml").read_text()
 
 
+def test_exemplos_de_endereco_nunca_usam_dominio_registravel():
+    # um dominio de exemplo que alguem registre receberia os relatorios de quem copiar o exemplo
+    for arq in ("packaging/config.toml", "docs/novidades-0.5.md"):
+        texto = (ROOT / arq).read_text()
+        hosts = re.findall(r'(?:hub_endpoint|misp_url)\s*=\s*"https?://([^/"]+)', texto)
+        hosts += re.findall(r'ex\.:\s*"https?://([^/"]+)', texto)
+        assert hosts and all(h.endswith(".invalid") for h in hosts), (arq, hosts)
+
+
 def test_versao_do_changelog_debian_bate_com_o_pacote():
     first = (ROOT / "debian" / "changelog").read_text().splitlines()[0]
     assert re.match(r"mandacaru \(([^)]+)\)", first).group(1) == mandacaru.__version__
