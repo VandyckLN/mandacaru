@@ -45,10 +45,11 @@ where = ["src"]
 version = { attr = "mandacaru.__version__" }
 
 [tool.setuptools.package-data]
-mandacaru = ["rules/yara/*.yar"]
+mandacaru = ["rules/yara/*.yar", "ml/models/*.json"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+markers = ["lento: desempenho no hardware real (MANDACARU_LENTO=1)"]
 
 [tool.ruff]
 line-length = 120

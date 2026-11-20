@@ -24,7 +24,7 @@ jobs:
       - name: Confere o conteudo do pacote
         run: |
           dpkg-deb -c dist/*.deb | tee contents.txt
-          for f in usr/bin/mandacaru dist-packages/mandacaru/rules/yara/base.yar etc/mandacaru/config.toml \
+          for f in usr/bin/mandacaru dist-packages/mandacaru/rules/yara/base.yar dist-packages/mandacaru/ml/model.py etc/mandacaru/config.toml \
                    etc/mandacaru/rules.d/ systemd/system/mandacaru.service etc/logrotate.d/mandacaru \
                    usr/share/icons/hicolor/64x64/apps/mandacaru.png \
                    usr/libexec/mandacaru/quarantine-decide usr/libexec/mandacaru/quarantine-release \
