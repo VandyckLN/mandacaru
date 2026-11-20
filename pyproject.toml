@@ -29,6 +29,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6"]
+# so para o pipeline de treino (tools/treino) e seus testes; o runtime nao usa
+treino = ["scikit-learn>=1.4", "numpy>=1.26", "pyzipper>=0.3", "zstandard>=0.22; python_version < '3.14'"]
 # eBPF: instale o pacote do sistema (ex.: apt install python3-bpfcc)
 
 [project.urls]

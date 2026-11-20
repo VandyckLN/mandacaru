@@ -1,0 +1,7 @@
+# Dependencias SO do treino (venv propria na UbuntuPentest). O runtime do Mandacaru nao usa nenhuma delas.
+# Gere o requirements.txt com: pip-compile --generate-hashes tools/treino/requirements.in
+# yara-python: usar o python3-yara do apt (no Python 3.14 nao ha wheel; ver README.md).
+scikit-learn
+numpy
+pyzipper
+zstandard; python_version < "3.14"
