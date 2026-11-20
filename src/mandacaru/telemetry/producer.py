@@ -51,6 +51,9 @@ def payload_from_case(case: Case, alerts: list[Alert], *, tlp: str, mime: str = 
     yara_rules = sorted({a.rule.removeprefix("yara.") for a in alerts if a.rule.startswith("yara.")})
     mitre = sorted({t for a in alerts for t in a.mitre})
     distro, version = _os_release(os_release)
+    ml_ev = next((a.evidence for a in alerts if a.rule.startswith("ml.") and "score" in a.evidence
+                  and "model_id" in a.evidence), None)
+    ml = {"model_id": ml_ev["model_id"], "score": ml_ev["score"]} if ml_ev is not None else None
     return sanitize_event_payload(
         sha256=case.sha256,
         mime=mime,
@@ -62,6 +65,7 @@ def payload_from_case(case: Case, alerts: list[Alert], *, tlp: str, mime: str = 
         distro_version=version,
         arch=platform.machine() or "unknown",
         detected_at=datetime.fromtimestamp(case.quarantined_at, timezone.utc).isoformat(),
+        ml=ml,
     )
 
 

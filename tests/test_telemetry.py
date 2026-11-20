@@ -209,3 +209,18 @@ def test_spool_desligado_nao_exporta_nada(tmp_path: Path) -> None:
     spool.mkdir()
     assert export_batch(TelemetryDispatcher(Config(), outbox), spool) == 0
     assert json.loads((spool / "batch.json").read_text())["items"] == []
+
+
+def test_payload_leva_nota_do_modelo_sem_conteudo() -> None:
+    from types import SimpleNamespace
+
+    from mandacaru.events import Alert, Severity
+    from mandacaru.telemetry.producer import payload_from_case
+
+    case = SimpleNamespace(sha256="a" * 64, size=10, quarantined_at=0.0)
+    ml = Alert("ml.malware", Severity.HIGH, "IA: x", {"path": "/home/ana/x", "score": 0.9731, "model_id": "elf-1",
+                                                       "motivos": [{"feature": "upx"}]})
+    p = payload_from_case(case, [ml], tlp="TLP:CLEAR")
+    assert p["detection"]["ml"] == {"model_id": "elf-1", "score": 0.9731}
+    assert "/home/ana" not in json.dumps(p)
+    assert "ml" not in payload_from_case(case, [], tlp="TLP:CLEAR")["detection"]
