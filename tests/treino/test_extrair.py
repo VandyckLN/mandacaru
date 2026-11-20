@@ -1,4 +1,6 @@
 """Extracao para o cache SQLite: corpus sintetico inofensivo."""
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -17,14 +19,51 @@ def test_extrai_por_familia_com_extensao_sintetica_e_cache(tmp_path):
     assert r2["extraidos"] == 0 and r2["cacheados"] == 4         # incremental
     t = extrair(c, d, cache_db=db)
     assert set(t) == {"elf", "script"}
-    assert t["script"].X.dtype == np.float32
+    assert t["script"].X.dtype == np.float64
     assert t["script"].X.shape[1] == len(SCRIPT_FEATURE_NAMES)
     assert t["elf"].X.shape[1] == len(ELF_FEATURE_NAMES)
     i = t["script"].sha.index(sha_curl)
     assert bool(t["script"].regra_media[i]) is True and bool(t["script"].regra_alta[i]) is False
     j = t["script"].sha.index(sha_heur)
     assert bool(t["script"].regra_media[j]) is True             # heur.obfuscated_script disparou pela extensao .py
-    assert np.allclose(t["script"].X[i], np.asarray(extract("sh", dados[sha_curl]), dtype=np.float32))
+    # o que o treino mede e exatamente o que o runtime calcula (float64, bit a bit)
+    assert np.array_equal(t["script"].X[i], np.asarray(extract("sh", dados[sha_curl]), dtype=np.float64))
+
+
+def test_cache_commita_cada_linha_para_shards_em_paralelo(tmp_path, monkeypatch):
+    import sqlite3
+
+    from tools.treino import extrair as ex
+
+    c, *_ = _corpus_e_divisao(tmp_path)
+    db = tmp_path / "cache.sqlite"
+    original = ex.extract
+    chamadas = []
+
+    def extract_com_outro_shard(kind, data, **kw):
+        if chamadas:                                    # outro shard grava enquanto este extrai
+            outro = sqlite3.connect(db, timeout=0)
+            outro.execute("INSERT INTO features VALUES (?,?,?,?,?,?,?,?,?)",
+                          (f"{len(chamadas):064x}", -1, "", "", "script", "sh", 0, 0, b""))
+            outro.commit()
+            outro.close()
+        chamadas.append(kind)
+        return original(kind, data, **kw)
+
+    monkeypatch.setattr(ex, "extract", extract_com_outro_shard)
+    assert extrair_cache(c, db)["extraidos"] == 4
+
+
+def test_chave_do_cache_cobre_parser_elf_e_kind(tmp_path, monkeypatch):
+    from mandacaru.ml import elf, kind
+    from tools.treino.extrair import feature_code_sha
+
+    for mod in (elf, kind):
+        antes = feature_code_sha()
+        copia = tmp_path / Path(mod.__file__).name
+        copia.write_bytes(Path(mod.__file__).read_bytes() + b"# mudou\n")
+        monkeypatch.setattr(mod, "__file__", str(copia))
+        assert feature_code_sha() != antes, mod.__name__
 
 
 def test_salvar_e_carregar_npz(tmp_path):

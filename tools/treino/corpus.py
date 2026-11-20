@@ -58,6 +58,8 @@ def _member(zf: pyzipper.AESZipFile) -> pyzipper.ZipInfo:
     info = infos[0]
     if info.is_dir() or stat.S_ISLNK(info.external_attr >> 16):
         raise ValueError("membro e diretorio ou symlink")
+    if not info.flag_bits & 0x1:
+        raise ValueError("membro sem criptografia (amostra so entra em zip AES)")
     if info.file_size >= MAX_BYTES:
         raise ValueError(f"membro declarado com {info.file_size} bytes (limite {MAX_BYTES})")
     return info
@@ -85,7 +87,7 @@ class Corpus:
         for sub in ("malicioso", "legitimo"):
             (self.root / sub).mkdir(mode=0o700, exist_ok=True)
         self._entries: list[Entry] = []
-        self._hashes: set[str] = set()
+        self._hashes: set[tuple[str, int]] = set()        # (sha, rotulo): conflito vai para a higiene
         self._disk_bytes = 0
         self._load()
 
@@ -103,14 +105,14 @@ class Corpus:
             except (ValueError, TypeError) as exc:
                 _aviso(f"{path.name}:{n}: linha ignorada ({exc})")
                 continue
-            if entry.sha256 in self._hashes:
+            if self.has(entry.sha256, entry.label):
                 continue
             self._entries.append(entry)
-            self._hashes.add(entry.sha256)
+            self._hashes.add((entry.sha256, entry.label))
             self._disk_bytes += size
 
-    def has(self, sha256: str) -> bool:
-        return sha256 in self._hashes
+    def has(self, sha256: str, label: int) -> bool:
+        return (sha256, label) in self._hashes
 
     def disk_usage_bytes(self) -> int:
         return self._disk_bytes
@@ -150,12 +152,12 @@ class Corpus:
         finally:
             os.close(mfd)
         self._entries.append(entry)
-        self._hashes.add(entry.sha256)
+        self._hashes.add((entry.sha256, entry.label))
         self._disk_bytes += size
 
     def add_zip(self, entry: Entry, zip_bytes: bytes) -> bool:
         """Zip AES pronto (como vem do MalwareBazaar). False se invalido, duplicado, hash diferente ou sem espaco."""
-        if self.has(entry.sha256):
+        if self.has(entry.sha256, entry.label):
             return False
         try:
             data = _read_zip(zip_bytes)
@@ -173,7 +175,7 @@ class Corpus:
 
     def add_bytes(self, entry: Entry, data: bytes) -> bool:
         """Legitimo: cria o zip AES em memoria (deflate nivel 1) e grava so o zip."""
-        if self.has(entry.sha256) or len(data) >= MAX_BYTES:
+        if self.has(entry.sha256, entry.label) or len(data) >= MAX_BYTES:
             return False
         if hashlib.sha256(data).hexdigest() != entry.sha256 or not self._fits(len(data)):
             return False

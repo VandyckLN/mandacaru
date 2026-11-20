@@ -56,7 +56,7 @@ def _fp_anterior(anterior: Model, kind: str, t: Tabela) -> tuple[np.ndarray, flo
     pol = anterior.kinds.get(kind)
     if pol is None or t.X.shape[1] != len(anterior.feature_names):
         return None
-    sel = (np.array(t.kind) == kind) & (t.y == 0)
+    sel = (np.array(t.parte) == "teste") & (np.array(t.kind) == kind) & (t.y == 0)  # o novo nao treinou nisso
     if not sel.any():
         return None
     probs = np.array([anterior.probability(x.astype(float).tolist()) for x in t.X[sel]])

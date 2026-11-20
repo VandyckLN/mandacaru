@@ -1,4 +1,4 @@
-"""Treino do gradient boosting (CPU, float32), calibracao e escolha dos limiares por tipo.
+"""Treino do gradient boosting (CPU, float64 como o runtime), calibracao e escolha dos limiares por tipo.
 
 A parte "calibracao" e dividida em duas metades deterministicas: cal_fit ajusta a calibracao isotonica e
 cal_limiar escolhe os limiares. Assim os limiares nao sao escolhidos sobre os mesmos dados que moldaram as
@@ -132,7 +132,7 @@ def treinar(t: Tabela, *, semente: int = 7, max_iter: int = 300) -> Treinado:
     # peso inteiro por repeticao de linhas: o sample_weight do scikit-learn 1.9 troca o binning por quantis
     # ponderados ~60x mais lentos (9,7 s contra 0,16 s em 2.400 linhas); repetir da o mesmo peso na perda
     reps = np.rint(pesos_amostra(t, treino)).astype(np.int64)
-    clf.fit(np.repeat(t.X[treino].astype(np.float32), reps, axis=0), np.repeat(t.y[treino], reps))
+    clf.fit(np.repeat(t.X[treino], reps, axis=0), np.repeat(t.y[treino], reps))
 
     fit, limiar = dividir_calibracao(t)
     calib_x, calib_y = _calibrar(clf.decision_function(t.X[fit]), t.y[fit].astype(int))

@@ -1,9 +1,10 @@
 """Extracao das caracteristicas para um cache SQLite incremental, e montagem das tabelas de treino.
 
 Usa o MESMO mandacaru.ml.features do produto (uma so fonte da verdade). Cada amostra e lida do zip em memoria,
-vira um vetor float32 e recebe a marca do que as regras atuais do Mandacaru ja pegam (regra_alta/regra_media),
-calculada pelo StaticScanner com uma extensao sintetica do tipo, para as heuristicas de script dispararem como
-no runtime. O cache e indexado pela versao das caracteristicas e pelo hash do codigo e das regras: mudou, refaz.
+vira um vetor float64 (o mesmo do runtime, bit a bit) e recebe a marca do que as regras atuais do Mandacaru ja
+pegam (regra_alta/regra_media), calculada pelo StaticScanner com uma extensao sintetica do tipo, para as
+heuristicas de script dispararem como no runtime. O cache e indexado pela versao das caracteristicas e pelo hash
+do codigo e das regras: mudou, refaz.
 """
 from __future__ import annotations
 
@@ -22,7 +23,9 @@ import numpy as np
 import mandacaru
 from mandacaru.detectors.static import StaticScanner
 from mandacaru.events import Severity
+from mandacaru.ml import elf as _elf
 from mandacaru.ml import features as _features
+from mandacaru.ml import kind as _kind
 from mandacaru.ml.features import FAMILY, FEATURE_VERSION, ExtractionBudgetExceeded, extract
 from mandacaru.ml.kind import detect_kind
 
@@ -42,7 +45,7 @@ def _sha_arquivos(paths: list[Path]) -> str:
 
 
 def feature_code_sha() -> str:
-    return _sha_arquivos([Path(_features.__file__)])
+    return _sha_arquivos([Path(m.__file__) for m in (_features, _elf, _kind)])  # tudo que gera o vetor
 
 
 def yara_rules_sha() -> str:
@@ -93,11 +96,9 @@ def extrair_cache(corpus: Corpus, cache_db: Path, *, budget_s: float = 2.0,
             media = any(a.severity >= Severity.MEDIUM for a in alerts)
             con.execute("INSERT OR REPLACE INTO features VALUES (?,?,?,?,?,?,?,?,?)",
                         (e.sha256, *chave, FAMILY[kind], kind, int(alta), int(media),
-                         struct.pack(f"<{len(x)}f", *x)))
+                         struct.pack(f"<{len(x)}d", *x)))
+            con.commit()                                   # trava de escrita curta: shards em paralelo
             cont["extraidos"] += 1
-            if cont["extraidos"] % 500 == 0:
-                con.commit()
-        con.commit()
     finally:
         con.close()
     return cont
@@ -136,9 +137,9 @@ def montar_tabelas(corpus: Corpus, divisao: Divisao, cache_db: Path) -> dict[str
     tabelas = {}
     for fam, rows in linhas.items():
         n = len(rows)
-        dim = len(rows[0][4]) // 4 if rows else 0
-        X = np.frombuffer(b"".join(r[4] for r in rows), dtype="<f4").reshape(n, dim).astype(np.float32) \
-            if rows else np.zeros((0, 0), dtype=np.float32)
+        dim = len(rows[0][4]) // 8 if rows else 0
+        X = np.frombuffer(b"".join(r[4] for r in rows), dtype="<f8").reshape(n, dim).copy() \
+            if rows else np.zeros((0, 0))
         tabelas[fam] = Tabela(
             X=X,
             y=np.array([r[5].label for r in rows], dtype=np.int8),

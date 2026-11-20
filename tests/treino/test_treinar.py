@@ -35,3 +35,26 @@ def test_calibracao_colapsada_mantem_dois_pontos_e_peso_dificil():
 def test_deterministico():
     t = sintetico_script(n=2000, semente=3)
     assert treinar(t, max_iter=20).limiares == treinar(t, max_iter=20).limiares
+
+
+def test_treino_em_float64_mantem_ponto_de_massa_do_lado_certo():
+    """Corte em cima de um valor que nao cabe em float32 (log2(3)): o runtime calcula em float64."""
+    import math
+
+    import numpy as np
+
+    t = sintetico_script(n=3000, semente=12)
+    rnd = np.random.default_rng(12)
+    v = math.log2(3)
+    n = len(t.y)
+    X = np.zeros((n, t.X.shape[1]))
+    grupo = rnd.integers(0, 10, n)
+    massa = grupo < 4                                          # 40% exatamente em log2(3): legitimos
+    abaixo, acima = (grupo >= 4) & (grupo < 7), grupo >= 7
+    X[massa, 0] = v
+    X[abaixo, 0] = v - rnd.uniform(0.001, 3, abaixo.sum())
+    X[acima, 0] = v + rnd.uniform(0.001, 3, acima.sum())
+    t.X = X
+    t.y = acima.astype(np.int8)
+    tr = treinar(t, max_iter=20)
+    assert tr.clf.decision_function(X[massa]).max() < 0

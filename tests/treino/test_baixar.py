@@ -44,7 +44,8 @@ def test_coleta_com_tetos_e_sem_repetir(tmp_path):
     assert not [x for x in chamadas2 if x["query"] == "get_file"]  # nada baixado de novo
 
 
-def test_catalogo_historico_filtra_por_data_e_familia(tmp_path):
+@pytest.mark.parametrize("sep", [",", ", "])
+def test_catalogo_historico_filtra_por_data_e_familia(tmp_path, sep):
     cat = tmp_path / "full.csv.zip"
     linhas = ['# "first_seen_utc","sha256_hash","md5_hash","sha1_hash","reporter","file_name",'
               '"file_type_guess","mime_type","signature","clamav","vtpercent","imphash","ssdeep","tlsh"\n']
@@ -53,7 +54,7 @@ def test_catalogo_historico_filtra_por_data_e_familia(tmp_path):
     linhas.append(f'"2026-06-01 00:00:00","{shas[1]}","","","r1","b","elf","","FamA","","","","",""\n')
     linhas.append(f'"2026-07-01 00:00:00","{shas[2]}","","","r2","c","sh","","n/a","","","","",""\n')
     with zipfile.ZipFile(cat, "w") as z:
-        z.writestr("full.csv", "".join(linhas))
+        z.writestr("full.csv", "".join(linhas).replace('","', '"' + sep + '"'))
     c = Corpus(tmp_path / "c")
     http, chamadas = http_falso()
     r = coletar(c, chave="segredo", http=http, catalogo=cat, desde="2026-01-01", cota=10)

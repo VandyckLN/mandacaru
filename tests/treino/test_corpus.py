@@ -41,6 +41,32 @@ def test_hash_errado_duplicado_e_legitimo(tmp_path):
     assert c.read(c.entries()[0]) == data and c.entries()[0].package == "pkg"
 
 
+def test_mesmo_sha_nos_dois_rotulos_vai_para_a_higiene(tmp_path):
+    from tools.treino.higiene import remover_conflitos
+
+    data = b"#!/bin/sh\necho instalador legitimo\n"
+    sha = hashlib.sha256(data).hexdigest()
+    c = Corpus(tmp_path / "c")
+    assert c.add_zip(_e(sha), zip_aes(sha, data))
+    assert c.add_bytes(_e(sha, label=0), data)                  # nao some em silencio: a higiene decide
+    assert sorted(e.label for e in Corpus(tmp_path / "c").entries()) == [0, 1]
+    assert remover_conflitos(Corpus(tmp_path / "c").entries()) == []
+
+
+def test_zip_sem_criptografia_e_recusado(tmp_path):
+    import io
+    import zipfile
+
+    data = b"amostra em claro"
+    sha = hashlib.sha256(data).hexdigest()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr(sha, data)
+    c = Corpus(tmp_path / "c")
+    assert c.add_zip(_e(sha), buf.getvalue()) is False
+    assert not list((tmp_path / "c" / "malicioso").iterdir())
+
+
 @pytest.mark.parametrize("zip_ruim", [
     lambda: b"nao e zip",
     lambda: zip_aes("x", b"a", senha=b"outra"),

@@ -101,7 +101,7 @@ def _linhas_catalogo(catalogo_zip: Path) -> Iterator[dict]:
         with z.open(nome) as raw:
             texto = io.TextIOWrapper(raw, encoding="utf-8", errors="replace", newline="")
             colunas = list(_CSV_PADRAO)
-            for row in csv.reader(texto):
+            for row in csv.reader(texto, skipinitialspace=True):  # aceita "," e ", "
                 if not row:
                     continue
                 if row[0].lstrip().startswith("#"):
@@ -138,7 +138,7 @@ def selecionar_catalogo(catalogo_zip: Path, corpus: Corpus, *, tipos=TIPOS_MB, d
         sha = row.get("sha256_hash", "").lower()
         tipo = row.get("file_type_guess", "")
         dia = _dia(row.get("first_seen_utc", ""))
-        if len(sha) != 64 or sha in vistos or corpus.has(sha) or tipo not in tipos:
+        if len(sha) != 64 or sha in vistos or corpus.has(sha, 1) or tipo not in tipos:
             continue
         if desde is not None and dia < desde:
             continue
@@ -161,7 +161,7 @@ def _candidatos_recentes(corpus: Corpus, *, chave: str, http: HttpPost, tipos, c
     for tipo in tipos:
         for item in listar(tipo, chave=chave, http=http):
             sha = str(item.get("sha256_hash", "")).lower()
-            if len(sha) != 64 or corpus.has(sha) or any(c["sha256_hash"] == sha for c in escolhidos):
+            if len(sha) != 64 or corpus.has(sha, 1) or any(c["sha256_hash"] == sha for c in escolhidos):
                 continue
             fam, rem = _familia(item.get("signature")), str(item.get("reporter") or "desconhecido")
             if not tetos.cabe(fam, rem):
