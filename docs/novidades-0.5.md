@@ -1,6 +1,6 @@
 # Mandacaru 0.5 — guia das novidades
 
-Este guia explica, sem jargão desnecessário, o que a versão 0.5 trouxe, como usar e como as peças se encaixam.
+Este guia explica, sem jargão desnecessário (os termos técnicos estão explicados no [Glossário](#9-glossário), no final), o que a versão 0.5 trouxe, como usar e como as peças se encaixam.
 
 **Em uma frase:** o Mandacaru agora **descobre quais programas instalados têm falhas de segurança conhecidas (CVEs)** e, se você quiser, **compartilha de forma anônima os malwares que encontrou** com a comunidade de segurança.
 
@@ -16,6 +16,7 @@ Este guia explica, sem jargão desnecessário, o que a versão 0.5 trouxe, como 
 6. [Arquivos e pastas](#6-arquivos-e-pastas)
 7. [Mapa do código](#7-mapa-do-código)
 8. [Perguntas frequentes](#8-perguntas-frequentes)
+9. [Glossário](#9-glossário)
 
 ---
 
@@ -140,6 +141,10 @@ Ubuntu, Debian e derivados: Linux Mint, Pop!_OS, elementary e LMDE. Nos derivado
 ## 3. Telemetria opt-in
 
 ### O que é
+
+**Telemetria** é quando um programa envia, por conta própria, informações sobre o que aconteceu no computador para um servidor externo. Muitos programas fazem isso sem perguntar. No Mandacaru é diferente: vem **desligada**, só envia **o que você aprovar** e nunca leva dados pessoais.
+
+Na prática, funciona como **avisar os vizinhos sobre um golpe**: você não conta quem é nem onde mora, só descreve o golpista para que os outros o reconheçam.
 
 Quando a quarentena isola um arquivo malicioso, o Mandacaru pode guardar um **resumo anônimo** dele para compartilhar com:
 
@@ -402,3 +407,78 @@ Não. Ela manda só o resumo (hash, tipo, regras), e só o que você aprovar. Se
 
 **Quero desligar tudo de rede.**
 Em `/etc/mandacaru/config.toml`, use `[vuln] enabled = false` e mantenha `[telemetry] level = "off"`.
+
+---
+
+## 9. Glossário
+
+Termos técnicos usados neste guia, em ordem alfabética.
+
+| Termo | O que significa |
+|---|---|
+| **`.deb`** | Arquivo de instalação de programas no Ubuntu e no Debian, como um "instalador". |
+| **Alerta** | Aviso do Mandacaru de que encontrou algo suspeito ou perigoso. |
+| **`alerts.jsonl`** | Arquivo onde o Mandacaru grava todos os alertas, um por linha. Fica em `/var/log/mandacaru/`. |
+| **API** | "Porta de entrada" de um serviço na internet, por onde um programa faz perguntas e recebe respostas. |
+| **`apt`** | Programa do Ubuntu/Debian que instala e atualiza pacotes (`sudo apt upgrade`). |
+| **Arquitetura** | Tipo de processador do computador, como `x86_64` (PCs comuns) ou `aarch64` (ARM). |
+| **Atacante** | Pessoa ou programa que tenta invadir ou prejudicar um sistema. |
+| **Biblioteca** | Pedaço de programa reaproveitado por vários outros. Ex.: a `libssl` faz a criptografia de muitos programas. |
+| **Cache** | Cópia local de algo já baixado, para não precisar buscar de novo na internet. |
+| **Chave de API** | Senha que um programa usa para se identificar num serviço (ex.: no MISP). |
+| **CERT.br** | Grupo brasileiro que responde a incidentes de segurança na internet. |
+| **CI** | "Integração contínua": testes automáticos que rodam a cada mudança no código. |
+| **CISA** | Agência de cibersegurança do governo dos EUA. |
+| **CISA KEV** | Lista da CISA com as falhas que **já estão sendo usadas em ataques reais** (*Known Exploited Vulnerabilities*). |
+| **Código de saída** | Número que um comando devolve ao terminar: `0` é sucesso, outros números indicam situações específicas. |
+| **Config / `config.toml`** | Arquivo de configuração do Mandacaru, em `/etc/mandacaru/config.toml`. TOML é o formato do arquivo. |
+| **CSIRT** | Equipe que responde a incidentes de segurança de uma empresa, governo ou país. |
+| **CVE** | Identificador público de uma falha de segurança, como `CVE-2024-4741`. Funciona como um "RG" da falha. |
+| **CVSS** | Nota de 0 a 10 que mede a gravidade de uma falha. Acima de 7 é considerada alta; acima de 9, crítica. |
+| **Distro** | Distribuição Linux: Ubuntu, Debian, Mint etc. |
+| **Derivado** | Distro baseada em outra. O Linux Mint e o Pop!_OS são derivados do Ubuntu. |
+| **`dpkg`** | Sistema que registra os pacotes instalados no Ubuntu/Debian. A lista fica em `/var/lib/dpkg/status`. |
+| **DSA** | Aviso de segurança oficial do Debian (*Debian Security Advisory*). |
+| **ELF** | Formato dos programas executáveis no Linux, o equivalente ao `.exe` do Windows. |
+| **Hash / SHA-256** | "Impressão digital" de um arquivo: um código único calculado a partir do conteúdo. Arquivos iguais têm o mesmo hash, mas o hash não permite recriar o arquivo. |
+| **IOC** | Indicador de comprometimento: pista que identifica um ataque, como o hash de um malware ou o IP de um servidor criminoso. |
+| **IP** | Endereço de um computador na rede. Os IPs internos (ex.: `192.168.x.x`) são da sua casa ou empresa e nunca são enviados. |
+| **JSON** | Formato de texto para guardar dados organizados, fácil de ler por programas. |
+| **`journalctl`** | Comando que mostra o registro (log) dos serviços do sistema. |
+| **LGPD** | Lei Geral de Proteção de Dados, a lei brasileira de privacidade. |
+| **Log** | Registro do que um programa fez, linha por linha, com data e hora. |
+| **Malware** | Programa malicioso: vírus, ransomware, minerador escondido etc. |
+| **MalwareBazaar** | Banco público e gratuito de amostras de malware, usado por pesquisadores. |
+| **MISP** | Plataforma gratuita onde equipes de segurança compartilham informações sobre ameaças. |
+| **MITRE ATT&CK** | Catálogo mundial das técnicas usadas por atacantes. Cada técnica tem um código, como `T1059` (executar comandos). |
+| **Monitor** | Parte do Mandacaru que fica rodando o tempo todo, vigiando arquivos e processos. |
+| **Opt-in** | Algo que vem desligado e só funciona se você ligar de propósito. |
+| **OSV.dev** | Banco público de falhas de segurança mantido pelo Google, que cobre os pacotes de várias distros. |
+| **Pacote** | Programa instalável no Linux. Ex.: `openssh-server`. |
+| **Pacote-fonte** | Código original do qual saem um ou mais pacotes. Ex.: do pacote-fonte `openssl` saem `openssl` e `libssl3`. As falhas são registradas pelo pacote-fonte. |
+| **Popup** | Janelinha de aviso que aparece na tela. |
+| **Privilégio** | Poder de um usuário no sistema. Quem tem muito privilégio (o root) pode mexer em tudo. |
+| **Processo** | Programa em execução. |
+| **`/proc`** | Pasta especial do Linux que mostra os processos em execução e o que cada um está usando. |
+| **Quarentena** | Área isolada para onde o Mandacaru move arquivos perigosos, para que não possam ser executados. |
+| **Root** | O administrador do Linux, com todos os privilégios. Comandos com `sudo` rodam como root. |
+| **Sanitização** | Limpeza dos dados antes do envio, removendo informações pessoais. |
+| **Scan** | Varredura: verificação em busca de problemas. |
+| **Script** | Programa em texto, executado por um interpretador (Bash, Python...). Começa com `#!` (*shebang*). |
+| **Serviço** | Programa que roda em segundo plano, controlado pelo systemd. |
+| **Socket** | "Canal" de comunicação entre programas no mesmo computador. É por ele que o popup recebe os alertas. |
+| **Spool** | Pasta de passagem onde arquivos ficam esperando para serem processados por outro programa. |
+| **SQLite** | Banco de dados guardado em um único arquivo. A fila e os caches usam esse formato. |
+| **`sudo`** | Comando que executa outro comando como root (pede a sua senha). |
+| **Symlink** | Atalho: um arquivo que aponta para outro. Atacantes às vezes usam atalhos para enganar programas privilegiados, por isso o Mandacaru nunca os segue. |
+| **systemd** | Sistema que liga, desliga e agenda os serviços do Linux. |
+| **Telemetria** | Envio automático de informações de um programa para um servidor externo. No Mandacaru: opt-in, anônimo e com aprovação manual. |
+| **Threat Hub** | Servidor da comunidade Mandacaru que recebe os resumos de malware enviados pela telemetria. |
+| **Timer** | Agendamento do systemd (como um despertador) que inicia um serviço em horários definidos. |
+| **TLP** | *Traffic Light Protocol*: rótulo que diz com quem uma informação pode ser compartilhada. `TLP:CLEAR` = qualquer pessoa; `TLP:GREEN` = só a comunidade de segurança. |
+| **TLS** | Criptografia das conexões na internet (o "cadeado" do `https`). |
+| **Unit** | Arquivo de configuração de um serviço ou timer do systemd. |
+| **USN** | Aviso de segurança oficial do Ubuntu (*Ubuntu Security Notice*). |
+| **Usuário de sistema** | Usuário criado para um programa, não para uma pessoa. O `_mandacaru-net` é um deles: não tem senha nem pasta pessoal. |
+| **Vulnerabilidade** | Falha num programa que pode ser usada por um atacante. |
+| **YARA** | Linguagem de regras usada para reconhecer malware pelo conteúdo do arquivo. |
