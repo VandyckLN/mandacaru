@@ -431,3 +431,41 @@ def test_tipo_do_arquivo_vem_do_conteudo_isolado(tmp_path, q):
     big = item.__class__(**{**item.__dict__, "payload": {"indicator": {"mime": "application/x-elf",
                                                                        "size_bytes": 2 * 1024 * 1024}}})
     assert TelemetryDispatcher(small, outbox).sample_eligible(big) is False
+
+
+def _ml(path, isolar, sev=Severity.HIGH):
+    return Alert("ml.malware", sev, "IA: x", {"path": str(path), "ml_isolate": isolar, "sha256": "ab" * 32})
+
+
+def test_ml_sem_autorizacao_nao_isola_nem_com_min_medium(q, w):
+    f = w / "a.bin"
+    f.write_bytes(b"\x7fELF qualquer")
+    e = Engine([lambda a: None], quarantine=q, watch_paths=[str(w)], quarantine_min_severity=Severity.MEDIUM)
+    found = [_ml(f, False), Alert("ml.suspeito", Severity.MEDIUM, "x", {"path": str(f), "ml_isolate": False})]
+    e._quarantine(found)
+    assert q.list() == [] and f.exists()
+
+
+def test_ml_autorizado_isola(q, w):
+    f = w / "a.bin"
+    f.write_bytes(b"\x7fELF qualquer")
+    a = _ml(f, True)
+    Engine([lambda a: None], quarantine=q, watch_paths=[str(w)])._quarantine([a])
+    assert a.quarantine_id and not f.exists()
+
+
+def test_regra_isola_mesmo_com_ml_nao_autorizado_antes(q, w):
+    f = w / "a.py"
+    f.write_text(HIGH)
+    regra = Alert("yara.Py_Exec_Decoded_Payload", Severity.HIGH, "x", {"path": str(f)})
+    Engine([lambda a: None], quarantine=q, watch_paths=[str(w)])._quarantine([_ml(f, False), regra])
+    assert regra.quarantine_id
+
+
+def test_ml_no_modo_alerta_respeita_lista_de_confianca(q, w, trust):
+    f = w / "a.bin"
+    f.write_bytes(b"\x7fELF qualquer")
+    trust.add("ab" * 32, str(f), "teste")
+    a = _ml(f, False)
+    Engine([lambda a: None], quarantine=q, watch_paths=[str(w)])._quarantine([a])
+    assert a.severity == Severity.INFO and a.evidence["trusted"] is True
