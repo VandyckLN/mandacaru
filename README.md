@@ -154,6 +154,8 @@ O `config.toml` é instalado como `0640`, porque pode guardar chaves de API. Que
 
 ## Vulnerabilidades (CVEs)
 
+> Guia completo, com diagramas e perguntas frequentes: [docs/novidades-0.5.md](docs/novidades-0.5.md).
+
 Um timer diário (`mandacaru-vuln-scan.timer`) cruza os pacotes instalados (`/var/lib/dpkg/status`) com o [OSV.dev](https://osv.dev) e o catálogo de vulnerabilidades exploradas da CISA (KEV). Só saem da máquina nome e versão dos pacotes-fonte; nada de usuário, caminho ou hostname.
 
 | Prioridade | Quando |
