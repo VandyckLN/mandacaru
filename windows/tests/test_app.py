@@ -365,3 +365,16 @@ def test_app_icon_and_ico(app):
     _, kind, count = struct.unpack_from("<HHH", data)
     sizes = {data[6 + 16 * i] or 256 for i in range(count)}
     assert kind == 1 and {16, 32, 48, 256} <= sizes
+
+
+def test_finding_row_shows_file_name_and_full_path(app, tmp_path, scanner, ps_text):
+    d = tmp_path / "uma pasta com nome bem comprido"
+    d.mkdir()
+    f = d / "fatura.ps1"
+    f.write_text(ps_text)
+    win = make_win(tmp_path, scanner)
+    wait_scan(win, [d])
+    item = win.tree.topLevelItem(0)
+    assert item.text(1) == "fatura.ps1"
+    assert item.toolTip(1) == str(f)
+    assert item.child(0).text(2) == str(d)

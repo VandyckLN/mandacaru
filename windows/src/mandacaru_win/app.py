@@ -335,9 +335,12 @@ class MainWindow(QMainWindow):
         if f.path in self._items:
             self._remove_row(f.path)
         self.findings[f.path] = f
+        # o nome do arquivo é o que a pessoa reconhece; o caminho inteiro cortado no fim escondia justamente o nome
         item = QTreeWidgetItem([SEV_LABEL.get(f.severity, str(f.severity)),
-                                str(f.path), f.alerts[0].summary if f.alerts else ""])
+                                f.path.name, f.alerts[0].summary if f.alerts else ""])
+        item.setToolTip(1, str(f.path))
         item.setData(0, Qt.ItemDataRole.UserRole, int(f.severity))
+        item.addChild(QTreeWidgetItem(["", "Pasta", str(f.path.parent)]))
         item.setForeground(0, QBrush(QColor(SEV_COLOR.get(f.severity, "#616161"))))
         for a in f.alerts:
             mitre = f" ({', '.join(a.mitre)})" if a.mitre else ""
