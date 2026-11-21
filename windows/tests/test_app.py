@@ -182,3 +182,15 @@ def test_trust_tab_without_trust_file(app, tmp_path, scanner, monkeypatch):
     win.refresh_tabs(); win.remove_trusted("x" * 64)
     assert win.tbl_trust.rowCount() == 0 and "bloqueado" in win.lbl_trust.text()
     assert (dados / "trust.json").read_text() == "[]"
+
+
+def test_table_resize_modes(app, tmp_path, scanner):
+    from PySide6.QtWidgets import QHeaderView
+    win = make_win(tmp_path, scanner)
+    S, C = QHeaderView.ResizeMode.Stretch, QHeaderView.ResizeMode.ResizeToContents
+    for tbl, path_col in ((win.tbl_quarantine, 1), (win.tbl_trust, 0), (win.tbl_history, 1)):
+        hh = tbl.horizontalHeader()
+        assert not hh.stretchLastSection() and hh.sectionResizeMode(path_col) == S
+        assert hh.sectionResizeMode(tbl.columnCount() - 1) == C
+    assert win.tbl_quarantine.horizontalHeader().sectionResizeMode(4) == C
+    assert win.tbl_trust.horizontalHeader().sectionResizeMode(3) == C

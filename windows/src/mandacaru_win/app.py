@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt, QStandardPaths, QUrl, Signal
 from PySide6.QtGui import QBrush, QColor, QDesktopServices, QFontMetrics
 from PySide6.QtWidgets import (
     QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QProgressBar,
-    QPushButton, QTableWidget, QTableWidgetItem, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QPushButton, QHeaderView, QTableWidget, QTableWidgetItem, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from mandacaru.events import Severity
@@ -114,7 +114,7 @@ class MainWindow(QMainWindow):
         tabs = QTabWidget()
         tabs.addTab(scan_tab, "Varredura")
         self.tbl_quarantine = self._make_table(
-            ["Data", "Caminho original", "Severidade", "Regras", "Ações"])
+            ["Data", "Caminho original", "Severidade", "Regras", "Ações"], stretch=1)
         tabs.addTab(self.tbl_quarantine, "Quarentena")
         trust_tab = QWidget()
         tl = QVBoxLayout(trust_tab)
@@ -122,12 +122,12 @@ class MainWindow(QMainWindow):
         self.lbl_trust.setWordWrap(True)
         self.lbl_trust.setVisible(False)
         self.tbl_trust = self._make_table(
-            ["Caminho quando confiado", "Data", "SHA-256", "Ações"])
+            ["Caminho quando confiado", "Data", "SHA-256", "Ações"], stretch=0)
         tl.addWidget(self.lbl_trust)
         tl.addWidget(self.tbl_trust, 1)
         tabs.addTab(trust_tab, "Confiáveis")
         self.tbl_history = self._make_table(
-            ["Data", "Pastas", "Arquivos", "Achados", "Duração", "Situação"])
+            ["Data", "Pastas", "Arquivos", "Achados", "Duração", "Situação"], stretch=1)
         tabs.addTab(self.tbl_history, "Histórico")
         self.setCentralWidget(tabs)
         self.refresh_tabs()
@@ -135,13 +135,19 @@ class MainWindow(QMainWindow):
         self._set_scanning(False)
 
     @staticmethod
-    def _make_table(headers: list[str]) -> QTableWidget:
+    def _make_table(headers: list[str], stretch: int = 1) -> QTableWidget:
         t = QTableWidget(0, len(headers))
         t.setHorizontalHeaderLabels(headers)
         t.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         t.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         t.verticalHeader().setVisible(False)
-        t.horizontalHeader().setStretchLastSection(True)
+        t.setWordWrap(False)
+        hh = t.horizontalHeader()
+        hh.setStretchLastSection(False)
+        for c in range(len(headers)):
+            hh.setSectionResizeMode(
+                c, QHeaderView.ResizeMode.Stretch if c == stretch
+                else QHeaderView.ResizeMode.ResizeToContents)
         return t
 
     @staticmethod
@@ -165,11 +171,23 @@ class MainWindow(QMainWindow):
             h.addWidget(b)
         table.setCellWidget(row, col, w)
 
+    @staticmethod
+    def _reset_table(t: QTableWidget, rows: int) -> None:
+        # Esconde widgets de células antigos já (deleteLater só roda depois),
+        # senão eles aparecem soltos no canto da tabela.
+        for r in range(t.rowCount()):
+            for c in range(t.columnCount()):
+                w = t.cellWidget(r, c)
+                if w is not None:
+                    w.hide()
+        t.setRowCount(0)
+        t.setRowCount(rows)
+
     def refresh_tabs(self) -> None:
         """Reconstrói as tabelas pequenas de quarentena, confiáveis e histórico."""
         items = self._quarantine.items()
         t = self.tbl_quarantine
-        t.setRowCount(len(items))
+        self._reset_table(t, len(items))
         for r, m in enumerate(items):
             sev = m.get("severidade", "")
             sev = SEV_LABEL.get(Severity[sev], sev) if sev in Severity.__members__ else sev
@@ -189,7 +207,7 @@ class MainWindow(QMainWindow):
         else:
             self.lbl_trust.setVisible(False)
             entries = self._trust.entries()
-        t.setRowCount(len(entries))
+        self._reset_table(t, len(entries))
         for r, e in enumerate(entries):
             h = str(e["sha256"])
             for c, v in enumerate((str(e.get("caminho_quando_confiado", "")),
@@ -200,7 +218,7 @@ class MainWindow(QMainWindow):
 
         rows = self._history.recent(50)
         t = self.tbl_history
-        t.setRowCount(len(rows))
+        self._reset_table(t, len(rows))
         for r, e in enumerate(rows):
             paths = e.get("paths") or []
             vals = (self._fmt_date(e.get("started", "")),
