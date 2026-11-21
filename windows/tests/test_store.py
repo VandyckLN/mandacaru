@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from mandacaru_win.scan import ScanSummary
@@ -55,3 +56,68 @@ def test_second_corruption_keeps_both_backups(tmp_path):
     TrustList(p)
     backups = sorted(f.read_text() for f in tmp_path.glob("trust.json.corrompido*"))
     assert backups == ["{dois", "{um"]
+
+
+def test_valid_json_that_is_not_a_list_goes_to_corrompido(tmp_path):
+    p = tmp_path / "trust.json"
+    p.write_text('{"a": 1}')
+    assert TrustList(p).hashes() == set()
+    assert (tmp_path / "trust.json.corrompido").read_text() == '{"a": 1}'
+
+
+def test_failed_save_keeps_memory_and_disk_and_removes_tmp(tmp_path, monkeypatch):
+    import os
+
+    import pytest
+    p = tmp_path / "trust.json"
+    t = TrustList(p)
+    t.add("ab" * 32, Path("C:/x/a.ps1"))
+    monkeypatch.setattr(os, "fsync", lambda fd: (_ for _ in ()).throw(OSError("cheio")))
+    with pytest.raises(OSError):
+        t.add("cd" * 32, Path("C:/x/b.ps1"))
+    with pytest.raises(OSError):
+        t.remove("ab" * 32)
+    monkeypatch.undo()
+    assert t.hashes() == {"ab" * 32}
+    assert TrustList(p).hashes() == {"ab" * 32}
+    assert not (tmp_path / "trust.json.tmp").exists()
+
+
+def test_save_retries_replace_on_permission_error(tmp_path, monkeypatch):
+    import os
+    p = tmp_path / "trust.json"
+    t = TrustList(p)
+    real, calls = os.replace, []
+
+    def flaky(a, b):
+        calls.append(1)
+        if len(calls) < 3:
+            raise PermissionError("em uso")
+        real(a, b)
+
+    monkeypatch.setattr(os, "replace", flaky)
+    monkeypatch.setattr("mandacaru_win.store.time.sleep", lambda s: None)
+    t.add("ab" * 32, Path("C:/x/a.ps1"))
+    assert len(calls) == 3 and TrustList(p).hashes() == {"ab" * 32}
+
+
+def test_failed_corruption_backup_raises_instead_of_starting_empty(tmp_path, monkeypatch):
+    import os
+
+    import pytest
+    p = tmp_path / "trust.json"
+    p.write_text("{quebrado")
+    monkeypatch.setattr(os, "replace", lambda *_: (_ for _ in ()).throw(PermissionError("x")))
+    with pytest.raises(OSError):
+        TrustList(p)
+    assert p.read_text() == "{quebrado"
+
+
+def test_history_skips_rows_with_wrong_types(tmp_path):
+    p = tmp_path / "history.jsonl"
+    good = {"started": 1.0, "paths": ["C:/d"], "files": 1, "findings": 0,
+            "duration": 1.0, "completed": True}
+    bad = [{**good, "duration": "abc"}, {**good, "paths": [1]}, {**good, "files": None},
+           {**good, "started": [1]}, [1, 2], "x"]
+    p.write_text("\n".join(json.dumps(r) for r in [good, *bad]) + "\n")
+    assert History(p).recent() == [good]

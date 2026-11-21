@@ -4,6 +4,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -35,7 +36,7 @@ class TrustList:
             data = json.loads(raw.decode("utf-8"))
             if not isinstance(data, list):
                 raise ValueError("formato inesperado")
-            return [e for e in data if isinstance(e, dict) and "sha256" in e]
+            return [e for e in data if isinstance(e, dict) and isinstance(e.get("sha256"), str)]
         except ValueError:  # inclui UnicodeDecodeError e JSONDecodeError
             # Preserva o arquivo ruim (sem sobrescrever backups anteriores).
             dest = self._path.with_name(self._path.name + ".corrompido")
@@ -43,18 +44,33 @@ class TrustList:
             while dest.exists():
                 dest = self._path.with_name(f"{self._path.name}.corrompido.{n}")
                 n += 1
-            try:
-                os.replace(self._path, dest)
-            except OSError:
-                pass
+            # Se não der para guardar o arquivo ruim, não começamos vazios (um
+            # salvamento depois o sobrescreveria): o app desativa "Ignorar".
+            os.replace(self._path, dest)
             return []
 
-    def _save(self) -> None:
+    def _save(self, entries: list[dict]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._path.with_name(self._path.name + ".tmp")
-        tmp.write_text(json.dumps(self._entries, ensure_ascii=False, indent=2),
-                       encoding="utf-8")
-        os.replace(tmp, self._path)
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(entries, ensure_ascii=False, indent=2))
+                fh.flush()
+                os.fsync(fh.fileno())
+            for attempt in range(5):  # antivírus/indexador podem segurar o destino
+                try:
+                    os.replace(tmp, self._path)
+                    break
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.05)
+        except OSError:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
 
     def hashes(self) -> set[str]:
         return {e["sha256"] for e in self._entries}
@@ -65,16 +81,32 @@ class TrustList:
     def add(self, sha256: str, path: Path) -> None:
         if sha256 in self.hashes():
             return
-        self._entries.append({
+        entries = [*self._entries, {
             "sha256": sha256,
             "caminho_quando_confiado": str(path),
             "data": datetime.now().isoformat(timespec="seconds"),
-        })
-        self._save()
+        }]
+        self._save(entries)
+        self._entries = entries
 
     def remove(self, sha256: str) -> None:
-        self._entries = [e for e in self._entries if e["sha256"] != sha256]
-        self._save()
+        entries = [e for e in self._entries if e["sha256"] != sha256]
+        self._save(entries)
+        self._entries = entries
+
+
+def _num(v: object) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _valid_summary(row: object) -> bool:
+    """Linha do histórico com os tipos esperados; qualquer outra é ignorada."""
+    if not isinstance(row, dict):
+        return False
+    paths = row.get("paths", [])
+    return (isinstance(paths, list) and all(isinstance(p, str) for p in paths)
+            and all(_num(row.get(k, 0)) for k in ("files", "findings", "duration"))
+            and (_num(row.get("started", 0)) or isinstance(row.get("started"), str)))
 
 
 class History:
@@ -98,6 +130,6 @@ class History:
                     row = json.loads(line)
                 except ValueError:
                     continue
-                if isinstance(row, dict):
+                if _valid_summary(row):
                     rows.append(row)
         return rows[::-1][:n]
