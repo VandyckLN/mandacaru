@@ -27,3 +27,11 @@ def test_second_instance_cannot_take_lock(tmp_path):
     assert first is not None
     assert acquire_lock(tmp_path) is None
     first.unlock()
+
+
+def test_set_app_id_is_noop_outside_windows(monkeypatch):
+    import mandacaru_win.__main__ as m
+
+    monkeypatch.setattr(m.sys, "platform", "linux")
+    assert m.set_app_id() is False
+    assert m.APP_ID == "VandyckLN.Mandacaru"

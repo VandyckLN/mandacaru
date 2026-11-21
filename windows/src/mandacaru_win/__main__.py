@@ -69,6 +69,18 @@ def acquire_lock(directory: Path) -> QLockFile | None:
     return lock if lock.tryLock(0) else None
 
 
+APP_ID = "VandyckLN.Mandacaru"
+
+
+def set_app_id() -> bool:
+    """Dá ao processo um AppUserModelID próprio: a barra de tarefas usa o ícone da janela, não o cache do exe."""
+    if sys.platform != "win32":
+        return False
+    import ctypes
+
+    return ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID) == 0
+
+
 def app_icon() -> QIcon:
     return QIcon(str(resources.files("mandacaru_win") / "assets" / "mandacaru.png"))
 
@@ -76,6 +88,7 @@ def app_icon() -> QIcon:
 def main() -> int:
     if "--selftest" in sys.argv:
         return selftest()
+    set_app_id()  # antes de criar qualquer janela
     app = QApplication(sys.argv)
     app.setApplicationName("Mandacaru")
     app.setWindowIcon(app_icon())

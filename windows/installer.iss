@@ -31,7 +31,11 @@ Type: filesandordirs; Name: "{app}\_internal"
 Source: "dist\Mandacaru\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 
 [Icons]
-Name: "{userprograms}\Mandacaru"; Filename: "{app}\Mandacaru.exe"
+Name: "{userprograms}\Mandacaru"; Filename: "{app}\Mandacaru.exe"; AppUserModelID: "VandyckLN.Mandacaru"
+Name: "{userdesktop}\Mandacaru"; Filename: "{app}\Mandacaru.exe"; AppUserModelID: "VandyckLN.Mandacaru"; Tasks: desktopicon
+
+[Tasks]
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Run]
 Filename: "{app}\Mandacaru.exe"; Description: "{cm:LaunchProgram,Mandacaru}"; Flags: nowait postinstall skipifsilent
