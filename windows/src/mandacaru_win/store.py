@@ -28,14 +28,23 @@ class TrustList:
         if not self._path.exists():
             return []
         try:
-            data = json.loads(self._path.read_text(encoding="utf-8"))
+            raw = self._path.read_bytes()
+        except FileNotFoundError:
+            return []
+        try:
+            data = json.loads(raw.decode("utf-8"))
             if not isinstance(data, list):
                 raise ValueError("formato inesperado")
             return [e for e in data if isinstance(e, dict) and "sha256" in e]
-        except (ValueError, OSError):
-            # Preserva o arquivo ruim para inspeção e começa vazio.
+        except ValueError:  # inclui UnicodeDecodeError e JSONDecodeError
+            # Preserva o arquivo ruim (sem sobrescrever backups anteriores).
+            dest = self._path.with_name(self._path.name + ".corrompido")
+            n = 1
+            while dest.exists():
+                dest = self._path.with_name(f"{self._path.name}.corrompido.{n}")
+                n += 1
             try:
-                os.replace(self._path, self._path.with_name(self._path.name + ".corrompido"))
+                os.replace(self._path, dest)
             except OSError:
                 pass
             return []
