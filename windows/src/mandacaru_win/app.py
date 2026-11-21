@@ -7,11 +7,24 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import Qt, QStandardPaths, QUrl, Signal
+from PySide6.QtCore import QStandardPaths, Qt, QUrl, Signal
 from PySide6.QtGui import QBrush, QColor, QDesktopServices, QFontMetrics
 from PySide6.QtWidgets import (
-    QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QProgressBar,
-    QPushButton, QHeaderView, QTableWidget, QTableWidgetItem, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QFileDialog,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
 
 from mandacaru.events import Severity

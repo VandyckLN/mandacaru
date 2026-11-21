@@ -1,5 +1,3 @@
-from mandacaru.events import Severity
-
 from mandacaru_win.scan import (
     is_cloud_only,
     list_files,
@@ -7,8 +5,10 @@ from mandacaru_win.scan import (
     sha256_file,
 )
 
+from mandacaru.events import Severity
 
-def run(paths, scanner, trusted=set(), stop_after=None):
+
+def run(paths, scanner, trusted=frozenset(), stop_after=None):
     findings, calls = [], []
 
     def on_progress(path, done, total):

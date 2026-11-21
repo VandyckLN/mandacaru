@@ -1,10 +1,10 @@
 import os
 
 import pytest
-from mandacaru.events import Alert, Severity
-
 from mandacaru_win.quarantine import Quarantine, QuarantineError
 from mandacaru_win.scan import Finding, sha256_file
+
+from mandacaru.events import Alert, Severity
 
 
 def finding_for(path):
