@@ -172,7 +172,7 @@ Isso ajuda outras pessoas a reconhecerem o mesmo malware.
 [telemetry]
 level = "iocs_only"
 misp_enabled = true
-misp_url = "https://misp.minhaempresa.com.br"
+misp_url = "https://misp.example.invalid"   # troque pelo endereco do seu MISP
 ```
 
 A chave do MISP **não** fica no config. Ela vai num arquivo separado, legível só pelo root:
