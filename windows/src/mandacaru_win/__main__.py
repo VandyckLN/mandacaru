@@ -80,7 +80,10 @@ def main() -> int:
         return 0
     win = MainWindow(data)
     win.show()
-    return app.exec()
+    rc = app.exec()
+    # a janela precisa morrer antes do QApplication, senão o Windows fecha com access violation
+    del win
+    return rc
 
 
 if __name__ == "__main__":

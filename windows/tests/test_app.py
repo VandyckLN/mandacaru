@@ -5,8 +5,10 @@ pytest.importorskip("PySide6")
 from mandacaru_win.app import MainWindow  # noqa: E402
 from mandacaru_win.scan import sha256_file  # noqa: E402
 from mandacaru_win.store import History, TrustList  # noqa: E402
-from PySide6.QtCore import QEventLoop, QTimer  # noqa: E402
+from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QTimer  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
+
+_windows: list = []
 
 
 @pytest.fixture(scope="session")
@@ -14,8 +16,20 @@ def app():
     return QApplication.instance() or QApplication([])
 
 
+@pytest.fixture(autouse=True)
+def _close_windows():
+    # janelas vivas até o fim do interpretador derrubam o processo no Windows (access violation)
+    yield
+    while _windows:
+        w = _windows.pop()
+        w.close()
+        w.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
 def make_win(tmp_path, scanner):
     win = MainWindow(tmp_path / "dados", scanner)
+    _windows.append(win)
     win.msgs = []
     win.confirm = lambda _: True
     win.notify = win.msgs.append
