@@ -72,6 +72,7 @@ def sanitize_event_payload(
     distro_version: str = "",
     arch: str = "x86_64",
     detected_at: str = "",
+    ml: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Constroi um payload sanitizado sem hostname, machine-id, usernames ou IPs internos."""
     network_iocs = [
@@ -87,17 +88,20 @@ def sanitize_event_payload(
     if tlsh:
         indicator["tlsh"] = tlsh
 
+    detection: dict[str, Any] = {
+        "engine": "mandacaru",
+        "yara_rules": list(yara_rules),
+        "mitre_attack": list(mitre_attack),
+        "sanitized_cmdline": sanitize_text(cmdline) if cmdline else "",
+    }
+    if ml is not None:
+        detection["ml"] = {"model_id": str(ml["model_id"]), "score": float(ml["score"])}
     return {
         "schema_version": "1.0",
         "tlp": tlp.upper(),
         "detected_at": detected_at,
         "os": {"distro": distro, "version": distro_version, "arch": arch},
         "indicator": indicator,
-        "detection": {
-            "engine": "mandacaru",
-            "yara_rules": list(yara_rules),
-            "mitre_attack": list(mitre_attack),
-            "sanitized_cmdline": sanitize_text(cmdline) if cmdline else "",
-        },
+        "detection": detection,
         "network_iocs": network_iocs,
     }

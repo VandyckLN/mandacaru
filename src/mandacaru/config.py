@@ -20,6 +20,7 @@ from .events import Severity
 DEFAULT_PATH = "/etc/mandacaru/config.toml"
 
 _TELEMETRY_LEVELS = ("off", "iocs_only", "samples_elf")
+_ML_MODES = ("off", "shadow", "alert", "isolate")
 _TLP_LEVELS = ("TLP:CLEAR", "TLP:GREEN")
 
 
@@ -58,6 +59,8 @@ class Config:
     telemetry_misp_enabled: bool = False
     telemetry_misp_url: str = ""
     telemetry_misp_verify_tls: bool = True
+    ml_enabled: bool = True
+    ml_mode: str = "shadow"
 
 
 def _str_list(value, key: str) -> tuple[str, ...]:
@@ -136,6 +139,7 @@ _SCHEMA = {
                   "misp_enabled": ("telemetry_misp_enabled", _bool),
                   "misp_url": ("telemetry_misp_url", _str),
                   "misp_verify_tls": ("telemetry_misp_verify_tls", _bool)},
+    "ml": {"enabled": ("ml_enabled", _bool), "mode": ("ml_mode", _enum(_ML_MODES))},
 }
 
 

@@ -16,3 +16,13 @@
     notifempty
     create 0640 root root
 }
+
+# modo sombra do classificador de IA (o que ele teria feito)
+/var/log/mandacaru/ml-shadow.jsonl {
+    weekly
+    rotate 8
+    compress
+    missingok
+    notifempty
+    create 0640 root root
+}

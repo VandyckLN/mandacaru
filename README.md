@@ -210,6 +210,26 @@ misp_url = ""
 misp_verify_tls = true
 ```
 
+## Classificador de IA (em preparação)
+
+Um segundo juiz, além das regras: um modelo pequeno de árvores de decisão que roda **na própria máquina** (sem internet, sem custo, ~13 ms por arquivo) e dá uma nota a cada programa ELF e script novo nas pastas vigiadas. Guia completo, com exemplos: [docs/novidades-0.6.md](docs/novidades-0.6.md).
+
+Esta versão traz o motor completo, mas **ainda sem modelo instalado**: o modelo é treinado num ambiente isolado e entra numa próxima versão. Até lá, o Mandacaru funciona exatamente como antes.
+
+```toml
+[ml]
+enabled = true
+# mode = "shadow"   # off | shadow (só anota o que faria) | alert (alerta) | isolate (isola)
+```
+
+```bash
+mandacaru ml status              # modelos instalados, tipos aprovados e modo
+mandacaru ml avaliar ARQUIVO     # nota, faixa e motivos de um arquivo (não isola)
+sudo mandacaru ml sombra         # o que o modelo teria isolado no modo sombra
+```
+
+O modelo **nunca libera nada**: ele só acrescenta suspeita. Não anula regras, não mexe na lista de confiança e não tira arquivo da quarentena; liberar continua exigindo "Confio" com senha de administrador.
+
 ## Arquitetura
 
 ```
@@ -221,12 +241,13 @@ coletores (procmon | ebpf | fsmon) ──► fila ──► Engine ──► det
 - `detectors/behavior.py`: regras com janela de tempo e *cooldown* para não inundar o usuário.
 - `rules/yara/base.yar`: regras base.
 - `vuln/`: inventário dpkg, cliente OSV.dev com cache SQLite, cache da CISA KEV, CVSS 3.1 local e publicação dos achados no monitor.
+- `ml/`: classificador local (tipo pelo conteúdo, leitor de ELF, características, modelo em JSON estrito, motivos, decisão por faixas, comandos `ml`).
 - `telemetry/`: sanitização (LGPD), fila com aprovação, produtor ligado à quarentena, spool root ↔ `_mandacaru-net` e envio para MISP/Threat Hub.
 
 ## Testes e falsos positivos
 
 ```bash
-pytest -q          # 325 testes, com amostras inofensivas que imitam as técnicas
+pytest -q          # 408 testes (+1 de desempenho opcional), com amostras inofensivas que imitam as técnicas
 ```
 
 Varredura de cerca de 91 mil arquivos legítimos (stdlib do Python, dist-packages e `/usr/share`): **0 alertas HIGH/CRITICAL**. Ficaram 1 MEDIUM (documentação com `curl | bash`) e 1 LOW (bundle JS grande).

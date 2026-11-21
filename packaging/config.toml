@@ -48,3 +48,7 @@ hub_endpoint = ""              # ex.: "https://hub.example.invalid/v1/reports" (
 misp_enabled = false
 misp_url = ""                  # chave API lida apenas de MANDACARU_MISP_API_KEY (nunca no TOML)
 misp_verify_tls = true
+
+[ml]
+enabled = true
+# mode = "shadow"   # off | shadow | alert | isolate (o padrao vem do programa)

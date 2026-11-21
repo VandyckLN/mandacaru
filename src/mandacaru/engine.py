@@ -97,6 +97,9 @@ class Engine:
         results: dict[str, IsolateResult] = {}  # um isolate por caminho: os alertas do arquivo dividem o caso
         for a in found:
             p = a.evidence.get("path")
+            # alerta do classificador de IA so isola com ml_isolate (faixa, modo e portao decididos em ml.decision)
+            if a.rule.startswith("ml.") and a.evidence.get("ml_isolate") is not True:
+                continue
             if p and p not in results and a.severity >= self.quarantine_min_severity and self._watched(p):
                 results[p] = self.quarantine.isolate(p, a)
                 r = results[p]
@@ -109,6 +112,7 @@ class Engine:
         for a in found:
             r = results.get(a.evidence.get("path"))
             if r is None:
+                self._trust_ml(a)
                 continue
             if r.reason == "em_escrita":
                 self._writing.pop(a.evidence["path"], None)
@@ -129,6 +133,14 @@ class Engine:
             else:
                 a.evidence["quarantine"] = f"nao_isolado: {r.reason}"
                 a.summary += f" (NAO isolado: {r.reason})"
+
+    def _trust_ml(self, a: Alert) -> None:
+        """Fora do isolamento (modo alert), alerta ml.* de hash da lista de confianca vira INFO, como nas regras."""
+        sha = a.evidence.get("sha256")
+        trust = getattr(self.quarantine, "trust", None)
+        if a.rule.startswith("ml.") and sha and trust is not None and trust.contains(sha):
+            a.severity = Severity.INFO
+            a.evidence["trusted"] = True
 
     def _skip_file_event(self, ev: Event, path: str) -> bool:
         """Debounce do arquivo que parou em em_escrita: um IN_MODIFY por bloco de um download grande refaria a
