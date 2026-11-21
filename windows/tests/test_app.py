@@ -87,3 +87,34 @@ def test_stop_scan_is_interruptible(app, tmp_path, scanner, ps_text):
     win.start_scan([d]); win.stop_scan()
     loop.exec()
     assert box and not box[0].completed
+
+
+class BoomScanner:
+    def is_excluded(self, _):
+        return False
+
+    def scan_file(self, _):
+        raise RuntimeError("falha inesperada")
+
+
+def test_scanner_exception_releases_window(app, tmp_path, ps_text):
+    d = tmp_path / "alvo"; d.mkdir(); (d / "a.ps1").write_text(ps_text)
+    win = make_win(tmp_path, BoomScanner())
+    summary = wait_scan(win, [d])
+    assert not summary.completed
+    assert win.btn_folder.isEnabled() and not win.btn_stop.isEnabled()
+    assert win.msgs and "falhou" in win.msgs[0]
+    assert win._thread is None
+
+
+def test_findings_sorted_by_severity_when_out_of_order(app, tmp_path, scanner):
+    from pathlib import Path
+    from mandacaru.events import Alert, Severity
+    from mandacaru_win.scan import Finding
+    win = make_win(tmp_path, scanner)
+    for name, sev in (("l", Severity.LOW), ("c", Severity.CRITICAL),
+                      ("m", Severity.MEDIUM), ("c2", Severity.CRITICAL)):
+        p = Path(name)
+        win._on_found(Finding(p, "0" * 64, sev, [Alert("r", sev, "x")]))
+    order = [win.tree.topLevelItem(i).text(1) for i in range(4)]
+    assert order == ["c", "c2", "m", "l"]

@@ -160,6 +160,7 @@ class MainWindow(QMainWindow):
         t.progress.connect(self._on_progress)
         t.found.connect(self._on_found)
         t.done.connect(self._on_done)
+        t.failed.connect(self._on_failed)
         self._thread = t
         t.start()
 
@@ -189,19 +190,16 @@ class MainWindow(QMainWindow):
         for a in f.alerts:
             mitre = f" ({', '.join(a.mitre)})" if a.mitre else ""
             item.addChild(QTreeWidgetItem(["", "", a.summary + mitre]))
-        self.tree.addTopLevelItem(item)
+        # Insere já na posição certa (severidade decrescente, estável).
+        idx = self.tree.topLevelItemCount()
+        sev = int(f.severity)
+        while idx > 0 and self.tree.topLevelItem(idx - 1).data(
+                0, Qt.ItemDataRole.UserRole) < sev:
+            idx -= 1
+        self.tree.insertTopLevelItem(idx, item)
         self._items[f.path] = item
         self.tree.setItemWidget(item, 3, self._actions_widget(f.path))
-        self._sort_tree()
         self._update_count()
-
-    def _sort_tree(self) -> None:
-        items = [self.tree.takeTopLevelItem(0) for _ in range(self.tree.topLevelItemCount())]
-        items.sort(key=lambda it: -it.data(0, Qt.ItemDataRole.UserRole))
-        for it in items:
-            self.tree.addTopLevelItem(it)
-            path = Path(it.text(1))
-            self.tree.setItemWidget(it, 3, self._actions_widget(path))
 
     def _actions_widget(self, path: Path) -> QWidget:
         w = QWidget()
@@ -232,6 +230,17 @@ class MainWindow(QMainWindow):
         self.progress.setValue(summary.files if summary.completed else self.progress.value())
         self.statusBar().showMessage("Concluída" if summary.completed else "Interrompida")
         self.scan_finished.emit(summary)
+
+    def _on_failed(self, msg: str) -> None:
+        t, self._thread = self._thread, None
+        if t is not None:
+            t.wait()
+            t.deleteLater()
+        self._set_scanning(False)
+        self.statusBar().showMessage("Falhou")
+        self.notify(f"A varredura falhou: {msg}")
+        self.scan_finished.emit(ScanSummary(0.0, [], self._files, len(self.findings),
+                                            0.0, False))
 
     def closeEvent(self, e) -> None:
         if self._thread is not None:

@@ -12,6 +12,7 @@ class ScanThread(QThread):
     progress = Signal(object, int, int)
     found = Signal(object)
     done = Signal(object)
+    failed = Signal(str)
 
     def __init__(self, paths: list[Path], scanner, trusted: set[str]):
         super().__init__()
@@ -24,10 +25,14 @@ class ScanThread(QThread):
         self._stop = True
 
     def run(self) -> None:
-        summary = scan_paths(
-            self._paths, self._scanner, self._trusted,
-            on_progress=lambda p, i, n: self.progress.emit(p, i, n),
-            on_finding=lambda f: self.found.emit(f),
-            should_stop=lambda: self._stop,
-        )
+        try:
+            summary = scan_paths(
+                self._paths, self._scanner, self._trusted,
+                on_progress=lambda p, i, n: self.progress.emit(p, i, n),
+                on_finding=lambda f: self.found.emit(f),
+                should_stop=lambda: self._stop,
+            )
+        except Exception as e:  # noqa: BLE001 - qualquer falha deve liberar a janela
+            self.failed.emit(f"{type(e).__name__}: {e}")
+            return
         self.done.emit(summary)
