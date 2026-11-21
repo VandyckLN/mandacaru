@@ -5,7 +5,6 @@ on:
     paths: ["windows/**", "src/mandacaru/**", ".github/workflows/windows.yml"]
   push:
     branches: [main]
-    paths: ["windows/**", "src/mandacaru/**", ".github/workflows/windows.yml"]
     tags: ["v*"]
 
 permissions:
@@ -44,7 +43,15 @@ jobs:
           if ($p.ExitCode -ne 0) { throw "autoteste falhou (codigo $($p.ExitCode))" }
       - name: Instalador (Inno Setup)
         working-directory: windows
-        run: iscc /DMyAppVersion=${{ steps.ver.outputs.version }} installer.iss
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+            $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          }
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe nao encontrado" }
+          & $iscc "/DMyAppVersion=${{ steps.ver.outputs.version }}" installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "iscc falhou ($LASTEXITCODE)" }
       - uses: actions/upload-artifact@v4
         with:
           name: windows-installer
@@ -55,6 +62,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 150
     permissions:
       contents: write
     env:
@@ -67,9 +75,9 @@ jobs:
           path: installer
       - name: Esperar o release criado pelo release.yml
         run: |
-          for i in $(seq 1 60); do
+          for i in $(seq 1 240); do
             gh release view "$GITHUB_REF_NAME" && exit 0
-            echo "release ainda nao existe ($i/60)"; sleep 30
+            echo "release ainda nao existe ($i/240)"; sleep 30
           done
-          echo "release $GITHUB_REF_NAME nao apareceu"; exit 1
+          echo "o release $GITHUB_REF_NAME nao apareceu a tempo (2 h); o release.yml pode estar aguardando aprovacao do ambiente pypi ou falhou"; exit 1
       - run: gh release upload "$GITHUB_REF_NAME" installer/*.exe --clobber
