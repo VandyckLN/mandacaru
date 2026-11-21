@@ -118,3 +118,67 @@ def test_findings_sorted_by_severity_when_out_of_order(app, tmp_path, scanner):
         win._on_found(Finding(p, "0" * 64, sev, [Alert("r", sev, "x")]))
     order = [win.tree.topLevelItem(i).text(1) for i in range(4)]
     assert order == ["c", "c2", "m", "l"]
+
+
+def test_restore_and_delete_from_quarantine_tab(app, tmp_path, scanner, ps_text):
+    from mandacaru_win.quarantine import Quarantine
+    d = tmp_path / "alvo"; d.mkdir(); f = d / "a.ps1"; f.write_text(ps_text); g = d / "b.ps1"; g.write_text(ps_text)
+    win = make_win(tmp_path, scanner)
+    wait_scan(win, [d]); win.quarantine_finding(f); win.quarantine_finding(g)
+    q = Quarantine(tmp_path / "dados" / "quarantine"); ids = {i["caminho_original"]: i["id"] for i in q.items()}
+    assert win.tbl_quarantine.rowCount() == 2
+    win.restore_item(ids[str(f)]); assert f.read_text() == ps_text
+    win.delete_item(ids[str(g)]); assert q.items() == [] and not g.exists()
+    assert win.tbl_quarantine.rowCount() == 0
+
+
+def test_declined_confirmation_changes_nothing(app, tmp_path, scanner, ps_text):
+    from mandacaru_win.quarantine import Quarantine
+    d = tmp_path / "alvo"; d.mkdir(); f = d / "a.ps1"; f.write_text(ps_text)
+    win = make_win(tmp_path, scanner); win.confirm = lambda _: False
+    wait_scan(win, [d]); win.quarantine_finding(f)
+    assert f.exists() and f in win.findings
+    win.confirm = lambda _: True; win.quarantine_finding(f)
+    qid = Quarantine(tmp_path / "dados" / "quarantine").items()[0]["id"]
+    win.confirm = lambda _: False
+    win.restore_item(qid); win.delete_item(qid)
+    assert not f.exists() and len(Quarantine(tmp_path / "dados" / "quarantine").items()) == 1
+
+
+def test_quarantine_error_is_notified(app, tmp_path, scanner):
+    win = make_win(tmp_path, scanner)
+    win.restore_item("0" * 32); win.delete_item("zzz")
+    assert len(win.msgs) == 2
+
+
+def test_remove_trusted_lets_finding_return(app, tmp_path, scanner, ps_text):
+    d = tmp_path / "alvo"; d.mkdir(); f = d / "a.ps1"; f.write_text(ps_text)
+    win = make_win(tmp_path, scanner); wait_scan(win, [d]); h = win.findings[f].sha256
+    win.ignore_finding(f)
+    assert win.tbl_trust.rowCount() == 1
+    win.remove_trusted(h)
+    assert win.tbl_trust.rowCount() == 0
+    assert wait_scan(win, [d]).findings == 1
+
+
+def test_history_tab_lists_scans(app, tmp_path, scanner, ps_text):
+    d = tmp_path / "alvo"; d.mkdir(); (d / "a.ps1").write_text(ps_text)
+    win = make_win(tmp_path, scanner)
+    wait_scan(win, [d])
+    assert win.tbl_history.rowCount() == 1
+    assert win.tbl_history.item(0, 3).text() == "1"
+    assert win.tbl_history.item(0, 5).text() == "Concluída"
+
+
+def test_trust_tab_without_trust_file(app, tmp_path, scanner, monkeypatch):
+    dados = tmp_path / "dados"; dados.mkdir()
+    (dados / "trust.json").write_text("[]")
+
+    def boom(self):
+        raise PermissionError("bloqueado")
+    monkeypatch.setattr(TrustList, "_load", boom)
+    win = make_win(tmp_path, scanner)
+    monkeypatch.undo()
+    win.refresh_tabs(); win.remove_trusted("x" * 64)
+    assert win.tbl_trust.rowCount() == 0 and "bloqueado" in win.lbl_trust.text()
+    assert (dados / "trust.json").read_text() == "[]"

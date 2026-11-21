@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
@@ -10,7 +11,7 @@ from PySide6.QtCore import Qt, QStandardPaths, QUrl, Signal
 from PySide6.QtGui import QBrush, QColor, QDesktopServices, QFontMetrics
 from PySide6.QtWidgets import (
     QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QProgressBar,
-    QPushButton, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QPushButton, QTableWidget, QTableWidgetItem, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from mandacaru.events import Severity
@@ -112,9 +113,102 @@ class MainWindow(QMainWindow):
 
         tabs = QTabWidget()
         tabs.addTab(scan_tab, "Varredura")
+        self.tbl_quarantine = self._make_table(
+            ["Data", "Caminho original", "Severidade", "Regras", "Ações"])
+        tabs.addTab(self.tbl_quarantine, "Quarentena")
+        trust_tab = QWidget()
+        tl = QVBoxLayout(trust_tab)
+        self.lbl_trust = QLabel("")
+        self.lbl_trust.setWordWrap(True)
+        self.lbl_trust.setVisible(False)
+        self.tbl_trust = self._make_table(
+            ["Caminho quando confiado", "Data", "SHA-256", "Ações"])
+        tl.addWidget(self.lbl_trust)
+        tl.addWidget(self.tbl_trust, 1)
+        tabs.addTab(trust_tab, "Confiáveis")
+        self.tbl_history = self._make_table(
+            ["Data", "Pastas", "Arquivos", "Achados", "Duração", "Situação"])
+        tabs.addTab(self.tbl_history, "Histórico")
         self.setCentralWidget(tabs)
+        self.refresh_tabs()
         self.statusBar().showMessage("Pronto")
         self._set_scanning(False)
+
+    @staticmethod
+    def _make_table(headers: list[str]) -> QTableWidget:
+        t = QTableWidget(0, len(headers))
+        t.setHorizontalHeaderLabels(headers)
+        t.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        t.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        t.verticalHeader().setVisible(False)
+        t.horizontalHeader().setStretchLastSection(True)
+        return t
+
+    @staticmethod
+    def _fmt_date(value) -> str:
+        try:
+            d = (datetime.fromtimestamp(value) if isinstance(value, (int, float))
+                 else datetime.fromisoformat(str(value)))
+            return d.strftime("%d/%m/%Y %H:%M")
+        except (ValueError, OverflowError, OSError):
+            return str(value)
+
+    @staticmethod
+    def _button_cell(table: QTableWidget, row: int, col: int,
+                     buttons: list[tuple[str, Callable[[], None]]]) -> None:
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(2, 0, 2, 0)
+        for label, fn in buttons:
+            b = QPushButton(label)
+            b.clicked.connect(lambda _=False, fn=fn: fn())
+            h.addWidget(b)
+        table.setCellWidget(row, col, w)
+
+    def refresh_tabs(self) -> None:
+        """Reconstrói as tabelas pequenas de quarentena, confiáveis e histórico."""
+        items = self._quarantine.items()
+        t = self.tbl_quarantine
+        t.setRowCount(len(items))
+        for r, m in enumerate(items):
+            sev = m.get("severidade", "")
+            sev = SEV_LABEL.get(Severity[sev], sev) if sev in Severity.__members__ else sev
+            for c, v in enumerate((self._fmt_date(m["data"]), m["caminho_original"],
+                                   sev, ", ".join(m.get("regras", [])))):
+                t.setItem(r, c, QTableWidgetItem(v))
+            qid = m["id"]
+            self._button_cell(t, r, 4, [
+                ("Restaurar", lambda q=qid: self.restore_item(q)),
+                ("Apagar", lambda q=qid: self.delete_item(q))])
+
+        t = self.tbl_trust
+        if self._trust is None:
+            self.lbl_trust.setText(self._trust_error or "Lista de confiança indisponível.")
+            self.lbl_trust.setVisible(True)
+            entries = []
+        else:
+            self.lbl_trust.setVisible(False)
+            entries = self._trust.entries()
+        t.setRowCount(len(entries))
+        for r, e in enumerate(entries):
+            h = str(e["sha256"])
+            for c, v in enumerate((str(e.get("caminho_quando_confiado", "")),
+                                   self._fmt_date(e.get("data", "")), h[:12])):
+                t.setItem(r, c, QTableWidgetItem(v))
+            t.item(r, 2).setToolTip(h)
+            self._button_cell(t, r, 3, [("Remover", lambda x=h: self.remove_trusted(x))])
+
+        rows = self._history.recent(50)
+        t = self.tbl_history
+        t.setRowCount(len(rows))
+        for r, e in enumerate(rows):
+            paths = e.get("paths") or []
+            vals = (self._fmt_date(e.get("started", "")),
+                    ", ".join(str(p) for p in paths), str(e.get("files", 0)),
+                    str(e.get("findings", 0)), f"{float(e.get('duration', 0) or 0):.1f} s",
+                    "Concluída" if e.get("completed") else "Interrompida")
+            for c, v in enumerate(vals):
+                t.setItem(r, c, QTableWidgetItem(v))
 
     def _set_scanning(self, on: bool) -> None:
         for b in (self.btn_downloads, self.btn_desktop, self.btn_folder):
@@ -226,6 +320,7 @@ class MainWindow(QMainWindow):
         except OSError as e:
             self.notify(f"Não foi possível gravar o histórico: {e}")
         self._set_scanning(False)
+        self.refresh_tabs()
         self.progress.setRange(0, max(summary.files, 1))
         self.progress.setValue(summary.files if summary.completed else self.progress.value())
         self.statusBar().showMessage("Concluída" if summary.completed else "Interrompida")
@@ -277,6 +372,7 @@ class MainWindow(QMainWindow):
             self.notify(f"Não foi possível salvar a lista de confiança: {e}")
             return
         self._remove_row(path)
+        self.refresh_tabs()
 
     def quarantine_finding(self, path: Path) -> None:
         f = self.findings.get(path)
@@ -290,3 +386,37 @@ class MainWindow(QMainWindow):
             self.notify(str(e))
             return
         self._remove_row(path)
+        self.refresh_tabs()
+
+    # ---------- ações das abas ----------
+    def restore_item(self, qid: str) -> None:
+        if not self.confirm("Este arquivo foi marcado como suspeito. Restaurar mesmo assim?"):
+            return
+        try:
+            dest = self._quarantine.restore(qid)
+        except QuarantineError as e:
+            self.notify(str(e))
+            return
+        self.statusBar().showMessage(f"Restaurado em {dest}")
+        self.refresh_tabs()
+
+    def delete_item(self, qid: str) -> None:
+        if not self.confirm("Apagar definitivamente?"):
+            return
+        try:
+            self._quarantine.delete(qid)
+        except QuarantineError as e:
+            self.notify(str(e))
+            return
+        self.refresh_tabs()
+
+    def remove_trusted(self, sha256: str) -> None:
+        if self._trust is None:
+            self.notify(self._trust_error or "Lista de confiança indisponível.")
+            return
+        try:
+            self._trust.remove(sha256)
+        except OSError as e:
+            self.notify(f"Não foi possível salvar a lista de confiança: {e}")
+            return
+        self.refresh_tabs()
