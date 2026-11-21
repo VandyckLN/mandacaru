@@ -352,3 +352,16 @@ def test_stop_scan_midway_keeps_progress(app, tmp_path, scanner):
     win._thread = None
     win._on_done(ScanSummary(0.0, [str(d)], 1, 0, 0.1, False))
     assert win.progress.maximum() == 3 and win.progress.value() == 1
+
+
+def test_app_icon_and_ico(app):
+    import struct
+    from pathlib import Path
+
+    from mandacaru_win.__main__ import app_icon
+
+    assert not app_icon().isNull()
+    data = (Path(__file__).parents[1] / "assets" / "mandacaru.ico").read_bytes()
+    _, kind, count = struct.unpack_from("<HHH", data)
+    sizes = {data[6 + 16 * i] or 256 for i in range(count)}
+    assert kind == 1 and {16, 32, 48, 256} <= sizes

@@ -6,9 +6,11 @@ import sys
 import tempfile
 import traceback
 from datetime import datetime
+from importlib import resources
 from pathlib import Path
 
 from PySide6.QtCore import QLockFile
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from mandacaru.events import Severity
@@ -67,11 +69,16 @@ def acquire_lock(directory: Path) -> QLockFile | None:
     return lock if lock.tryLock(0) else None
 
 
+def app_icon() -> QIcon:
+    return QIcon(str(resources.files("mandacaru_win") / "assets" / "mandacaru.png"))
+
+
 def main() -> int:
     if "--selftest" in sys.argv:
         return selftest()
     app = QApplication(sys.argv)
     app.setApplicationName("Mandacaru")
+    app.setWindowIcon(app_icon())
     data = data_dir()
     install_excepthook(data)
     lock = acquire_lock(data)

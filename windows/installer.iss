@@ -17,6 +17,7 @@ OutputDir=dist\installer
 OutputBaseFilename=Mandacaru-{#MyAppVersion}-setup
 LicenseFile=..\LICENSE
 UninstallDisplayIcon={app}\Mandacaru.exe
+SetupIconFile=assets\mandacaru.ico
 Compression=lzma2
 SolidCompression=yes
 
