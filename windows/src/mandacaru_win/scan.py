@@ -64,6 +64,23 @@ def _is_link(path: str) -> bool:
     return os.path.islink(path) or _isjunction(path)
 
 
+def _own_dirs() -> tuple[str, ...]:
+    """Pastas do próprio Mandacaru: as regras YARA contêm os textos que elas procuram e se acusariam."""
+    import sys
+
+    import mandacaru
+
+    dirs = [Path(mandacaru.__file__).parent, Path(__file__).parent]
+    if getattr(sys, "frozen", False):
+        dirs.append(Path(sys.executable).parent)
+    return tuple(os.path.normcase(os.path.abspath(d)) for d in dirs)
+
+
+def _is_own(path: str | os.PathLike, own: tuple[str, ...]) -> bool:
+    p = os.path.normcase(os.path.abspath(path))
+    return any(p == d or p.startswith(d + os.sep) for d in own)
+
+
 def list_files(
     paths: list[Path],
     scanner: StaticScanner,
@@ -72,9 +89,12 @@ def list_files(
 ) -> list[Path]:
     """Lista os arquivos a varrer. `should_stop` é checado a cada pasta."""
     stop = should_stop or (lambda: False)
+    own = _own_dirs()
     found: list[Path] = []
     for p in paths:
         root = Path(os.path.abspath(p))
+        if _is_own(root, own):
+            continue
         if root.is_file():
             found.append(root)
             continue
@@ -94,6 +114,7 @@ def list_files(
                 try:
                     if e.is_dir():
                         if (e.name not in SKIP_DIRS
+                                and not _is_own(e.path, own)
                                 and not scanner.is_excluded(Path(e.path))
                                 and not _is_link(e.path)):
                             subdirs.append(e.path)

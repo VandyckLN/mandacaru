@@ -1,4 +1,5 @@
 import sys
+from pathlib import Path
 
 import pytest
 from mandacaru_win.scan import (
@@ -133,3 +134,14 @@ def test_scan_file_exception_does_not_abort(tmp_path, scanner, ps_text, monkeypa
     monkeypatch.setattr(scanner, "scan_file", boom)
     summary, findings, _ = run([tmp_path], scanner)
     assert summary.completed and summary.files == 2 and len(findings) == 1
+
+
+def test_own_rules_are_not_flagged(tmp_path, scanner):
+    # o base.yar contém os textos que as regras procuram; varrer a pasta do app não pode gerar alarme falso
+    import mandacaru
+
+    pkg = Path(mandacaru.__file__).parent
+    assert list_files([pkg], scanner) == []
+    assert list_files([pkg / "rules" / "yara" / "base.yar"], scanner) == []
+    (tmp_path / "x.txt").write_text("ok")
+    assert list_files([tmp_path], scanner) == [tmp_path / "x.txt"]
