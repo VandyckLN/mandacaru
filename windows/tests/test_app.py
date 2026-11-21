@@ -108,15 +108,15 @@ def test_stop_scan_is_interruptible(app, tmp_path, scanner, ps_text):
 
 class BoomScanner:
     def is_excluded(self, _):
-        return False
+        raise RuntimeError("falha inesperada")
 
     def scan_file(self, _):
-        raise RuntimeError("falha inesperada")
+        return []
 
 
 def test_scanner_exception_releases_window(app, tmp_path, ps_text):
     d = tmp_path / "alvo"
-    d.mkdir()
+    (d / "sub").mkdir(parents=True)
     (d / "a.ps1").write_text(ps_text)
     win = make_win(tmp_path, BoomScanner())
     summary = wait_scan(win, [d])
@@ -242,3 +242,99 @@ def test_table_resize_modes(app, tmp_path, scanner):
         assert hh.sectionResizeMode(tbl.columnCount() - 1) == C
     assert win.tbl_quarantine.horizontalHeader().sectionResizeMode(4) == C
     assert win.tbl_trust.horizontalHeader().sectionResizeMode(3) == C
+
+
+def _scan_one(tmp_path, scanner, ps_text, name="a.ps1"):
+    d = tmp_path / "alvo"
+    d.mkdir(exist_ok=True)
+    f = d / name
+    f.write_text(ps_text)
+    return d, f
+
+
+def test_malformed_data_does_not_prevent_window_from_opening(app, tmp_path, scanner):
+    dados = tmp_path / "dados"
+    (dados / "quarantine").mkdir(parents=True)
+    (dados / "quarantine" / ("a" * 32 + ".json")).write_text(
+        '{"caminho_original": "c", "sha256": "x", "data": "d", "regras": [1]}')
+    (dados / "history.jsonl").write_text(
+        '{"started": 1, "paths": [1], "files": 1, "findings": 0, "duration": "abc"}\n'
+        '{"started": 1, "paths": ["C:/d"], "files": 1, "findings": 0, "duration": 1}\n')
+    (dados / "trust.json").write_text('[{"sha256": 5}, {"sha256": "ab"}]')
+    win = make_win(tmp_path, scanner)
+    assert win.tbl_quarantine.rowCount() == 1
+    assert win.tbl_history.rowCount() == 1 and win.tbl_trust.rowCount() == 1
+
+
+def test_ignore_removes_all_rows_with_same_hash(app, tmp_path, scanner, ps_text):
+    d, f = _scan_one(tmp_path, scanner, ps_text)
+    g = d / "copia.ps1"
+    g.write_text(ps_text)
+    win = make_win(tmp_path, scanner)
+    wait_scan(win, [d])
+    assert len(win.findings) == 2
+    win.ignore_finding(f)
+    assert win.findings == {} and win.tree.topLevelItemCount() == 0
+
+
+def test_found_same_path_twice_keeps_single_row(app, tmp_path, scanner, ps_text):
+    d, f = _scan_one(tmp_path, scanner, ps_text)
+    win = make_win(tmp_path, scanner)
+    wait_scan(win, [d])
+    win._on_found(win.findings[f])
+    assert win.tree.topLevelItemCount() == 1
+
+
+def test_open_location_uses_absolute_explorer(app, tmp_path, scanner, monkeypatch):
+    import types
+
+    from mandacaru_win import app as appmod
+    win = make_win(tmp_path, scanner)
+    cmds = []
+    monkeypatch.setattr(appmod, "sys", types.SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(appmod.subprocess, "Popen", lambda cmd: cmds.append(cmd))
+    monkeypatch.setenv("WINDIR", "C:\\Win")
+    win.open_location(tmp_path / "a b.ps1")
+    assert cmds[0][0].endswith("explorer.exe") and "Win" in cmds[0][0]
+    assert cmds[0][1] == "/select," and cmds[0][2] == str(tmp_path / "a b.ps1")
+    monkeypatch.setattr(appmod.subprocess, "Popen",
+                        lambda cmd: (_ for _ in ()).throw(OSError("x")))
+    win.open_location(tmp_path / "a.ps1")
+    assert win.msgs
+
+
+def test_close_during_scan_is_fast(app, tmp_path, scanner):
+    import time
+    for i in range(300):
+        d = tmp_path / "alvo" / f"d{i}"
+        d.mkdir(parents=True)
+        (d / "a.txt").write_text("x")
+    win = make_win(tmp_path, scanner)
+    win.start_scan([tmp_path / "alvo"])
+    t0 = time.monotonic()
+    win.close()
+    assert time.monotonic() - t0 < 5
+
+
+def test_restore_tampered_bin_notifies_and_keeps_row(app, tmp_path, scanner, ps_text):
+    d, f = _scan_one(tmp_path, scanner, ps_text)
+    win = make_win(tmp_path, scanner)
+    wait_scan(win, [d])
+    win.quarantine_finding(f)
+    (binp,) = (tmp_path / "dados" / "quarantine").glob("*.bin")
+    binp.write_bytes(b"zzz")
+    win.restore_item(binp.stem)
+    assert win.msgs and win.tbl_quarantine.rowCount() == 1 and not f.exists()
+
+
+def test_stop_scan_midway_keeps_progress(app, tmp_path, scanner):
+    d = tmp_path / "alvo"
+    d.mkdir()
+    for i in range(3):
+        (d / f"{i}.txt").write_text("x")
+    win = make_win(tmp_path, scanner)
+    win._on_progress(d / "0.txt", 1, 3)
+    from mandacaru_win.scan import ScanSummary
+    win._thread = None
+    win._on_done(ScanSummary(0.0, [str(d)], 1, 0, 0.1, False))
+    assert win.progress.maximum() == 3 and win.progress.value() == 1

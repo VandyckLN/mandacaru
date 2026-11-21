@@ -1,3 +1,6 @@
+import sys
+
+import pytest
 from mandacaru_win.scan import (
     is_cloud_only,
     list_files,
@@ -59,7 +62,10 @@ def test_skips_dev_dirs_and_dir_symlinks(tmp_path, scanner, ps_text):
     outside = tmp_path.parent / (tmp_path.name + "_fora")
     outside.mkdir()
     (outside / "b.ps1").write_text(ps_text)
-    (tmp_path / "link").symlink_to(outside, target_is_directory=True)
+    try:
+        (tmp_path / "link").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("sem permissão para criar symlink")
     assert list_files([tmp_path], scanner) == []
 
 
@@ -79,3 +85,51 @@ def test_cloud_only_attributes():
     assert is_cloud_only(St())
     St.st_file_attributes = 0x20  # ARCHIVE
     assert not is_cloud_only(St())
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="junção só existe no Windows")
+def test_directory_junction_is_not_followed(tmp_path, scanner, ps_text):
+    import _winapi
+
+    outside = tmp_path.parent / (tmp_path.name + "_fora")
+    outside.mkdir()
+    (outside / "b.ps1").write_text(ps_text)
+    _winapi.CreateJunction(str(outside), str(tmp_path / "juncao"))
+    assert list_files([tmp_path], scanner) == []
+
+
+def test_stop_during_listing_is_fast_and_incomplete(tmp_path, scanner):
+    for i in range(20):
+        d = tmp_path / f"d{i}"
+        d.mkdir()
+        (d / "a.txt").write_text("x")
+    visited = []
+    summary = scan_paths([tmp_path], scanner, frozenset(), lambda *_: None, lambda f: None,
+                         lambda: bool(visited) , on_listing=visited.append)
+    assert not summary.completed and summary.files == 0 and len(visited) == 1
+
+
+def test_list_files_reports_listing_progress(tmp_path, scanner):
+    (tmp_path / "s").mkdir()
+    (tmp_path / "a.txt").write_text("x")
+    (tmp_path / "s" / "b.txt").write_text("x")
+    counts = []
+    assert len(list_files([tmp_path], scanner, on_listing=counts.append)) == 2
+    assert counts[-1] == 2
+
+
+def test_scan_file_exception_does_not_abort(tmp_path, scanner, ps_text, monkeypatch):
+    (tmp_path / "a.ps1").write_text(ps_text)
+    (tmp_path / "b.ps1").write_text(ps_text)
+    real = scanner.scan_file
+    calls = []
+
+    def boom(path):
+        calls.append(path)
+        if len(calls) == 1:
+            raise RuntimeError("falha")
+        return real(path)
+
+    monkeypatch.setattr(scanner, "scan_file", boom)
+    summary, findings, _ = run([tmp_path], scanner)
+    assert summary.completed and summary.files == 2 and len(findings) == 1

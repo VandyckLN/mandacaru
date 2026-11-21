@@ -1,6 +1,7 @@
 """Janela principal: aba Varredura."""
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from datetime import datetime
@@ -43,12 +44,12 @@ SEV_COLOR = {
 }
 
 
-def _default_confirm(text: str) -> bool:
-    return QMessageBox.question(None, "Mandacaru", text) == QMessageBox.StandardButton.Yes
+def _default_confirm(text: str, parent=None) -> bool:
+    return QMessageBox.question(parent, "Mandacaru", text) == QMessageBox.StandardButton.Yes
 
 
-def _default_notify(text: str) -> None:
-    QMessageBox.warning(None, "Mandacaru", text)
+def _default_notify(text: str, parent=None) -> None:
+    QMessageBox.warning(parent, "Mandacaru", text)
 
 
 class MainWindow(QMainWindow):
@@ -59,8 +60,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Mandacaru")
         self.resize(1040, 560)
         self.setAcceptDrops(True)
-        self.confirm: Callable[[str], bool] = _default_confirm
-        self.notify: Callable[[str], None] = _default_notify
+        self.confirm: Callable[[str], bool] = lambda t: _default_confirm(t, self)
+        self.notify: Callable[[str], None] = lambda t: _default_notify(t, self)
         self.findings: dict[Path, Finding] = {}
         self._items: dict[Path, QTreeWidgetItem] = {}
         self._thread: ScanThread | None = None
@@ -197,17 +198,26 @@ class MainWindow(QMainWindow):
         t.setRowCount(rows)
 
     def refresh_tabs(self) -> None:
-        """Reconstrói as tabelas pequenas de quarentena, confiáveis e histórico."""
-        items = self._quarantine.items()
+        """Reconstrói as tabelas pequenas de quarentena, confiáveis e histórico.
+
+        Cada linha é montada em try/except: dado malformado pula a linha em vez
+        de impedir a janela de abrir.
+        """
+        qrows = []
+        for m in self._quarantine.items():
+            try:
+                sev = m.get("severidade", "")
+                sev = SEV_LABEL.get(Severity[sev], sev) if sev in Severity.__members__ else sev
+                vals = (self._fmt_date(m["data"]), str(m["caminho_original"]), str(sev),
+                        ", ".join(str(r) for r in m.get("regras", [])))
+                qrows.append((vals, str(m["id"])))
+            except (TypeError, ValueError, KeyError):
+                continue
         t = self.tbl_quarantine
-        self._reset_table(t, len(items))
-        for r, m in enumerate(items):
-            sev = m.get("severidade", "")
-            sev = SEV_LABEL.get(Severity[sev], sev) if sev in Severity.__members__ else sev
-            for c, v in enumerate((self._fmt_date(m["data"]), m["caminho_original"],
-                                   sev, ", ".join(m.get("regras", [])))):
+        self._reset_table(t, len(qrows))
+        for r, (vals, qid) in enumerate(qrows):
+            for c, v in enumerate(vals):
                 t.setItem(r, c, QTableWidgetItem(v))
-            qid = m["id"]
             self._button_cell(t, r, 4, [
                 ("Restaurar", lambda q=qid: self.restore_item(q)),
                 ("Apagar", lambda q=qid: self.delete_item(q))])
@@ -220,24 +230,35 @@ class MainWindow(QMainWindow):
         else:
             self.lbl_trust.setVisible(False)
             entries = self._trust.entries()
-        self._reset_table(t, len(entries))
-        for r, e in enumerate(entries):
-            h = str(e["sha256"])
-            for c, v in enumerate((str(e.get("caminho_quando_confiado", "")),
-                                   self._fmt_date(e.get("data", "")), h[:12])):
+        trows = []
+        for e in entries:
+            try:
+                h = str(e["sha256"])
+                trows.append(((str(e.get("caminho_quando_confiado", "")),
+                               self._fmt_date(e.get("data", "")), h[:12]), h))
+            except (TypeError, ValueError, KeyError):
+                continue
+        self._reset_table(t, len(trows))
+        for r, (vals, h) in enumerate(trows):
+            for c, v in enumerate(vals):
                 t.setItem(r, c, QTableWidgetItem(v))
             t.item(r, 2).setToolTip(h)
             self._button_cell(t, r, 3, [("Remover", lambda x=h: self.remove_trusted(x))])
 
-        rows = self._history.recent(50)
+        hrows = []
+        for e in self._history.recent(50):
+            try:
+                paths = e.get("paths") or []
+                hrows.append((self._fmt_date(e.get("started", "")),
+                              ", ".join(str(p) for p in paths), str(e.get("files", 0)),
+                              str(e.get("findings", 0)),
+                              f"{float(e.get('duration', 0) or 0):.1f} s",
+                              "Concluída" if e.get("completed") else "Interrompida"))
+            except (TypeError, ValueError):
+                continue
         t = self.tbl_history
-        self._reset_table(t, len(rows))
-        for r, e in enumerate(rows):
-            paths = e.get("paths") or []
-            vals = (self._fmt_date(e.get("started", "")),
-                    ", ".join(str(p) for p in paths), str(e.get("files", 0)),
-                    str(e.get("findings", 0)), f"{float(e.get('duration', 0) or 0):.1f} s",
-                    "Concluída" if e.get("completed") else "Interrompida")
+        self._reset_table(t, len(hrows))
+        for r, vals in enumerate(hrows):
             for c, v in enumerate(vals):
                 t.setItem(r, c, QTableWidgetItem(v))
 
@@ -258,7 +279,7 @@ class MainWindow(QMainWindow):
 
     # ---------- arrastar e soltar ----------
     def dragEnterEvent(self, e) -> None:
-        if e.mimeData().hasUrls():
+        if self._thread is None and e.mimeData().hasUrls():
             e.acceptProposedAction()
 
     def dropEvent(self, e) -> None:
@@ -282,6 +303,7 @@ class MainWindow(QMainWindow):
         self._set_scanning(True)
         trusted = self._trust.hashes() if self._trust else set()
         t = ScanThread([Path(p) for p in paths], self._scanner, trusted)
+        t.listing.connect(self._on_listing)
         t.progress.connect(self._on_progress)
         t.found.connect(self._on_found)
         t.done.connect(self._on_done)
@@ -293,6 +315,9 @@ class MainWindow(QMainWindow):
         if self._thread is not None:
             self._thread.stop()
             self.statusBar().showMessage("Interrompendo…")
+
+    def _on_listing(self, count: int) -> None:
+        self.lbl_file.setText(f"Listando… {count} arquivos")
 
     def _on_progress(self, path: Path, i: int, total: int) -> None:
         self._files = i
@@ -307,6 +332,8 @@ class MainWindow(QMainWindow):
         self.lbl_count.setText(f"{self._files} arquivos · {len(self.findings)} achados")
 
     def _on_found(self, f: Finding) -> None:
+        if f.path in self._items:
+            self._remove_row(f.path)
         self.findings[f.path] = f
         item = QTreeWidgetItem([SEV_LABEL.get(f.severity, str(f.severity)),
                                 str(f.path), f.alerts[0].summary if f.alerts else ""])
@@ -352,8 +379,12 @@ class MainWindow(QMainWindow):
             self.notify(f"Não foi possível gravar o histórico: {e}")
         self._set_scanning(False)
         self.refresh_tabs()
-        self.progress.setRange(0, max(summary.files, 1))
-        self.progress.setValue(summary.files if summary.completed else self.progress.value())
+        if summary.completed:
+            self.progress.setRange(0, max(summary.files, 1))
+            self.progress.setValue(summary.files)
+        elif self.progress.maximum() == 0:  # parou ainda na listagem
+            self.progress.setRange(0, 1)
+            self.progress.setValue(0)
         self.statusBar().showMessage("Concluída" if summary.completed else "Interrompida")
         self.scan_finished.emit(summary)
 
@@ -363,6 +394,9 @@ class MainWindow(QMainWindow):
             t.wait()
             t.deleteLater()
         self._set_scanning(False)
+        if self.progress.maximum() == 0:
+            self.progress.setRange(0, 1)
+            self.progress.setValue(0)
         self.statusBar().showMessage("Falhou")
         self.notify(f"A varredura falhou: {msg}")
         self.scan_finished.emit(ScanSummary(0.0, [], self._files, len(self.findings),
@@ -386,7 +420,11 @@ class MainWindow(QMainWindow):
 
     def open_location(self, path: Path) -> None:
         if sys.platform == "win32":
-            subprocess.Popen(f'explorer /select,"{path}"')
+            explorer = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "explorer.exe")
+            try:
+                subprocess.Popen([explorer, "/select,", str(path)])
+            except OSError as e:
+                self.notify(f"Não foi possível abrir o Explorer: {e}")
         else:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent)))
 
@@ -402,7 +440,8 @@ class MainWindow(QMainWindow):
         except OSError as e:
             self.notify(f"Não foi possível salvar a lista de confiança: {e}")
             return
-        self._remove_row(path)
+        for p in [p for p, x in self.findings.items() if x.sha256 == f.sha256]:
+            self._remove_row(p)  # mesmo conteúdo em outros caminhos também some
         self.refresh_tabs()
 
     def quarantine_finding(self, path: Path) -> None:

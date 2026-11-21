@@ -64,7 +64,14 @@ def _is_link(path: str) -> bool:
     return os.path.islink(path) or _isjunction(path)
 
 
-def list_files(paths: list[Path], scanner: StaticScanner) -> list[Path]:
+def list_files(
+    paths: list[Path],
+    scanner: StaticScanner,
+    should_stop: Callable[[], bool] | None = None,
+    on_listing: Callable[[int], None] | None = None,
+) -> list[Path]:
+    """Lista os arquivos a varrer. `should_stop` é checado a cada pasta."""
+    stop = should_stop or (lambda: False)
     found: list[Path] = []
     for p in paths:
         root = Path(os.path.abspath(p))
@@ -73,42 +80,57 @@ def list_files(paths: list[Path], scanner: StaticScanner) -> list[Path]:
             continue
         if not root.is_dir():
             continue
-        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-            dirnames[:] = [
-                d for d in dirnames
-                if d not in SKIP_DIRS
-                and not scanner.is_excluded(Path(dirpath) / d)
-                and not _is_link(os.path.join(dirpath, d))
-            ]
-            for name in filenames:
-                f = Path(dirpath) / name
+        stack = [str(root)]
+        while stack:
+            if stop():
+                return list(dict.fromkeys(found))
+            current = stack.pop()
+            try:
+                entries = list(os.scandir(current))
+            except OSError:
+                continue
+            subdirs: list[str] = []
+            for e in entries:
                 try:
-                    if is_cloud_only(os.stat(f)):
+                    if e.is_dir():
+                        if (e.name not in SKIP_DIRS
+                                and not scanner.is_excluded(Path(e.path))
+                                and not _is_link(e.path)):
+                            subdirs.append(e.path)
+                        continue
+                    if is_cloud_only(e.stat()):
                         continue
                 except OSError:
                     continue
-                found.append(f)
+                found.append(Path(e.path))
+            stack.extend(reversed(subdirs))
+            if on_listing is not None:
+                on_listing(len(found))
     return list(dict.fromkeys(found))
 
 
 def scan_paths(
     paths: list[Path],
     scanner: StaticScanner,
-    trusted: set[str],
+    trusted: set[str] | frozenset[str],
     on_progress: Callable[[Path, int, int], None],
     on_finding: Callable[[Finding], None],
     should_stop: Callable[[], bool],
+    on_listing: Callable[[int], None] | None = None,
 ) -> ScanSummary:
     started = time.time()
-    files = list_files(paths, scanner)
+    files = list_files(paths, scanner, should_stop, on_listing)
     total = len(files)
     scanned = findings = 0
-    completed = True
-    for i, f in enumerate(files, 1):
+    completed = not should_stop()  # parado durante a listagem
+    for i, f in enumerate(files if completed else [], 1):
         if should_stop():
             completed = False
             break
-        alerts = [a for a in scanner.scan_file(f) if a.severity > Severity.INFO]
+        try:
+            alerts = [a for a in scanner.scan_file(f) if a.severity > Severity.INFO]
+        except Exception:  # noqa: BLE001 - um arquivo problemático não derruba a varredura
+            alerts = []
         scanned += 1
         on_progress(f, i, total)
         if not alerts:

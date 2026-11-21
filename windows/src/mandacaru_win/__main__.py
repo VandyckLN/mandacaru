@@ -4,9 +4,12 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import traceback
+from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QLockFile
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from mandacaru.events import Severity
 from mandacaru_win.app import MainWindow
@@ -40,12 +43,42 @@ def selftest() -> int:
     return code
 
 
+def log_exception(log_dir: Path, exc_type, exc, tb) -> None:
+    """Grava a exceção em erros.log e avisa o usuário (o exe não tem console)."""
+    try:
+        with open(Path(log_dir) / "erros.log", "a", encoding="utf-8") as fh:
+            fh.write(f"--- {datetime.now().isoformat(timespec='seconds')} ---\n")
+            fh.write("".join(traceback.format_exception(exc_type, exc, tb)))
+    except OSError:
+        pass
+    if QApplication.instance() is not None:
+        QMessageBox.critical(
+            None, "Mandacaru",
+            f"Ocorreu um erro inesperado: {exc!r}\nDetalhes em {Path(log_dir) / 'erros.log'}")
+
+
+def install_excepthook(log_dir: Path) -> None:
+    sys.excepthook = lambda t, e, tb: log_exception(log_dir, t, e, tb)
+
+
+def acquire_lock(directory: Path) -> QLockFile | None:
+    """Trava de instância única; None se outra instância já está aberta."""
+    lock = QLockFile(str(Path(directory) / "mandacaru.lock"))
+    return lock if lock.tryLock(0) else None
+
+
 def main() -> int:
     if "--selftest" in sys.argv:
         return selftest()
     app = QApplication(sys.argv)
     app.setApplicationName("Mandacaru")
-    win = MainWindow(data_dir())
+    data = data_dir()
+    install_excepthook(data)
+    lock = acquire_lock(data)
+    if lock is None:
+        QMessageBox.information(None, "Mandacaru", "O Mandacaru já está em execução.")
+        return 0
+    win = MainWindow(data)
     win.show()
     return app.exec()
 
