@@ -9,6 +9,8 @@ AppName=Mandacaru
 AppVersion={#MyAppVersion}
 AppPublisher=Vandyck Diniz
 PrivilegesRequired=lowest
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 DefaultDirName={localappdata}\Programs\Mandacaru
 DisableProgramGroupPage=yes
 OutputDir=dist\installer
@@ -20,6 +22,9 @@ SolidCompression=yes
 
 [Languages]
 Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
+
+[InstallDelete]
+Type: filesandordirs; Name: "{app}\_internal"
 
 [Files]
 Source: "dist\Mandacaru\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion

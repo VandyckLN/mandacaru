@@ -12,7 +12,7 @@ um atalho no Menu Iniciar. Desinstalar não apaga `%LOCALAPPDATA%\Mandacaru`
 
 ## Montar (desenvolvedor)
 
-Na raiz do repositório, em um Python 3.10+ no Windows:
+Na raiz do repositório, em um Python 3.10–3.13 no Windows:
 
 ```powershell
 pip install . "./windows[dev]"

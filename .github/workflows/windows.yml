@@ -27,7 +27,7 @@ jobs:
         id: ver
         shell: bash
         run: |
-          version=$(python -c 'import re; print(re.search(r"__version__ = \"(.+?)\"", open("src/mandacaru/__init__.py").read()).group(1))')
+          version=$(python -c 'import re; print(re.search(r"__version__ = \"(.+?)\"", open("src/mandacaru/__init__.py", encoding="utf-8").read()).group(1))')
           echo "version=$version" >> "$GITHUB_OUTPUT"
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
             test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != versao $version"; exit 1; }
@@ -38,11 +38,13 @@ jobs:
       - name: Autoteste do executavel congelado
         working-directory: windows
         run: |
-          $p = Start-Process dist\Mandacaru\Mandacaru.exe -ArgumentList --selftest -Wait -PassThru
+          $p = Start-Process dist\Mandacaru\Mandacaru.exe -ArgumentList "--selftest" -Wait -PassThru
           if (Test-Path "$env:TEMP\mandacaru-selftest.txt") { Get-Content "$env:TEMP\mandacaru-selftest.txt" }
           if ($p.ExitCode -ne 0) { throw "autoteste falhou (codigo $($p.ExitCode))" }
       - name: Instalador (Inno Setup)
         working-directory: windows
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) {
@@ -50,7 +52,7 @@ jobs:
             $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
           }
           if (-not (Test-Path $iscc)) { throw "ISCC.exe nao encontrado" }
-          & $iscc "/DMyAppVersion=${{ steps.ver.outputs.version }}" installer.iss
+          & $iscc "/DMyAppVersion=$env:VERSION" installer.iss
           if ($LASTEXITCODE -ne 0) { throw "iscc falhou ($LASTEXITCODE)" }
       - uses: actions/upload-artifact@v4
         with:
