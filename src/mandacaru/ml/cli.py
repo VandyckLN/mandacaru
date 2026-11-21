@@ -17,8 +17,11 @@ def add_parser(sub) -> None:
     ms = p.add_subparsers(dest="mcmd", required=True)
     ms.add_parser("status", help="modelos instalados, tipos aprovados e modo")
     av = ms.add_parser("avaliar", help="nota, faixa e motivos de arquivos (nao isola)")
-    av.add_argument("arquivos", nargs="+")
-    av.add_argument("--json", dest="as_json", action="store_true", help="saida JSON")
+    av.add_argument("arquivos", nargs="*")
+    av.add_argument("--json", dest="as_json", action="store_true", help="saida JSON (uma lista)")
+    av.add_argument("--jsonl", action="store_true", help="um objeto JSON por linha (bom para listas grandes)")
+    av.add_argument("--stdin", action="store_true",
+                    help="le os caminhos da entrada padrao, separados por \\0 ou por linha (ex.: find -print0)")
     sb = ms.add_parser("sombra", help="resumo do que o modelo teria feito no modo sombra")
     sb.add_argument("--desde", default=None, help="so registros a partir desta data (AAAA-MM-DD)")
     sb.add_argument("--arquivo", default=None, help=f"registro do modo sombra (padrao: {SHADOW_LOG})")
@@ -44,13 +47,26 @@ def _status(args) -> int:
     return 0
 
 
+def _caminhos(args) -> list[str]:
+    caminhos = list(args.arquivos or [])
+    if getattr(args, "stdin", False):
+        bruto = sys.stdin.buffer.read() if hasattr(sys.stdin, "buffer") else sys.stdin.read().encode()
+        sep = b"\0" if b"\0" in bruto else b"\n"
+        caminhos += [c.decode("utf-8", "surrogateescape") for c in bruto.split(sep) if c.strip()]
+    return caminhos
+
+
 def _evaluate(args) -> int:
-    r = _load(args, "alert")
+    caminhos = _caminhos(args)
+    if not caminhos:
+        print("mandacaru: informe arquivos ou use --stdin", file=sys.stderr)
+        return 1
+    r = _load(args, "alert")                       # carrega modelos e indice do dpkg uma vez para a lista toda
     if r.classifier is None:
         print(f"mandacaru: classificador indisponivel: {r.problem}", file=sys.stderr)
         return 1
     rows, worst = [], 0
-    for arquivo in args.arquivos:
+    for arquivo in caminhos:
         try:
             with open(arquivo, "rb") as fh:
                 data = fh.read(MAX_BYTES)
@@ -71,6 +87,10 @@ def _evaluate(args) -> int:
                      "motivos": [m.text for m in v.reasons[:3]]})
     if args.as_json:
         print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return worst
+    if getattr(args, "jsonl", False):
+        for row in rows:
+            print(json.dumps(row, ensure_ascii=False))
         return worst
     for row in rows:
         if "erro" in row:

