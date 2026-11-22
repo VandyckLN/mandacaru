@@ -5,9 +5,11 @@ detecção do pacote `mandacaru-edr`.
 
 ## Instalar (usuário)
 
-Baixe `Mandacaru-<versão>-setup.exe` na página de Releases e execute. Não
-precisa de administrador: instala em `%LOCALAPPDATA%\Programs\Mandacaru` e cria
-um atalho no Menu Iniciar. Desinstalar não apaga `%LOCALAPPDATA%\Mandacaru`
+Passo a passo (inclusive a linha única para `Windows + R`) no
+[README principal](../README.md#windows-aplicativo-com-janela). Não precisa de
+administrador: instala em `%LOCALAPPDATA%\Programs\Mandacaru` e cria atalhos na
+Área de Trabalho e no Menu Iniciar. Instalação silenciosa:
+`Mandacaru-<versão>-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART`. Desinstalar não apaga `%LOCALAPPDATA%\Mandacaru`
 (histórico, quarentena e exceções).
 
 ## Montar (desenvolvedor)
@@ -20,7 +22,7 @@ cd windows
 python -m pytest -q
 pyinstaller mandacaru-win.spec --noconfirm   # gera dist\Mandacaru\
 dist\Mandacaru\Mandacaru.exe --selftest       # código de saída 0 = ok
-iscc /DMyAppVersion=0.5.0 installer.iss       # gera dist\installer\ (requer Inno Setup)
+iscc /DMyAppVersion=0.6.1 installer.iss       # gera dist\installer\ (requer Inno Setup)
 ```
 
 O CI (`.github/workflows/windows.yml`) faz o mesmo e, em tags `v*`, anexa o

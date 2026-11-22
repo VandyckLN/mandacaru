@@ -4,7 +4,7 @@
 
 Antivírus/EDR de código aberto (**GPLv3**) feito para a nova geração de ataques: malware que muda a cada geração (escrito ou reescrito por IA), phishing sob medida e abuso de agentes de IA e servidores MCP.
 
-> Status: **v0.4**, em Python, voltado para Linux. Detecta, registra e põe em quarentena os arquivos detectados (HIGH ou mais); ainda não bloqueia nem mata processos. Também roda no Windows, mas sem eBPF, serviço nem quarentena.
+> Status: **v0.6**, em Python. No Linux detecta, registra e põe em quarentena os arquivos detectados (HIGH ou mais); ainda não bloqueia nem mata processos. No **Windows** tem um aplicativo com janela para varrer pastas sob demanda, com quarentena do usuário (veja [Windows](#windows-aplicativo-com-janela)).
 
 ## Por que outro antivírus?
 
@@ -39,6 +39,29 @@ mandacaru scan ~/Downloads
 ```
 
 No PyPI o pacote se chama `mandacaru-edr`; o comando é `mandacaru`. Se o `pip` precisar compilar o YARA e reclamar de `Python.h`, instale `python3-dev libssl-dev`.
+
+### Windows (aplicativo com janela)
+
+Para Windows 10 e 11 (64 bits). Não precisa de administrador: instala só no seu usuário, cria atalhos com o ícone do cacto na Área de Trabalho e no Menu Iniciar e não substitui o antivírus do Windows (use como segunda opinião).
+
+**Jeito rápido.** Aperte `Windows + R`, cole a linha abaixo e aperte Enter. Ela baixa o instalador mais recente desta página de Releases, instala em silêncio e abre o Mandacaru. Rodar de novo atualiza.
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$r=irm https://api.github.com/repos/VandyckLN/mandacaru/releases/latest -Headers @{'User-Agent'='mdr'};$a=$r.assets|?{$_.name -like 'Mandacaru-*-setup.exe'}|select -f 1;$f=\"$env:TEMP\$($a.name)\";iwr $a.browser_download_url -OutFile $f -UseBasicParsing;Start-Process $f '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait;Start-Process \"$env:LOCALAPPDATA\Programs\Mandacaru\Mandacaru.exe\""
+```
+
+**Pelo navegador.**
+
+1. Abra a [última versão](https://github.com/VandyckLN/mandacaru/releases/latest) e baixe `Mandacaru-<versão>-setup.exe` em *Assets*.
+2. Dê dois cliques no arquivo baixado. Se aparecer "O Windows protegeu o computador", clique em **Mais informações** e depois em **Executar assim mesmo** (o instalador ainda não tem assinatura digital paga; só faça isso com o arquivo baixado daqui).
+3. Aceite a licença, deixe marcado **Criar um atalho na área de trabalho** e clique em **Instalar**.
+4. Abra pelo cacto de óculos na Área de Trabalho ou procurando "Mandacaru" no Menu Iniciar.
+
+**Usar.** Clique em **Downloads**, **Área de Trabalho** ou **Pasta…** (ou arraste uma pasta para a janela). Cada achado mostra a gravidade, o motivo e três botões: **Abrir local**, **Ignorar sempre** e **Quarentena**. Nada é movido ou apagado sem o seu clique; na aba **Quarentena** dá para restaurar ou apagar.
+
+**Desinstalar.** Configurações › Aplicativos › Aplicativos instalados › Mandacaru › Desinstalar. Os dados (quarentena, confiáveis e histórico) ficam em `%LOCALAPPDATA%\Mandacaru`.
+
+Também existe o `mandacaru.exe` de linha de comando, anexado ao mesmo release, para quem prefere o terminal (`mandacaru.exe scan "C:\pasta"`).
 
 ### Desenvolvimento
 
