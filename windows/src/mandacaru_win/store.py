@@ -99,10 +99,21 @@ def _num(v: object) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
+UPDATE_KIND = "atualizacao"
+
+
+def _valid_update(row: dict) -> bool:
+    progs = row.get("programas")
+    return (_num(row.get("started")) and _num(row.get("duration", 0)) and isinstance(progs, list)
+            and all(isinstance(p, dict) and all(isinstance(v, str) for v in p.values()) for p in progs))
+
+
 def _valid_summary(row: object) -> bool:
     """Linha do histórico com os tipos esperados; qualquer outra é ignorada."""
     if not isinstance(row, dict):
         return False
+    if row.get("tipo") == UPDATE_KIND:
+        return _valid_update(row)
     paths = row.get("paths", [])
     return (isinstance(paths, list) and all(isinstance(p, str) for p in paths)
             and all(_num(row.get(k, 0)) for k in ("files", "findings", "duration"))
@@ -119,6 +130,14 @@ class History:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with open(self._path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(dataclasses.asdict(summary), ensure_ascii=False) + "\n")
+
+    def append_update(self, started: float, duration: float, programas: list[dict[str, str]]) -> None:
+        """Registra uma rodada de "Atualizar selecionados" (id, nome, de, para, resultado, mensagem)."""
+        row = {"tipo": UPDATE_KIND, "started": started, "duration": duration,
+               "programas": [{k: str(v) for k, v in p.items()} for p in programas]}
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self._path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     def recent(self, n: int = 50) -> list[dict]:
         if not self._path.exists():

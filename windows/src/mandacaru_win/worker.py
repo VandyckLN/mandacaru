@@ -1,4 +1,4 @@
-"""Varredura em segundo plano (nunca na thread da interface)."""
+"""Varredura e atualizações em segundo plano (nunca na thread da interface)."""
 from __future__ import annotations
 
 import time
@@ -54,3 +54,56 @@ class ScanThread(QThread):
             self.failed.emit(f"{type(e).__name__}: {e}")
             return
         self.done.emit(summary)
+
+
+class UpdateCheckThread(QThread):
+    """Verificação rápida ou completa da aba Atualizações (winget/KEV/NVD)."""
+
+    progress = Signal(str, int, int)
+    done = Signal(object)    # CheckResult
+    failed = Signal(object)  # a exceção (WingetUnavailable muda a mensagem)
+
+    def __init__(self, service, complete: bool):
+        super().__init__()
+        self._service = service
+        self._complete = complete
+        self._stop = False
+
+    def stop(self) -> None:
+        self._stop = True
+
+    def run(self) -> None:
+        fn = self._service.complete if self._complete else self._service.quick
+        try:
+            result = fn(on_progress=lambda t, i, n: self.progress.emit(t, i, n), should_stop=lambda: self._stop)
+        except Exception as e:  # noqa: BLE001 - qualquer falha deve liberar a aba
+            self.failed.emit(e)
+            return
+        self.done.emit(result)
+
+
+class UpdateApplyThread(QThread):
+    """Roda `winget upgrade` para os programas marcados, um por vez."""
+
+    item_started = Signal(object)  # Program
+    item_done = Signal(object)     # ApplyResult
+    done = Signal(object)          # list[ApplyResult]
+    failed = Signal(object)
+
+    def __init__(self, service, programs: list):
+        super().__init__()
+        self._service = service
+        self._programs = programs
+        self._stop = False
+
+    def stop(self) -> None:
+        self._stop = True  # para antes do próximo programa (o atual termina)
+
+    def run(self) -> None:
+        try:
+            results = self._service.apply(self._programs, on_result=self.item_done.emit,
+                                          should_stop=lambda: self._stop, on_start=self.item_started.emit)
+        except Exception as e:  # noqa: BLE001
+            self.failed.emit(e)
+            return
+        self.done.emit(results)
