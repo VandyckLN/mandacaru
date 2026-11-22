@@ -1,12 +1,17 @@
 """Log append-only (JSON Lines) das decisoes da quarentena."""
 from __future__ import annotations
 
-import fcntl
 import json
 import os
-import pwd
 import time
 from collections.abc import Mapping
+
+# so existem no Unix: no Windows o modulo precisa importar para o `scan` funcionar
+try:
+    import fcntl
+    import pwd
+except ImportError:  # Windows
+    fcntl = pwd = None
 
 from mandacaru.events import safe_text
 
@@ -32,7 +37,8 @@ class DecisionLog:
         line = safe_text(json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8")
         fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o640)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            if fcntl is not None:
+                fcntl.flock(fd, fcntl.LOCK_EX)
             view = memoryview(line)
             while view:  # escrita curta nao pode cortar a linha
                 view = view[os.write(fd, view):]
@@ -48,6 +54,8 @@ def actor_from_env(env: Mapping[str, str] = os.environ) -> tuple[str, int | None
         uid = int(raw)
     except ValueError:
         return "sistema", None
+    if pwd is None:
+        return str(uid), uid
     try:
         return pwd.getpwuid(uid).pw_name, uid
     except KeyError:
