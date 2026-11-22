@@ -40,7 +40,10 @@ jobs:
           # os alertas saem no stderr: captura as duas saidas
           $saida = & $exe scan $mal 2>&1 | Out-String
           Write-Output $saida
+          # scan sai com 2 quando acha HIGH ou mais: aqui e o esperado
+          if ($LASTEXITCODE -ne 2) { throw "scan da amostra saiu com $LASTEXITCODE (esperado 2)" }
           if ($saida -notmatch "Py_Exec_Decoded_Payload") { throw "o exe nao detectou a amostra: regras ausentes?" }
+          exit 0
       - name: hash
         shell: pwsh
         run: |
