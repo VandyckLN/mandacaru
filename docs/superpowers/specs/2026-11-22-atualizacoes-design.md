@@ -1,6 +1,6 @@
 # Atualizações: programas desatualizados/vulneráveis e autoatualização do Mandacaru
 
-Data: 2026-11-22 · Estado: rascunho para aprovação
+Data: 2026-11-22 · Estado: aprovado (2026-11-22)
 
 ## Por quê
 
@@ -89,7 +89,9 @@ Histórico: cada atualização feita vai para o `History` existente.
   - Risco: cada pacote binário apt é ligado ao seu pacote-fonte (já feito em `inventory.parse_dpkg_status`) e herda a pior prioridade dos achados do OSV/KEV desse fonte. Rápida (padrão): usa o relatório do último `vuln scan` (`last-scan.json`) e o cache, sem rede; se não houver relatório, diz "rode com --completo para ver as falhas". `--completo`: roda o fluxo OSV/KEV atual na hora.
   - Saída: tabela com `*` nos pré-selecionados (prioridade `CRITICAL_ACTIVE`/`HIGH`); `--json` com objetos `{gerenciador, nome, instalada, disponivel, risco, cves, selecionado}`. Não gera alertas nem popups; código de saída 0 (nada pendente), 2 (há itens de risco alto), 1 (erro).
 - `mandacaru atualizacoes aplicar (--selecionados | <nome>...) [--sim]`: sem `--sim`, mostra a lista e pede confirmação (s/N). Pacotes apt, Snap e Flatpak de sistema vão pelo auxiliar com `pkexec` (abaixo); Flatpak de usuário roda `flatpak update --user -y <ids>` direto, sem senha.
-- Auxiliar `/usr/libexec/mandacaru/update-packages apt|snap|flatpak <nomes>`: revalida nomes (`^[a-z0-9][a-z0-9+.-]*$` para apt; formatos próprios para snap/flatpak), executa só `apt-get install --only-upgrade -y <nomes>`, `snap refresh <nomes>` ou `flatpak update --system -y <ids>`. Nova ação polkit `io.github.vandyckln.mandacaru.update`, `auth_admin` sempre, sem regra de grupo. Ver "Pergunta aberta" sobre rede.
+- Auxiliar `/usr/libexec/mandacaru/update-packages apt|snap|flatpak <nomes>`: revalida nomes (`^[a-z0-9][a-z0-9+.-]*$` para apt; formatos próprios para snap/flatpak), executa só `apt-get install --only-upgrade -y <nomes>`, `snap refresh <nomes>` ou `flatpak update --system -y <ids>`. Nova ação polkit `io.github.vandyckln.mandacaru.update`, `auth_admin` sempre, sem regra de grupo.
+
+**Decisão do dono (2026-11-22): opção A — exceção controlada.** O auxiliar `update-packages` roda como root **com rede**, só por pedido explícito da pessoa e com senha de administrador a cada vez. Ele executa apenas `apt-get install --only-upgrade`, `snap refresh` ou `flatpak update --system` com nomes revalidados, nunca outro comando. A regra da 0.5 continua valendo para o que roda sozinho: o `mandacaru.service` (root) segue sem rede e o `_mandacaru-net` segue sem privilégio. Descartada a opção B (baixar como `_mandacaru-net` e instalar como root sem rede): mais complexa e inviável para Snap/Flatpak.
 - O serviço `mandacaru.service` (root, sem rede) não muda.
 - Sem interface gráfica Linux nesta etapa.
 
