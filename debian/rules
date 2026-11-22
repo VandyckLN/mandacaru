@@ -1,7 +1,7 @@
 #!/usr/bin/make -f
 export PYBUILD_TEST_PYTEST = 1
-# test_packaging.py le debian/ e packaging/, ausentes no diretorio de build
-export PYBUILD_TEST_ARGS = --ignore=tests/test_packaging.py --ignore=tests/treino
+# test_packaging.py e test_windows_exe_entry.py leem debian/ e packaging/, ausentes no diretorio de build
+export PYBUILD_TEST_ARGS = --ignore=tests/test_packaging.py --ignore=tests/test_windows_exe_entry.py --ignore=tests/treino
 %:
 	dh $@ --with python3 --buildsystem=pybuild
 
@@ -17,4 +17,5 @@ execute_after_dh_fixperms:
 	# o config pode trazer chaves de API (VirusTotal, MalwareBazaar)
 	chmod 0640 debian/mandacaru/etc/mandacaru/config.toml
 	chmod 0755 debian/mandacaru/usr/libexec/mandacaru/quarantine-decide \
-		debian/mandacaru/usr/libexec/mandacaru/quarantine-release
+		debian/mandacaru/usr/libexec/mandacaru/quarantine-release \
+		debian/mandacaru/usr/libexec/mandacaru/update-packages

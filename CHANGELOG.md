@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.0
+
+Atualizações: o Mandacaru passa a mostrar os programas desatualizados e vulneráveis e a atualizá-los com um clique, e se atualiza sozinho no Windows.
+
+- **Windows, aba "Atualizações"**: verificação rápida (segundos: programas com versão nova pelo `winget` + falhas já usadas em ataques, catálogo CISA KEV) e completa (minutos: + CVEs na NVD com cache e atualizações pendentes do Windows Update, só leitura). Lista com os de risco "Explorada" ou "Alta" já marcados e botão "Atualizar selecionados" (`winget upgrade` um por vez, com resultado por programa e registro no Histórico). Sem `winget`, explica e leva à Microsoft Store.
+- **Windows, autoatualização**: ao abrir (no máximo 1×/dia) consulta a versão mais recente e mostra a faixa "Mandacaru X disponível"; "Atualizar agora" baixa só do GitHub do projeto, confere o SHA-256 publicado, instala em silêncio e reabre. "Depois" adia 7 dias. Também em Ajuda → Verificar atualizações.
+- **Linux, `mandacaru atualizacoes listar [--completo] [--json]`**: pendências de apt, Snap e Flatpak com o risco das CVEs do pacote-fonte (OSV/KEV); os de risco alto vêm pré-selecionados.
+- **Linux, `mandacaru atualizacoes aplicar (--selecionados | nomes…)`**: pede a senha de administrador (pkexec, nova ação polkit `io.github.vandyckln.mandacaru.update`) e roda só `apt-get install --only-upgrade`, `snap refresh` ou `flatpak update --system` com nomes validados pelo auxiliar `/usr/libexec/mandacaru/update-packages`. Flatpak do usuário atualiza sem senha. O serviço do Mandacaru continua sem rede como root.
+- `KevCache` guarda fabricante, produto e data de cada falha do KEV.
+- **`mandacaru.exe` (linha de comando) com dois cliques**: antes abria e fechava na hora (sem argumentos só mostrava o uso). Agora varre Downloads, Documentos e Área de Trabalho, diz se achou algo e espera um Enter para fechar. Com argumentos continua igual. A versão com janela continua sendo o `Mandacaru-*-setup.exe`.
+
 ## 0.6.1
 
 Versão para Windows com interface gráfica (pacote `mandacaru-windows`).

@@ -121,3 +121,15 @@ def test_history_skips_rows_with_wrong_types(tmp_path):
            {**good, "started": [1]}, [1, 2], "x"]
     p.write_text("\n".join(json.dumps(r) for r in [good, *bad]) + "\n")
     assert History(p).recent() == [good]
+
+
+def test_history_keeps_update_rounds_next_to_scans(tmp_path):
+    h = History(tmp_path / "history.jsonl")
+    h.append(ScanSummary(started=1.0, paths=["C:/d"], files=1, findings=0, duration=1.0, completed=True))
+    h.append_update(2.0, 3.5, [{"id": "7zip.7zip", "nome": "7-Zip", "de": "22.01", "para": "24.08",
+                                "resultado": "ok"}])
+    with open(tmp_path / "history.jsonl", "a") as fh:
+        fh.write(json.dumps({"tipo": "atualizacao", "started": 3.0, "programas": [{"id": 1}]}) + "\n")
+    rows = h.recent()
+    assert [r.get("tipo") for r in rows] == ["atualizacao", None]
+    assert rows[0]["programas"][0]["resultado"] == "ok" and rows[0]["duration"] == 3.5

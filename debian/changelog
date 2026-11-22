@@ -1,3 +1,14 @@
+mandacaru (0.7.0) unstable; urgency=medium
+
+  * mandacaru atualizacoes listar|aplicar: pendencias de apt, Snap e Flatpak
+    com risco de CVE; aplicar pede senha de administrador (pkexec) e usa o
+    auxiliar /usr/libexec/mandacaru/update-packages (acao polkit
+    io.github.vandyckln.mandacaru.update).
+  * mandacaru.exe (linha de comando, Windows): aberto com dois cliques varre
+    as pastas do usuario e espera Enter, em vez de fechar na hora.
+
+ -- Vandyck Diniz <noreply@users.noreply.github.com>  Sun, 22 Nov 2026 20:15:00 -0300
+
 mandacaru (0.6.1) unstable; urgency=medium
 
   * Versao para Windows com interface grafica (mandacaru-windows): varredura
