@@ -173,7 +173,8 @@ class KevCache:
             conn.execute("DELETE FROM kev_entries")
             conn.execute("DELETE FROM kev_products")
             conn.executemany(
-                "INSERT INTO kev_entries (cve_id, vendor_project, product, date_added, vendor_key) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO kev_entries (cve_id, vendor_project, product, date_added, vendor_key) "
+                "VALUES (?, ?, ?, ?, ?)",
                 [(e.cve_id, e.vendor_project, e.product, e.date_added, name_key(e.vendor_project))
                  for e in entries.values()],
             )
