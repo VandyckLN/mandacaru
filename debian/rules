@@ -17,4 +17,5 @@ execute_after_dh_fixperms:
 	# o config pode trazer chaves de API (VirusTotal, MalwareBazaar)
 	chmod 0640 debian/mandacaru/etc/mandacaru/config.toml
 	chmod 0755 debian/mandacaru/usr/libexec/mandacaru/quarantine-decide \
-		debian/mandacaru/usr/libexec/mandacaru/quarantine-release
+		debian/mandacaru/usr/libexec/mandacaru/quarantine-release \
+		debian/mandacaru/usr/libexec/mandacaru/update-packages
