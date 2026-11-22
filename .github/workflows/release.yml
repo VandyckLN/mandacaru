@@ -11,6 +11,9 @@ jobs:
   deb:
     uses: ./.github/workflows/deb.yml
 
+  windows-exe:
+    uses: ./.github/workflows/windows-exe.yml
+
   wheel:
     runs-on: ubuntu-latest
     steps:
@@ -43,7 +46,7 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
 
   github-release:
-    needs: [pypi]
+    needs: [pypi, windows-exe]
     runs-on: ubuntu-latest
     permissions:
       contents: write
