@@ -39,5 +39,20 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Run]
 Filename: "{app}\Mandacaru.exe"; Description: "{cm:LaunchProgram,Mandacaru}"; Flags: nowait postinstall skipifsilent
+; Autoatualização: o app roda o setup com /VERYSILENT /ATUALIZACAO e fecha; aqui ele reabre.
+; Uma instalação silenciosa comum (sem /ATUALIZACAO) continua sem abrir o app.
+Filename: "{app}\Mandacaru.exe"; Flags: nowait; Check: EhAtualizacao
 
 ; Desinstalar não remove %LOCALAPPDATA%\Mandacaru (dados do usuário).
+
+[Code]
+// /ATUALIZACAO é parâmetro nosso (o Inno Setup ignora parâmetros que não conhece).
+function EhAtualizacao: Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), '/ATUALIZACAO') = 0 then
+      Result := True;
+end;

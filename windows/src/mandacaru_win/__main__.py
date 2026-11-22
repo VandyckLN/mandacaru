@@ -100,6 +100,7 @@ def main() -> int:
         return 0
     win = MainWindow(data)
     win.show()
+    win.check_updates()  # em thread; no máximo 1×/24 h
     rc = app.exec()
     # a janela precisa morrer antes do QApplication, senão o Windows fecha com access violation
     del win

@@ -32,6 +32,7 @@ from mandacaru.events import Severity
 from mandacaru_win.quarantine import Quarantine, QuarantineError
 from mandacaru_win.scan import Finding, ScanSummary, make_scanner
 from mandacaru_win.store import History, TrustList
+from mandacaru_win.update_ui import UpdateBar
 from mandacaru_win.worker import ScanThread
 
 SEV_LABEL = {
@@ -82,6 +83,7 @@ class MainWindow(QMainWindow):
                 "Não foi possível ler a lista de confiança "
                 f"({e}). A opção \"Ignorar sempre\" fica desativada nesta sessão.")
         self._build_ui()
+        self._build_update_ui()
         if self._trust_error:
             self.statusBar().showMessage(self._trust_error)
 
@@ -277,6 +279,26 @@ class MainWindow(QMainWindow):
         if p:
             self.start_scan([Path(p)])
 
+    # ---------- autoatualização ----------
+    def _build_update_ui(self) -> None:
+        """Faixa de versão nova acima das abas e menu Ajuda → Verificar atualizações."""
+        self.update_bar = UpdateBar(self._data, notify=lambda t: self.notify(t),
+                                    status=lambda t: self.statusBar().showMessage(t))
+        self.update_bar.quit_requested.connect(self.close)
+        tabs = self.takeCentralWidget()
+        central = QWidget()
+        v = QVBoxLayout(central)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.addWidget(self.update_bar)
+        v.addWidget(tabs, 1)
+        self.setCentralWidget(central)
+        self.act_check_updates = self.menuBar().addMenu("Ajuda").addAction("Verificar atualizações")
+        self.act_check_updates.triggered.connect(lambda: self.check_updates(force=True))
+
+    def check_updates(self, force: bool = False) -> bool:
+        """Consulta em thread; sem ``force`` respeita o 1×/24 h e o "Depois"."""
+        return self.update_bar.start_check(force)
+
     # ---------- arrastar e soltar ----------
     def dragEnterEvent(self, e) -> None:
         if self._thread is None and e.mimeData().hasUrls():
@@ -409,6 +431,7 @@ class MainWindow(QMainWindow):
         if self._thread is not None:
             self._thread.stop()
             self._thread.wait()
+        self.update_bar.shutdown()
         super().closeEvent(e)
 
     # ---------- ações por achado ----------
