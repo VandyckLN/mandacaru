@@ -7,7 +7,6 @@ A `evidence` fica de fora: traz linhas de comando e PIDs.
 from __future__ import annotations
 
 import errno
-import grp
 import json
 import os
 import socket
@@ -16,6 +15,12 @@ import sys
 import threading
 import time
 from typing import Callable
+
+# so existe no Unix: no Windows o modulo precisa importar para o `scan` funcionar
+try:
+    import grp
+except ImportError:  # Windows
+    grp = None
 
 from .engine import AlertSink
 from .events import Alert, Severity, safe_text
@@ -28,6 +33,8 @@ MAX_CLIENTS = 32
 
 
 def _group_gid(name: str) -> int | None:
+    if grp is None:
+        return None
     try:
         return grp.getgrnam(name).gr_gid
     except KeyError:
