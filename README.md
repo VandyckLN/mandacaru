@@ -1,3 +1,5 @@
+**Português** | [English](README.en.md)
+
 # Mandacaru 🌵
 
 [![CI](https://github.com/VandyckLN/mandacaru/actions/workflows/ci.yml/badge.svg)](https://github.com/VandyckLN/mandacaru/actions/workflows/ci.yml)
