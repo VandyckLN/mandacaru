@@ -6,7 +6,10 @@ import sys
 import textwrap
 from pathlib import Path
 
-SRC = Path(__file__).resolve().parents[1] / "src"
+import mandacaru
+
+# pasta que contem o pacote importado: no build do .deb os testes rodam de uma copia sem src/
+SRC = Path(mandacaru.__file__).resolve().parents[1]
 
 # libs de terceiros carregam antes do bloqueio: no Windows elas usam o backend proprio delas
 SIMULA_WINDOWS = textwrap.dedent("""
