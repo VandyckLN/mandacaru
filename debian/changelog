@@ -1,3 +1,10 @@
+mandacaru (0.6.1) unstable; urgency=medium
+
+  * Versao para Windows com interface grafica (mandacaru-windows): varredura
+    sob demanda, quarentena do usuario e instalador sem administrador.
+
+ -- Vandyck Diniz <183553227+VandyckLN@users.noreply.github.com>  Sun, 22 Nov 2026 21:00:00 +0000
+
 mandacaru (0.6.0) unstable; urgency=medium
 
   * Classificador local de malware por IA (mandacaru.ml), em modo sombra por

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.1
+
+Versão para Windows com interface gráfica (pacote `mandacaru-windows`).
+
+- Janela com varredura de Downloads, Área de Trabalho, pasta ou arrastar e soltar; achados com Abrir local, Ignorar sempre e Quarentena.
+- Quarentena do usuário com restauração conferida por hash; abas Confiáveis e Histórico.
+- Instalador por usuário (sem administrador), ícone próprio e anexado ao release.
+
 ## 0.6.0
 
 Classificador local de malware por IA (o motor completo, ainda sem modelo instalado) e o Mandacaru volta a rodar no Windows, agora também como `mandacaru.exe`.
