@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1
+
+- **`mandacaru.exe` com dois cliques**: antes abria e fechava na hora (sem argumentos só mostrava o uso). Agora varre Downloads, Documentos e Área de Trabalho, diz se achou algo e espera um Enter para fechar. Com argumentos continua igual.
+
 ## 0.6.0
 
 Classificador local de malware por IA (o motor completo, ainda sem modelo instalado) e o Mandacaru volta a rodar no Windows, agora também como `mandacaru.exe`.
