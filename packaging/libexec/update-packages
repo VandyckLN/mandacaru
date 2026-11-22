@@ -1,0 +1,76 @@
+#!/bin/sh
+# Mandacaru - auxiliar do pkexec para a acao io.github.vandyckln.mandacaru.update.
+# Aceita so: apt|snap|flatpak <nome>... Sempre pede senha de administrador (sem regra de grupo).
+# Roda como root e com rede (excecao controlada, opcao A do desenho de atualizacoes), mas executa so
+# apt-get install --only-upgrade, snap refresh ou flatpak update --system, com nomes revalidados aqui
+# pelas mesmas regras de src/mandacaru/atualizacoes/fontes.py.
+# O pkexec limpa o ambiente: MANDACARU_UPDATE_BINDIR so existe nos testes.
+set -u
+LC_ALL=C   # faixas como [a-z] nos case dependem do locale
+export LC_ALL
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+BINDIR="${MANDACARU_UPDATE_BINDIR:-/usr/bin}"
+
+uso() { echo "uso: update-packages apt|snap|flatpak <nome>..." >&2; exit 1; }
+invalido() { echo "nome invalido para $ger: $1" >&2; exit 3; }
+
+# apt: [a-z0-9][a-z0-9+.-]*, ate 128
+apt_ok() {
+    case "$1" in ""|[!a-z0-9]*|*[!a-z0-9+.-]*) return 1 ;; esac
+    [ ${#1} -le 128 ]
+}
+
+# snap: minusculas, digitos e hifens (sem hifen no inicio, no fim ou repetido), ao menos uma letra,
+# ate 40; chave opcional de instancia paralela "_chave" com 1 a 10 minusculas/digitos
+snap_ok() {
+    base=${1%%_*}
+    if [ "$base" != "$1" ]; then
+        chave=${1#*_}
+        case "$chave" in ""|*[!a-z0-9]*) return 1 ;; esac
+        [ ${#chave} -le 10 ] || return 1
+    fi
+    case "$base" in ""|-*|*-|*--*|*[!a-z0-9-]*) return 1 ;; esac
+    case "$base" in *[a-z]*) ;; *) return 1 ;; esac
+    [ ${#base} -le 40 ]
+}
+
+# flatpak: ID[//ramo]; ID com 3+ partes [A-Za-z_][A-Za-z0-9_-]* separadas por ponto, ate 255;
+# ramo [A-Za-z0-9_][A-Za-z0-9_.-]*, ate 255
+flatpak_ok() {
+    id=${1%%//*}
+    if [ "$id" != "$1" ]; then
+        ramo=${1#*//}
+        case "$ramo" in ""|[!A-Za-z0-9_]*|*[!A-Za-z0-9_.-]*) return 1 ;; esac
+        [ ${#ramo} -le 255 ] || return 1
+    fi
+    [ -n "$id" ] && [ ${#id} -le 255 ] || return 1
+    resto=$id
+    partes=0
+    while :; do
+        parte=${resto%%.*}
+        case "$parte" in ""|[!A-Za-z_]*|*[!A-Za-z0-9_-]*) return 1 ;; esac
+        partes=$((partes + 1))
+        [ "$parte" = "$resto" ] && break
+        resto=${resto#*.}
+    done
+    [ $partes -ge 3 ]
+}
+
+[ $# -ge 2 ] || uso
+ger=$1
+shift
+case "$ger" in apt|snap|flatpak) ;; *) uso ;; esac
+for nome in "$@"; do
+    case "$nome" in -*) invalido "$nome" ;; esac
+    "${ger}_ok" "$nome" || invalido "$nome"
+done
+
+case "$ger" in
+    apt)
+        DEBIAN_FRONTEND=noninteractive
+        export DEBIAN_FRONTEND
+        exec "$BINDIR/apt-get" install --only-upgrade -y -- "$@" ;;
+    snap) exec "$BINDIR/snap" refresh "$@" ;;
+    flatpak) exec "$BINDIR/flatpak" update --system -y "$@" ;;
+esac

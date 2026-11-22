@@ -96,12 +96,13 @@ Os alertas saem no terminal e, com `--json`, em JSON Lines, já com as técnicas
 mandacaru atualizacoes listar               # apt, Snap e Flatpak com versão nova; * = falha alta conhecida
 mandacaru atualizacoes listar --completo    # consulta OSV.dev e CISA KEV agora (usa rede)
 mandacaru atualizacoes listar --json        # {gerenciador, nome, instalada, disponivel, risco, cves, selecionado}
-mandacaru atualizacoes aplicar org.videolan.VLC   # Flatpak do usuário, pede confirmação (s/N); --sim pula
+mandacaru atualizacoes aplicar --selecionados    # os marcados com *; pede confirmação (s/N), --sim pula
+mandacaru atualizacoes aplicar libssl3t64 org.videolan.VLC   # por nome, como aparece no listar
 ```
 
-Roda com o seu usuário, sem root, e só consulta os gerenciadores instalados. O apt mostra a data do último `apt update` e avisa se passou de 24 h. Cada pacote apt herda a pior prioridade das CVEs do seu pacote-fonte (`libssl3` herda de `openssl`), lidas do último relatório do `vuln scan` (`--relatorio`, padrão `/var/lib/mandacaru/vuln_cache/last-scan.json`), sem rede; sem relatório, o risco fica `DESCONHECIDO` até rodar com `--completo`. Snap e Flatpak ficam `DESCONHECIDO` (o OSV não cobre). Vêm marcados com `*` os de risco `CRITICAL_ACTIVE` ou `HIGH`. Saída: 0 sem item de risco alto, 2 com item de risco alto, 1 erro. Não gera alertas nem popups.
+O `listar` roda com o seu usuário, sem root, e só consulta os gerenciadores instalados. O apt mostra a data do último `apt update` e avisa se passou de 24 h. Cada pacote apt herda a pior prioridade das CVEs do seu pacote-fonte (`libssl3` herda de `openssl`), lidas do último relatório do `vuln scan` (`--relatorio`, padrão `/var/lib/mandacaru/vuln_cache/last-scan.json`), sem rede; sem relatório, o risco fica `DESCONHECIDO` até rodar com `--completo`. Snap e Flatpak ficam `DESCONHECIDO` (o OSV não cobre). Vêm marcados com `*` os de risco `CRITICAL_ACTIVE` ou `HIGH`. Saída: 0 sem item de risco alto, 2 com item de risco alto, 1 erro. Não gera alertas nem popups.
 
-Nesta versão o `aplicar` só atualiza Flatpak instalado para o usuário (`flatpak update --user`). Pacotes apt, Snap e Flatpak do sistema são recusados com uma mensagem: atualize-os pelo gerenciador da distribuição.
+O `aplicar` pede a **senha de administrador** (polkit, ação `io.github.vandyckln.mandacaru.update`, sem exceção para grupo) para pacotes apt, Snap e Flatpak do sistema. Eles vão para o auxiliar `/usr/libexec/mandacaru/update-packages`, que roda como root com rede só nesse pedido, revalida os nomes e executa apenas `apt-get install --only-upgrade`, `snap refresh` ou `flatpak update --system`. Flatpak do usuário roda direto (`flatpak update --user`), sem senha. O resultado sai por gerenciador; o código é 1 se algum falhar.
 
 ## Alertas em tempo real
 

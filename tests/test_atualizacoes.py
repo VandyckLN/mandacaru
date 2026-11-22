@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from mandacaru.atualizacoes.cli import SISTEMA_INDISPONIVEL, Ambiente, cmd_atualizacoes, formatar_tabela
+from mandacaru.atualizacoes.cli import Ambiente, cmd_atualizacoes, formatar_tabela
 from mandacaru.atualizacoes.fontes import (
     DESCONHECIDO,
     NENHUM,
@@ -358,14 +358,19 @@ def test_tabela_resume_muitas_cves() -> None:
 
 # ---- aplicar ----
 
+AUX = "/usr/libexec/mandacaru/update-packages"
+
+
 def _aplicar(base: Path, *resto: str, **kw):
+    """Roda o `aplicar` com pkexec/flatpak falsos; `rcs` da o codigo de saida por argv[0] ou gerenciador."""
     rodados: list[list[str]] = []
-    rc_flatpak = kw.pop("rc", 0)
+    rcs = kw.pop("rcs", {})
 
     def rodar(argv):
         rodados.append(argv)
-        return rc_flatpak
+        return rcs.get(argv[2] if argv[0] == "pkexec" else argv[0], 0)
 
+    kw.setdefault("which", _which("apt", "snap", "flatpak", "pkexec"))
     amb = _amb(base, rodar=rodar, **kw)
     rc = cmd_atualizacoes(_args(base, "aplicar", *resto), amb)
     return rc, rodados
@@ -373,39 +378,73 @@ def _aplicar(base: Path, *resto: str, **kw):
 
 def test_aplicar_flatpak_do_usuario_com_sim(base: Path, capsys) -> None:
     rc, rodados = _aplicar(base, "org.videolan.VLC", "--sim")
+    out = capsys.readouterr().out
     assert rc == 0
     assert rodados == [["flatpak", "update", "--user", "-y", "org.videolan.VLC//stable"]]
-    assert "3.0.20 -> 3.0.21" in capsys.readouterr().out
+    assert "3.0.20 -> 3.0.21" in out and "flatpak-usuario: ok (1 item(ns))" in out
+    assert "senha de administrador" not in out
+
+
+def test_aplicar_agrupa_por_gerenciador_e_usa_pkexec_so_no_sistema(base: Path, capsys) -> None:
+    rc, rodados = _aplicar(base, "org.videolan.VLC", "curl", "firefox", "libssl3t64", "org.mozilla.firefox",
+                           "org.freedesktop.Platform.GL.default", "--sim")
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert rodados == [
+        ["pkexec", AUX, "apt", "curl", "libssl3t64"],  # na ordem pedida
+        ["pkexec", AUX, "snap", "firefox"],
+        ["pkexec", AUX, "flatpak", "org.mozilla.firefox//stable", "org.freedesktop.Platform.GL.default//24.08"],
+        ["flatpak", "update", "--user", "-y", "org.videolan.VLC//stable"],
+    ]
+    assert "Pacotes do sistema pedem a senha de administrador." in out
+    for linha in ("apt: ok (2 item(ns))", "snap: ok (1 item(ns))", "flatpak-sistema: ok (2 item(ns))",
+                  "flatpak-usuario: ok (1 item(ns))"):
+        assert linha in out
+
+
+def test_aplicar_selecionados_atualiza_os_de_risco_alto(base: Path) -> None:
+    rc, rodados = _aplicar(base, "--selecionados", "--sim")
+    assert rc == 0
+    assert rodados == [["pkexec", AUX, "apt", "libssl3t64", "openssl"]]
 
 
 @pytest.mark.parametrize("resposta,roda", [("s", True), ("SIM", True), ("n", False), ("", False)])
 def test_aplicar_pede_confirmacao(base: Path, resposta: str, roda: bool) -> None:
     perguntas = []
-    rc, rodados = _aplicar(base, "org.videolan.VLC//stable",
+    rc, rodados = _aplicar(base, "org.videolan.VLC//stable", "curl",
                            entrada=lambda p: perguntas.append(p) or resposta)
-    assert rc == 0 and perguntas == ["Atualizar 1 item(ns)? [s/N] "]
+    assert rc == 0 and perguntas == ["Atualizar 2 item(ns)? [s/N] "]
     assert bool(rodados) is roda
 
 
 def test_aplicar_sem_terminal_nao_atualiza(base: Path) -> None:
     def eof(_):
         raise EOFError
-    rc, rodados = _aplicar(base, "org.videolan.VLC", entrada=eof)
+    rc, rodados = _aplicar(base, "curl", entrada=eof)
     assert rc == 0 and rodados == []
 
 
-def test_aplicar_recusa_pacotes_do_sistema(base: Path, capsys) -> None:
-    for nomes in (["libssl3t64"], ["firefox"], ["org.mozilla.firefox"], ["org.videolan.VLC", "curl"]):
-        rc, rodados = _aplicar(base, *nomes, "--sim")
-        assert rc == 1 and rodados == []
-        assert SISTEMA_INDISPONIVEL in capsys.readouterr().err
+def test_aplicar_falha_de_um_gerenciador_nao_para_os_outros_e_sai_1(base: Path, capsys) -> None:
+    rc, rodados = _aplicar(base, "curl", "firefox", "org.videolan.VLC", "--sim", rcs={"apt": 126, "snap": 1})
+    out, err = capsys.readouterr()
+    assert rc == 1 and len(rodados) == 3
+    assert "apt: falhou (senha nao confirmada)" in err and "snap: falhou (codigo 1)" in err
+    assert "flatpak-usuario: ok" in out
 
 
-def test_aplicar_selecionados_cai_no_apt_e_recusa(base: Path, capsys) -> None:
-    rc, rodados = _aplicar(base, "--selecionados", "--sim")
-    err = capsys.readouterr().err
+def test_aplicar_falha_do_flatpak_do_usuario_sai_1(base: Path, capsys) -> None:
+    rc, rodados = _aplicar(base, "org.videolan.VLC", "--sim", rcs={"flatpak": 1})
+    assert rc == 1 and len(rodados) == 1
+    assert "flatpak-usuario: falhou (codigo 1)" in capsys.readouterr().err
+
+
+def test_aplicar_sem_pkexec_nao_roda_nada(base: Path, capsys) -> None:
+    rc, rodados = _aplicar(base, "curl", "org.videolan.VLC", "--sim", which=_which("apt", "snap", "flatpak"))
     assert rc == 1 and rodados == []
-    assert "apt libssl3t64, apt openssl" in err and SISTEMA_INDISPONIVEL in err
+    assert "pkexec nao encontrado" in capsys.readouterr().err
+    # Flatpak do usuario nao precisa do pkexec
+    rc, rodados = _aplicar(base, "org.videolan.VLC", "--sim", which=_which("apt", "snap", "flatpak"))
+    assert rc == 0 and len(rodados) == 1
 
 
 def test_aplicar_selecionados_sem_nada_marcado_sai_0(base: Path, capsys) -> None:
@@ -415,13 +454,16 @@ def test_aplicar_selecionados_sem_nada_marcado_sai_0(base: Path, capsys) -> None
 
 
 def test_aplicar_nome_desconhecido_e_uso_errado(base: Path, capsys) -> None:
-    rc, rodados = _aplicar(base, "org.evil.App;rm", "--sim")
-    assert rc == 1 and rodados == [] and "nenhuma atualizacao pendente para: org.evil.App;rm" in capsys.readouterr().err
+    for nome in ("org.evil.App;rm", "-oAPT::Update::Pre-Invoke::=sh", "$(id)"):
+        rc, rodados = _aplicar(base, "--sim", "--", nome)
+        assert rc == 1 and rodados == []
+        assert f"nenhuma atualizacao pendente para: {nome}" in capsys.readouterr().err
     assert _aplicar(base)[0] == 1
     assert _aplicar(base, "--selecionados", "org.videolan.VLC")[0] == 1
 
 
-def test_aplicar_falha_do_flatpak_sai_1(base: Path, capsys) -> None:
-    rc, rodados = _aplicar(base, "org.videolan.VLC", "--sim", rc=1)
-    assert rc == 1 and len(rodados) == 1
-    assert "flatpak update saiu com codigo 1" in capsys.readouterr().err
+def test_aplicar_nao_repassa_nome_invalido_mesmo_que_o_parse_deixe(base: Path, capsys, monkeypatch) -> None:
+    from mandacaru.atualizacoes import cli
+    monkeypatch.setattr(cli, "nome_valido", lambda g, n: False)
+    rc, rodados = _aplicar(base, "curl", "--sim")
+    assert rc == 1 and rodados == [] and "nome invalido" in capsys.readouterr().err

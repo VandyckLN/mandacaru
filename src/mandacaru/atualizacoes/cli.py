@@ -2,8 +2,8 @@
 
 Roda a mao, com o usuario da pessoa (o servico nao tem $HOME nem sessao para Snap/Flatpak de usuario).
 Nao gera alertas nem popups. Codigos de saida do `listar`: 0 nada de risco alto pendente, 2 ha item
-pre-selecionado (CRITICAL_ACTIVE/HIGH), 1 erro. Nesta versao o `aplicar` so atualiza Flatpak do usuario
-(sem root); apt, Snap e Flatpak do sistema sao recusados.
+pre-selecionado (CRITICAL_ACTIVE/HIGH), 1 erro. O `aplicar` roda apt, Snap e Flatpak do sistema pelo
+auxiliar root via pkexec (senha de administrador a cada vez) e Flatpak do usuario direto, sem senha.
 """
 from __future__ import annotations
 
@@ -35,7 +35,9 @@ from .fontes import (
 from .risco import aplicar_riscos, fontes_dos_binarios, riscos_do_relatorio, riscos_dos_achados
 
 APT_VELHO_SEG = 24 * 3600
-SISTEMA_INDISPONIVEL = "atualizacao de pacotes do sistema ainda nao disponivel nesta versao"
+# auxiliar root do pkexec (acao io.github.vandyckln.mandacaru.update, sempre senha de administrador)
+AUXILIAR = "/usr/libexec/mandacaru/update-packages"
+AUXILIAR_GER = {"apt": "apt", "snap": "snap", "flatpak-sistema": "flatpak"}
 PERGUNTA = "Atualizar {n} item(ns)? [s/N] "
 
 
@@ -72,7 +74,7 @@ def add_parser(sub) -> None:
     li.add_argument("--completo", action="store_true",
                     help="consulta OSV.dev e CISA KEV agora (usa rede) em vez do ultimo relatorio")
     li.add_argument("--json", dest="as_json", action="store_true", help="saida JSON em stdout")
-    ap = s.add_parser("aplicar", help="atualiza os itens escolhidos (nesta versao, so Flatpak do usuario)")
+    ap = s.add_parser("aplicar", help="atualiza os itens escolhidos (sistema: senha de administrador)")
     ap.add_argument("nomes", nargs="*", help="nomes como aparecem no `listar`")
     ap.add_argument("--selecionados", action="store_true", help="os itens marcados com * no `listar`")
     ap.add_argument("--sim", action="store_true", help="nao pede confirmacao")
@@ -217,6 +219,20 @@ def _escolher(args, cfg, amb: Ambiente, c: Coleta) -> list[Atualizacao] | str:
     return escolhidos
 
 
+def _comandos(escolhidos: list[Atualizacao]) -> list[tuple[str, int, list[str]]]:
+    """(gerenciador, quantos itens, argv), na ordem apt, snap, Flatpak do sistema, Flatpak do usuario."""
+    cmds = []
+    for gerenciador in ("apt", "snap", "flatpak-sistema", "flatpak-usuario"):
+        nomes = [i.nome for i in escolhidos if i.gerenciador == gerenciador]
+        if not nomes:
+            continue
+        if gerenciador == "flatpak-usuario":
+            cmds.append((gerenciador, len(nomes), ["flatpak", "update", "--user", "-y", *nomes]))  # sem root, sem senha
+        else:
+            cmds.append((gerenciador, len(nomes), ["pkexec", AUXILIAR, AUXILIAR_GER[gerenciador], *nomes]))
+    return cmds
+
+
 def cmd_aplicar(args, cfg, amb: Ambiente) -> int:
     if args.selecionados == bool(args.nomes):
         print("mandacaru: erro: use --selecionados ou informe os nomes (nao os dois)", file=sys.stderr)
@@ -230,20 +246,21 @@ def cmd_aplicar(args, cfg, amb: Ambiente) -> int:
         print("nada a atualizar." if not c.erros else "nada a atualizar (alguma consulta falhou).", file=sys.stderr)
         return 1 if c.erros else 0
 
-    sistema = [i for i in escolhidos if i.gerenciador != "flatpak-usuario"]
-    if sistema:
-        lista = ", ".join(f"{i.gerenciador} {i.nome}" for i in sistema)
-        print(f"mandacaru: erro: {SISTEMA_INDISPONIVEL} ({lista}). Nada foi alterado.", file=sys.stderr)
-        return 1
-
-    # revalida antes de virar argumento de comando (defesa em profundidade: o parse ja filtrou)
+    # revalida antes de virar argumento de comando (o auxiliar root revalida de novo)
     if not all(nome_valido(i.gerenciador, i.nome) for i in escolhidos):
         print("mandacaru: erro: nome invalido na lista; nada foi alterado", file=sys.stderr)
         return 1
+    cmds = _comandos(escolhidos)
+    sistema = any(g != "flatpak-usuario" for g, _, _ in cmds)
+    if sistema and not amb.which("pkexec"):
+        print("mandacaru: erro: pkexec nao encontrado (instale o polkit); nada foi alterado", file=sys.stderr)
+        return 1
 
-    print("Flatpak do usuario a atualizar:")
+    print("A atualizar:")
     for i in escolhidos:
-        print(f"  {i.nome}  {i.instalada or '?'} -> {i.disponivel or '?'}")
+        print(f"  {i.gerenciador:16} {i.nome}  {i.instalada or '?'} -> {i.disponivel or '?'}")
+    if sistema:
+        print("Pacotes do sistema pedem a senha de administrador.")
     if not args.sim:
         try:
             resposta = amb.entrada(PERGUNTA.format(n=len(escolhidos)))
@@ -253,12 +270,16 @@ def cmd_aplicar(args, cfg, amb: Ambiente) -> int:
             print("Nada foi alterado.")
             return 0
 
-    rc = amb.rodar(["flatpak", "update", "--user", "-y", *(i.nome for i in escolhidos)])
-    if rc != 0:
-        print(f"mandacaru: erro: flatpak update saiu com codigo {rc}", file=sys.stderr)
-        return 1
-    print(f"{len(escolhidos)} item(ns) atualizado(s).")
-    return 0
+    falhas = 0
+    for gerenciador, n, argv in cmds:
+        rc = amb.rodar(argv)
+        if rc == 0:
+            print(f"{gerenciador}: ok ({n} item(ns))")
+            continue
+        falhas += 1
+        motivo = "senha nao confirmada" if argv[0] == "pkexec" and rc in (126, 127) else f"codigo {rc}"
+        print(f"{gerenciador}: falhou ({motivo})", file=sys.stderr)
+    return 1 if falhas else 0
 
 
 def cmd_atualizacoes(args, amb: Ambiente | None = None) -> int:

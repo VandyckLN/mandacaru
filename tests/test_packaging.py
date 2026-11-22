@@ -129,8 +129,10 @@ def _acoes_da_policy():
 
 def test_policy_release_exige_admin():
     acoes = _acoes_da_policy()
-    assert set(acoes) == {"io.github.vandyckln.mandacaru.decide", "io.github.vandyckln.mandacaru.release"}
-    for nome, aux in (("decide", "quarantine-decide"), ("release", "quarantine-release")):
+    assert set(acoes) == {"io.github.vandyckln.mandacaru.decide", "io.github.vandyckln.mandacaru.release",
+                          "io.github.vandyckln.mandacaru.update"}
+    for nome, aux in (("decide", "quarantine-decide"), ("release", "quarantine-release"),
+                      ("update", "update-packages")):
         acao = acoes[f"io.github.vandyckln.mandacaru.{nome}"]
         for chave in ("allow_any", "allow_inactive", "allow_active"):
             assert acao.find(f"defaults/{chave}").text == "auth_admin"   # decide: so a regra libera o grupo
@@ -145,6 +147,7 @@ def test_regra_libera_so_decide_para_o_grupo():
     assert "subject.active" in regra and "subject.local" in regra
     assert "io.github.vandyckln.mandacaru.decide" in regra and "polkit.Result.YES" in regra
     assert "io.github.vandyckln.mandacaru.release" not in regra
+    assert "io.github.vandyckln.mandacaru.update" not in regra   # atualizar sempre pede senha de admin
 
 
 def _roda(script, *args):
@@ -199,6 +202,115 @@ def test_auxiliares_usam_o_binario_instalado_por_padrao():
         assert script.stat().st_mode & 0o755 == 0o755
 
 
+# --- atualizacoes (auxiliar root com rede, acao update) ---
+
+UPDATE = ROOT / "packaging" / "libexec" / "update-packages"
+
+
+@pytest.fixture
+def stubs(tmp_path):
+    """apt-get/snap/flatpak falsos: imprimem o proprio nome, os argumentos e o DEBIAN_FRONTEND."""
+    for cmd in ("apt-get", "snap", "flatpak"):
+        stub = tmp_path / cmd
+        stub.write_text('#!/bin/sh\nprintf "%s\\n" "${0##*/}" "$@" "DF=${DEBIAN_FRONTEND-}"\n')
+        stub.chmod(0o755)
+    return tmp_path
+
+
+def _update(stubs, *args):
+    import os
+    import subprocess
+    env = {k: v for k, v in os.environ.items() if k != "DEBIAN_FRONTEND"}
+    env["MANDACARU_UPDATE_BINDIR"] = str(stubs)
+    return subprocess.run(["sh", str(UPDATE), *args], capture_output=True, text=True, env=env)
+
+
+@pytest.mark.parametrize("args,esperado", [
+    (("apt", "libssl3t64", "g++-13", "php8.3-cli"),
+     ["apt-get", "install", "--only-upgrade", "-y", "--", "libssl3t64", "g++-13", "php8.3-cli",
+      "DF=noninteractive"]),
+    (("snap", "firefox", "core22", "firefox_beta"), ["snap", "refresh", "firefox", "core22", "firefox_beta", "DF="]),
+    (("flatpak", "org.mozilla.firefox//stable", "org.freedesktop.Platform.GL.default//24.08", "org.videolan.VLC"),
+     ["flatpak", "update", "--system", "-y", "org.mozilla.firefox//stable",
+      "org.freedesktop.Platform.GL.default//24.08", "org.videolan.VLC", "DF="]),
+])
+def test_update_packages_monta_so_o_comando_do_gerenciador(stubs, args, esperado):
+    r = _update(stubs, *args)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.splitlines() == esperado
+
+
+@pytest.mark.parametrize("args,codigo", [
+    ((), 1),
+    (("apt",), 1),                                  # lista vazia
+    (("yum", "x"), 1),
+    (("apt-get", "x"), 1),
+    (("APT", "x"), 1),
+    (("apt", "-oAPT::Update::Pre-Invoke::=sh"), 3),
+    (("apt", "--reinstall"), 3),
+    (("apt", "libssl3", "-y"), 3),                  # um nome ruim no meio derruba a lista toda
+    (("apt", "foo;rm"), 3),
+    (("apt", "$(x)"), 3),
+    (("apt", "`id`"), 3),
+    (("apt", ""), 3),
+    (("apt", "Libssl3"), 3),
+    (("apt", "a b"), 3),
+    (("apt", "foo\nbar"), 3),
+    (("apt", "../x"), 3),
+    (("apt", "x" * 129), 3),
+    (("snap", "-a"), 3),
+    (("snap", "a--b"), 3),
+    (("snap", "a-"), 3),
+    (("snap", "123"), 3),
+    (("snap", "Firefox"), 3),
+    (("snap", "a" * 41), 3),
+    (("snap", "firefox_"), 3),
+    (("snap", "firefox_a_b"), 3),
+    (("snap", "firefox_" + "a" * 11), 3),
+    (("flatpak", "org.mozilla"), 3),
+    (("flatpak", "org.1x.y"), 3),
+    (("flatpak", "-org.x.y"), 3),
+    (("flatpak", "--user"), 3),
+    (("flatpak", "org.x.y//-b"), 3),
+    (("flatpak", "org.x.y//a/b"), 3),
+    (("flatpak", "org.x.y//"), 3),
+    (("flatpak", "org..x.y"), 3),
+    (("flatpak", "org.x.y."), 3),
+    (("flatpak", "org.x.$(id)"), 3),
+])
+def test_update_packages_recusa_nomes_e_uso_invalidos(stubs, args, codigo):
+    r = _update(stubs, *args)
+    assert r.returncode == codigo
+    assert r.stdout == ""                       # nao chegou a chamar o gerenciador
+    assert ("uso:" if codigo == 1 else "nome invalido") in r.stderr
+
+
+def test_update_packages_mesmas_regras_do_python(stubs):
+    # o auxiliar e o fontes.py precisam concordar: o que o listar mostra, o auxiliar aceita, e vice-versa
+    from mandacaru.atualizacoes.fontes import nome_valido
+    casos = {
+        "apt": ["libssl3t64", "g++-13", "0ad", "a", "-x", "A", "a_b", "a:amd64", "x" * 128, "x" * 129],
+        "snap": ["firefox", "core22", "a-b-c", "x_1", "1a", "a--b", "-a", "a-", "1", "_x", "a" * 40, "a" * 41,
+                 "a_" + "b" * 10, "a_" + "b" * 11, "a_B"],
+        "flatpak": ["org.x.y", "org.x.y//stable", "org.x.y//24.08", "_a.b.c", "a-b.c.d-e", "org.x", "1.x.y",
+                    "org.x.y//", "org.x.y//.a", "org.x.y//_a", "org.x.y/stable", "org.-x.y", "a.b.c//x//y"],
+    }
+    for ger, nomes in casos.items():
+        for nome in nomes:
+            r = _update(stubs, ger, nome)
+            assert (r.returncode == 0) is nome_valido(ger, nome), (ger, nome, r.stderr)
+
+
+def test_update_packages_usa_caminhos_fixos_e_e_executavel():
+    texto = UPDATE.read_text()
+    assert texto.startswith("#!/bin/sh")
+    assert "${MANDACARU_UPDATE_BINDIR:-/usr/bin}" in texto
+    assert "PATH=/usr/sbin:/usr/bin:/sbin:/bin" in texto and "LC_ALL=C" in texto
+    assert UPDATE.stat().st_mode & 0o755 == 0o755
+    # so estes tres comandos sao executados
+    assert sorted(re.findall(r'exec "\$BINDIR/([\w-]+)"', texto)) == ["apt-get", "flatpak", "snap"]
+
+
 def test_logrotate_guarda_decisoes_um_ano():
     texto = (ROOT / "debian" / "mandacaru.logrotate").read_text()
     assert "*.jsonl" not in texto                         # senao o decisions.jsonl rodaria duas vezes
@@ -220,10 +332,12 @@ def test_install_leva_polkit_e_auxiliares():
     linhas = (ROOT / "debian" / "mandacaru.install").read_text().splitlines()
     assert "packaging/libexec/quarantine-decide usr/libexec/mandacaru/" in linhas
     assert "packaging/libexec/quarantine-release usr/libexec/mandacaru/" in linhas
+    assert "packaging/libexec/update-packages usr/libexec/mandacaru/" in linhas
     assert "packaging/polkit/io.github.vandyckln.mandacaru.policy usr/share/polkit-1/actions/" in linhas
     assert "packaging/polkit/50-mandacaru.rules usr/share/polkit-1/rules.d/" in linhas
     rules = (ROOT / "debian" / "rules").read_text()
     assert "chmod 0755 debian/mandacaru/usr/libexec/mandacaru/quarantine-" in rules
+    assert "debian/mandacaru/usr/libexec/mandacaru/update-packages" in rules.split("execute_after_dh_fixperms:")[1]
     assert "chmod 0640 debian/mandacaru/etc/mandacaru/config.toml" in rules
 
 
