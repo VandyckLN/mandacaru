@@ -15,6 +15,7 @@ from pathlib import Path
 
 from . import __version__, ml
 from .alert_socket import socket_sink
+from .atualizacoes.cli import add_parser as add_atualizacoes_parser
 from .collectors import ebpf
 from .collectors.fsmon import FileMonitor
 from .collectors.procmon import ProcessMonitor
@@ -302,6 +303,7 @@ def build_parser() -> argparse.ArgumentParser:
     m.set_defaults(fn=cmd_monitor)
     add_quarantine_parser(sub)
     add_vuln_parser(sub)
+    add_atualizacoes_parser(sub)
     add_telemetry_parser(sub)
     add_ml_parser(sub)
     return ap
