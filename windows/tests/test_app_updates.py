@@ -20,7 +20,7 @@ from mandacaru_win.updates import (  # noqa: E402
     WingetUnavailable,
 )
 from PySide6.QtCore import QCoreApplication, QEvent, Qt  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QTabWidget  # noqa: E402
 
 _windows: list = []
 
@@ -109,7 +109,8 @@ def run_check(win, complete=False):
 
 def test_tab_exists_and_quick_check_fills_table(app, tmp_path):
     win = make_win(tmp_path, FakeService())
-    tabs = win.centralWidget()
+    # a faixa de autoatualizacao envolve as abas: procura o QTabWidget em vez de usar centralWidget()
+    tabs = win.findChild(QTabWidget)
     assert "Atualizações" in [tabs.tabText(i) for i in range(tabs.count())]
     assert not win.btn_upd_apply.isEnabled()
     run_check(win)
