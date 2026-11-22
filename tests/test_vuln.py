@@ -17,7 +17,7 @@ from mandacaru.vuln.inventory import (
     parse_dpkg_status,
     write_running_snapshot,
 )
-from mandacaru.vuln.kev_cache import KevCache
+from mandacaru.vuln.kev_cache import KevCache, name_key, normalize_name, product_keys
 from mandacaru.vuln.osv_client import OsvClient
 from mandacaru.vuln.scorer import classify_finding, finding_to_alert, parse_cvss31_base_score
 
@@ -349,3 +349,66 @@ def test_avisos_de_distro_sem_cvss() -> None:
 
     alert = finding_to_alert(ubu)
     assert "sem CVSS" in alert.summary and alert.severity == Severity.HIGH
+
+
+_KEV_FULL = {"vulnerabilities": [
+    {"cveID": "CVE-2025-0411", "vendorProject": "7-Zip", "product": "7-Zip", "dateAdded": "2025-02-06"},
+    {"cveID": "cve-2024-9680", "vendorProject": "Mozilla", "product": "Firefox and Thunderbird",
+     "dateAdded": "2024-10-15"},
+    {"cveID": "CVE-2023-38831", "vendorProject": "RARLAB", "product": "WinRAR", "dateAdded": "2023-08-24"},
+]}
+
+
+def _kev_http(calls: list):
+    def fake(req, timeout):
+        calls.append(req.full_url)
+        return 200, json.dumps(_KEV_FULL).encode()
+    return fake
+
+
+def test_normalize_name_tira_versao_arquitetura_e_sufixos() -> None:
+    assert normalize_name("7-Zip 23.01 (x64)") == "7 zip" and name_key("7zip") == "7zip"
+    assert normalize_name("Mozilla Firefox (x64 pt-BR)") == "mozilla firefox"
+    assert normalize_name("Zoom Video Communications, Inc.") == "zoom video communications"
+    assert normalize_name("WinRAR 6.24 64-bit") == "winrar"
+    assert product_keys("Firefox and Thunderbird") == ["firefoxandthunderbird", "firefox", "thunderbird"]
+
+
+def test_kev_cache_guarda_fabricante_produto_e_consulta_por_produto(tmp_path: Path) -> None:
+    calls: list = []
+    kev = KevCache(cache_db=tmp_path / "kev.db", http=_kev_http(calls))
+    assert kev.get_cves() == {"CVE-2025-0411", "CVE-2024-9680", "CVE-2023-38831"}
+    e = {x.cve_id: x for x in kev.entries()}
+    assert e["CVE-2025-0411"].vendor_project == "7-Zip" and e["CVE-2025-0411"].date_added == "2025-02-06"
+    assert [x.cve_id for x in kev.find_by_product("7zip")] == ["CVE-2025-0411"]          # sem pontuacao
+    assert [x.cve_id for x in kev.find_by_product("7-Zip 23.01 (x64)")] == ["CVE-2025-0411"]
+    assert [x.cve_id for x in kev.find_by_product("Thunderbird")] == ["CVE-2024-9680"]   # alternativa "and"
+    assert [x.cve_id for x in kev.find_by_product("WinRAR", vendor="RARLab Inc.")] == ["CVE-2023-38831"]
+    assert kev.find_by_product("WinRAR", vendor="Outro") == []
+    assert kev.find_by_product("") == []
+    assert len(calls) == 1  # cache fresco: nada de rede de novo
+
+
+def test_kev_cache_migra_banco_antigo_sem_quebrar_get_cves(tmp_path: Path) -> None:
+    import sqlite3
+    from datetime import datetime, timezone
+
+    db = tmp_path / "kev.db"
+    with sqlite3.connect(db) as conn:  # esquema da versao anterior: so os IDs
+        conn.execute("CREATE TABLE kev_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        conn.execute("CREATE TABLE kev_cves (cve_id TEXT PRIMARY KEY)")
+        conn.execute("INSERT INTO kev_cves VALUES ('CVE-2020-0001')")
+        conn.execute("INSERT INTO kev_meta VALUES ('fetched_at', ?)", (datetime.now(timezone.utc).isoformat(),))
+
+    def sem_rede(req, timeout):
+        raise OSError("offline")
+
+    kev = KevCache(cache_db=db, http=sem_rede)
+    assert kev.get_cves() == {"CVE-2020-0001"}         # Linux: igual a antes, sem rede
+    assert kev.entries() == []                         # sem rede, sem fabricante/produto ainda
+    calls: list = []
+    kev = KevCache(cache_db=db, http=_kev_http(calls))
+    assert kev.get_cves() == {"CVE-2020-0001"}         # cache ainda fresco para os IDs
+    assert calls == []
+    assert len(kev.entries()) == 3 and len(calls) == 1  # esquema antigo forca o refresh
+    assert kev.entries(offline_only=True) and len(calls) == 1
