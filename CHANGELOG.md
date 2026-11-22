@@ -1,8 +1,16 @@
 # Changelog
 
+## 0.6.2
+
+- **`mandacaru.exe` (linha de comando) com dois cliques**: antes abria e fechava na hora (sem argumentos só mostrava o uso). Agora varre Downloads, Documentos e Área de Trabalho, diz se achou algo e espera um Enter para fechar. Com argumentos continua igual. A versão com janela continua sendo o `Mandacaru-*-setup.exe`.
+
 ## 0.6.1
 
-- **`mandacaru.exe` com dois cliques**: antes abria e fechava na hora (sem argumentos só mostrava o uso). Agora varre Downloads, Documentos e Área de Trabalho, diz se achou algo e espera um Enter para fechar. Com argumentos continua igual.
+Versão para Windows com interface gráfica (pacote `mandacaru-windows`).
+
+- Janela com varredura de Downloads, Área de Trabalho, pasta ou arrastar e soltar; achados com Abrir local, Ignorar sempre e Quarentena.
+- Quarentena do usuário com restauração conferida por hash; abas Confiáveis e Histórico.
+- Instalador por usuário (sem administrador), ícone próprio e anexado ao release.
 
 ## 0.6.0
 

@@ -1,9 +1,16 @@
+mandacaru (0.6.2) unstable; urgency=medium
+
+  * mandacaru.exe (linha de comando, Windows): aberto com dois cliques varre
+    as pastas do usuario e espera Enter, em vez de fechar na hora.
+
+ -- Vandyck Diniz <noreply@users.noreply.github.com>  Sun, 22 Nov 2026 16:30:00 -0300
+
 mandacaru (0.6.1) unstable; urgency=medium
 
-  * mandacaru.exe (Windows): aberto com dois cliques varre as pastas do
-    usuario e espera Enter, em vez de fechar na hora.
+  * Versao para Windows com interface grafica (mandacaru-windows): varredura
+    sob demanda, quarentena do usuario e instalador sem administrador.
 
- -- Vandyck Diniz <noreply@users.noreply.github.com>  Sun, 22 Nov 2026 15:45:00 -0300
+ -- Vandyck Diniz <183553227+VandyckLN@users.noreply.github.com>  Sun, 22 Nov 2026 21:00:00 +0000
 
 mandacaru (0.6.0) unstable; urgency=medium
 
