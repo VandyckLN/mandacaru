@@ -1,3 +1,12 @@
+mandacaru (0.6.0) unstable; urgency=medium
+
+  * Classificador local de malware por IA (mandacaru.ml), em modo sombra por
+    padrao; comandos mandacaru ml status, avaliar e sombra.
+  * Windows: scan volta a funcionar (grp, pwd e fcntl opcionais) e a release
+    passa a trazer o mandacaru.exe.
+
+ -- Vandyck Diniz <noreply@users.noreply.github.com>  Sun, 22 Nov 2026 14:55:00 -0300
+
 mandacaru (0.5.0) unstable; urgency=medium
 
   * Auditoria de CVEs: mandacaru vuln scan (OSV.dev + CISA KEV, CVSS 3.1 local,
