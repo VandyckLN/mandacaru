@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import dataclasses
 import errno
-import grp
 import hashlib
 import json
 import os
@@ -14,6 +13,12 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+
+# so existe no Unix: no Windows o modulo precisa importar para o `scan` funcionar
+try:
+    import grp
+except ImportError:  # Windows
+    grp = None
 
 from mandacaru.decisions import DecisionLog
 from mandacaru.events import Alert
@@ -355,7 +360,7 @@ class Quarantine:
         try:
             try:
                 os.fchmod(fd, 0o640)
-                if os.geteuid() == 0:
+                if grp is not None and os.geteuid() == 0:
                     try:
                         os.fchown(fd, -1, grp.getgrnam(GROUP).gr_gid)
                     except KeyError:

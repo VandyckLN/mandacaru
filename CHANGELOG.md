@@ -1,8 +1,11 @@
 # Changelog
 
-## 0.6.0 (em desenvolvimento)
+## 0.6.0
 
-Classificador local de malware por IA: o motor completo, ainda sem modelo instalado.
+Classificador local de malware por IA (o motor completo, ainda sem modelo instalado) e o Mandacaru volta a rodar no Windows, agora também como `mandacaru.exe`.
+
+- **Windows**: `mandacaru scan` quebrava ao abrir (`ModuleNotFoundError: grp`). `grp`, `pwd` e `fcntl` agora são opcionais; no Windows só a varredura funciona (sem serviço, socket de alertas nem quarentena).
+- **`mandacaru.exe`**: executável único para Windows (PyInstaller) anexado à release, com o SHA-256 ao lado. O CI testa o exe numa pasta limpa e numa amostra antes de publicar.
 
 - **Pacote `mandacaru.ml`**: tipo do arquivo pelo conteúdo (ELF executável e scripts sh, Python, Perl, JS, PHP), leitor de ELF tolerante a arquivos hostis, ~60 características por tipo, modelo em JSON estrito (nada de pickle) avaliado em Python puro, motivos em português e técnicas MITRE.
 - **Decisão por faixas** (`alto`, `reforco`, `medio`, `baixo`), com limiar próprio no `/tmp` e reforço quando uma regra `MEDIUM` concorda. Arquivo idêntico a um de pacote instalado (md5 do dpkg) nunca é isolado pelo modelo.

@@ -25,5 +25,28 @@ jobs:
       - run: ruff check .
       - run: pytest -q
 
+  # no Windows o Mandacaru so faz `scan`: garante que o pacote instala e roda de verdade la
+  windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: pip install .
+      - name: scan de fumaca
+        shell: pwsh
+        run: |
+          $alvo = Join-Path $env:RUNNER_TEMP "alvo"
+          New-Item -ItemType Directory -Force $alvo | Out-Null
+          Set-Content (Join-Path $alvo "limpo.txt") "nada aqui"
+          mandacaru scan $alvo
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
   deb:
     uses: ./.github/workflows/deb.yml
