@@ -31,8 +31,10 @@ def make_win(tmp_path, scanner):
     win = MainWindow(tmp_path / "dados", scanner)
     _windows.append(win)
     win.msgs = []
+    win.infos = []
     win.confirm = lambda _: True
     win.notify = win.msgs.append
+    win.info = win.infos.append
     return win
 
 
@@ -378,3 +380,124 @@ def test_finding_row_shows_file_name_and_full_path(app, tmp_path, scanner, ps_te
     assert item.text(1) == "fatura.ps1"
     assert item.toolTip(1) == str(f)
     assert item.child(0).text(2) == str(d)
+
+
+def test_excluded_folder_in_ui_skips_and_restores_scan(app, tmp_path, scanner, ps_text):
+    d = tmp_path / "alvo"
+    sub = d / "ignorar"
+    sub.mkdir(parents=True)
+    (sub / "a.ps1").write_text(ps_text)
+    win = make_win(tmp_path, scanner)
+
+    assert wait_scan(win, [d]).findings == 1
+    win.add_excluded_folder(sub)
+    assert win.tbl_excludes.rowCount() == 1
+    assert wait_scan(win, [d]).findings == 0
+    win.remove_excluded_folder(str(sub))
+    assert win.tbl_excludes.rowCount() == 0
+    assert wait_scan(win, [d]).findings == 1
+
+
+def test_analyze_hash_for_finding_and_error(app, tmp_path, scanner, ps_text):
+    from mandacaru.analysis import AnalysisResult, SourceResult
+
+    d, f = _scan_one(tmp_path, scanner, ps_text)
+    win = make_win(tmp_path, scanner)
+    wait_scan(win, [d])
+
+    win.hash_analyzer = lambda h: AnalysisResult(
+        case_id=h[:12],
+        verdict="legitimo_conhecido",
+        sources={"cymru": SourceResult("nao_achou"), "circl": SourceResult("achou", "a.ps1")},
+        summary="Legitimo conhecido: CIRCL reconhece este arquivo",
+    )
+    box = []
+    loop = QEventLoop()
+    win.hash_analysis_finished.connect(lambda h, res: (box.append((h, res)), loop.quit()))
+    QTimer.singleShot(5000, loop.quit)
+    win.analyze_finding(f)
+    loop.exec()
+    assert len(box) == 1 and box[0][1].verdict == "legitimo_conhecido"
+    assert win.infos and "CIRCL hashlookup" in win.infos[0] and "não saiu do computador" in win.infos[0]
+
+    # erro na consulta notifica o usuário sem travar
+    win.hash_analyzer = lambda h: (_ for _ in ()).throw(OSError("sem rede"))
+    box2 = []
+    loop2 = QEventLoop()
+    win.hash_analysis_finished.connect(lambda h, res: (box2.append((h, res)), loop2.quit()))
+    QTimer.singleShot(5000, loop2.quit)
+    win.analyze_hash("a" * 64, "quarentena.ps1")
+    loop2.exec()
+    assert box2 == [("a" * 64, None)] and win.msgs and "sem rede" in win.msgs[-1]
+
+
+def test_context_menu_scan_args_and_ipc_forwarding(app, tmp_path, scanner, ps_text):
+    from pathlib import Path
+
+    from mandacaru_win.__main__ import (
+        forward_scan_request,
+        forward_shred_request,
+        parse_scan_args,
+        parse_shred_args,
+    )
+
+    d, f = _scan_one(tmp_path, scanner, ps_text)
+    assert parse_scan_args(["--scan", str(d), "--scan=" + str(f)]) == [d, f]
+    assert parse_shred_args(["--shred", str(d), "--shred=" + str(f)]) == [d, f]
+    assert parse_scan_args(["--selftest"]) == [] and parse_shred_args(["--selftest"]) == []
+
+    win = make_win(tmp_path, scanner)
+    req_file = forward_scan_request(tmp_path / "dados", [d])
+    assert req_file.exists()
+    box = []
+    loop = QEventLoop()
+    win.scan_finished.connect(lambda s: (box.append(s), loop.quit()))
+    QTimer.singleShot(10000, loop.quit)
+    received = win.consume_scan_requests()
+    loop.exec()
+    assert received == [d] and not req_file.exists()
+    assert box and box[0].findings == 1
+
+    alvo = tmp_path / "shred_ipc"
+    alvo.mkdir()
+    (alvo / "x.txt").write_text("segredo")
+    shred_req = forward_shred_request(tmp_path / "dados", alvo)
+    sbox = []
+    sloop = QEventLoop()
+    win.shred_finished.connect(lambda s: (sbox.append(s), sloop.quit()))
+    QTimer.singleShot(10000, sloop.quit)
+    received_shred = win.consume_scan_requests()
+    sloop.exec()
+    assert received_shred == [alvo] and not shred_req.exists()
+    assert sbox and sbox[0].completed and not alvo.exists()
+
+    iss = (Path(__file__).parents[1] / "installer.iss").read_text(encoding="utf-8")
+    assert 'Name: "contextmenu"' in iss
+    assert r'Software\Classes\Directory\shell\MandacaruScan\command' in iss
+    assert '--scan ""%1""' in iss and '--scan ""%V""' in iss
+    assert r'Software\Classes\*\shell\MandacaruShred\command' in iss
+    assert r'Software\Classes\Directory\shell\MandacaruShred\command' in iss
+    assert '--shred ""%1""' in iss
+    assert r'Directory\Background\shell\MandacaruShred' not in iss
+
+
+def test_shred_folder_in_ui_respects_confirmation(app, tmp_path, scanner):
+    alvo = tmp_path / "destruir"
+    (alvo / "sub").mkdir(parents=True)
+    (alvo / "sub" / "segredo.txt").write_text("dados sensiveis")
+
+    win = make_win(tmp_path, scanner)
+    win.confirm = lambda _: False
+    win.shred_target(alvo)
+    assert alvo.exists()
+
+    win.confirm = lambda _: True
+    box = []
+    loop = QEventLoop()
+    win.shred_finished.connect(lambda s: (box.append(s), loop.quit()))
+    QTimer.singleShot(10000, loop.quit)
+    win.shred_target(alvo)
+    loop.exec()
+    assert box and box[0].completed and box[0].files_shredded == 1
+    assert not alvo.exists()
+    assert win.infos and "Destruição concluída" in win.infos[-1]

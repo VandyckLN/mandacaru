@@ -13,7 +13,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterable
 
 from mandacaru import ml
 from mandacaru.detectors.static import StaticScanner
@@ -76,9 +76,11 @@ def _own_dirs() -> tuple[str, ...]:
     return tuple(os.path.normcase(os.path.abspath(d)) for d in dirs)
 
 
-def _is_own(path: str | os.PathLike, own: tuple[str, ...]) -> bool:
+def _is_under(path: str | os.PathLike, dirs: tuple[str, ...]) -> bool:
+    if not dirs:
+        return False
     p = os.path.normcase(os.path.abspath(path))
-    return any(p == d or p.startswith(d + os.sep) for d in own)
+    return any(p == d or p.startswith(d + os.sep) for d in dirs)
 
 
 def list_files(
@@ -86,14 +88,15 @@ def list_files(
     scanner: StaticScanner,
     should_stop: Callable[[], bool] | None = None,
     on_listing: Callable[[int], None] | None = None,
+    exclude: Iterable[str | os.PathLike] = (),
 ) -> list[Path]:
     """Lista os arquivos a varrer. `should_stop` é checado a cada pasta."""
     stop = should_stop or (lambda: False)
-    own = _own_dirs()
+    skip_dirs = _own_dirs() + tuple(os.path.normcase(os.path.abspath(d)) for d in exclude)
     found: list[Path] = []
     for p in paths:
         root = Path(os.path.abspath(p))
-        if _is_own(root, own):
+        if _is_under(root, skip_dirs):
             continue
         if root.is_file():
             found.append(root)
@@ -114,7 +117,7 @@ def list_files(
                 try:
                     if e.is_dir():
                         if (e.name not in SKIP_DIRS
-                                and not _is_own(e.path, own)
+                                and not _is_under(e.path, skip_dirs)
                                 and not scanner.is_excluded(Path(e.path))
                                 and not _is_link(e.path)):
                             subdirs.append(e.path)
@@ -138,9 +141,10 @@ def scan_paths(
     on_finding: Callable[[Finding], None],
     should_stop: Callable[[], bool],
     on_listing: Callable[[int], None] | None = None,
+    exclude: Iterable[str | os.PathLike] = (),
 ) -> ScanSummary:
     started = time.time()
-    files = list_files(paths, scanner, should_stop, on_listing)
+    files = list_files(paths, scanner, should_stop, on_listing, exclude=exclude)
     total = len(files)
     scanned = findings = 0
     completed = not should_stop()  # parado durante a listagem

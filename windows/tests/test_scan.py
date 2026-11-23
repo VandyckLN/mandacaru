@@ -145,3 +145,21 @@ def test_own_rules_are_not_flagged(tmp_path, scanner):
     assert list_files([pkg / "rules" / "yara" / "base.yar"], scanner) == []
     (tmp_path / "x.txt").write_text("ok")
     assert list_files([tmp_path], scanner) == [tmp_path / "x.txt"]
+
+
+def test_excluded_folders_are_skipped_in_list_and_scan(tmp_path, scanner, ps_text):
+    ignorar = tmp_path / "ignorar"
+    (ignorar / "sub").mkdir(parents=True)
+    (ignorar / "sub" / "a.ps1").write_text(ps_text)
+    manter = tmp_path / "manter"
+    manter.mkdir()
+    (manter / "b.ps1").write_text(ps_text)
+
+    files = list_files([tmp_path], scanner, exclude=[ignorar])
+    assert files == [manter / "b.ps1"]
+    assert list_files([ignorar / "sub" / "a.ps1"], scanner, exclude=[ignorar]) == []
+
+    findings = []
+    summary = scan_paths([tmp_path], scanner, frozenset(), lambda *_: None,
+                         findings.append, lambda: False, exclude=[ignorar])
+    assert summary.completed and summary.files == 1 and [f.path for f in findings] == [manter / "b.ps1"]

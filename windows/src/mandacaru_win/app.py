@@ -1,6 +1,7 @@
 """Janela principal: aba Varredura."""
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -9,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QStandardPaths, Qt, QUrl, Signal
+from PySide6.QtCore import QFileSystemWatcher, QStandardPaths, Qt, QUrl, Signal
 from PySide6.QtGui import QBrush, QColor, QDesktopServices, QFontMetrics
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -29,10 +30,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mandacaru.analysis import AnalysisResult
 from mandacaru.events import Severity
 from mandacaru_win.quarantine import Quarantine, QuarantineError
 from mandacaru_win.scan import Finding, ScanSummary, make_scanner
-from mandacaru_win.store import UPDATE_KIND, History, TrustList
+from mandacaru_win.shred import ShredSummary
+from mandacaru_win.store import UPDATE_KIND, ExcludeList, History, TrustList
 from mandacaru_win.update_ui import UpdateBar
 from mandacaru_win.updates import (
     APP_INSTALLER_URI,
@@ -43,7 +46,13 @@ from mandacaru_win.updates import (
     UpdateService,
     WingetUnavailable,
 )
-from mandacaru_win.worker import ScanThread, UpdateApplyThread, UpdateCheckThread
+from mandacaru_win.worker import (
+    HashAnalysisThread,
+    ScanThread,
+    ShredThread,
+    UpdateApplyThread,
+    UpdateCheckThread,
+)
 
 SEV_LABEL = {
     Severity.CRITICAL: "Crítica", Severity.HIGH: "Alta",
@@ -68,19 +77,58 @@ def _default_notify(text: str, parent=None) -> None:
     QMessageBox.warning(parent, "Mandacaru", text)
 
 
+def _default_info(text: str, parent=None) -> None:
+    QMessageBox.information(parent, "Mandacaru — Análise de hash", text)
+
+
+_SOURCE_NAMES = {"cymru": "Team Cymru MHR", "circl": "CIRCL hashlookup",
+                 "malwarebazaar": "MalwareBazaar", "virustotal": "VirusTotal"}
+_STATUS_LABEL = {"achou": "encontrado", "nao_achou": "não encontrado", "erro": "erro"}
+
+
+def format_analysis_result(label: str, sha256: str, res: AnalysisResult) -> str:
+    """Formata o veredito da análise de hash em português para exibir na interface."""
+    lines = [
+        f"Arquivo: {label}",
+        f"SHA-256: {sha256[:16]}…",
+        "",
+        res.summary,
+        "",
+        "Fontes consultadas:",
+    ]
+    for name, src in res.sources.items():
+        if src.status == "desligada":
+            continue
+        title = _SOURCE_NAMES.get(name, name)
+        st = _STATUS_LABEL.get(src.status, src.status)
+        detail = f" ({src.detail})" if src.detail else ""
+        lines.append(f"• {title}: {st}{detail}")
+    lines.append("")
+    lines.append("Apenas o hash SHA-256 foi consultado; o conteúdo do arquivo não saiu do computador.")
+    return "\n".join(lines)
+
+
 class MainWindow(QMainWindow):
     scan_finished = Signal(object)
+    hash_analysis_finished = Signal(str, object)
+    shred_finished = Signal(object)
 
     def __init__(self, data: Path, scanner=None):
         super().__init__()
         self.setWindowTitle("Mandacaru")
-        self.resize(1040, 560)
+        self.resize(1100, 580)
         self.setAcceptDrops(True)
         self.confirm: Callable[[str], bool] = lambda t: _default_confirm(t, self)
         self.notify: Callable[[str], None] = lambda t: _default_notify(t, self)
+        self.info: Callable[[str], None] = lambda t: _default_info(t, self)
+        self.hash_analyzer: Callable[[str], AnalysisResult] | None = None
         self.findings: dict[Path, Finding] = {}
         self._items: dict[Path, QTreeWidgetItem] = {}
         self._thread: ScanThread | None = None
+        self._shred_thread: ShredThread | None = None
+        self._analysis_threads: list[HashAnalysisThread] = []
+        self._analyzing_hashes: set[str] = set()
+        self._req_watcher: QFileSystemWatcher | None = None
         self._files = 0
         self._data = Path(data)
         self._scanner = scanner if scanner is not None else make_scanner()
@@ -97,10 +145,20 @@ class MainWindow(QMainWindow):
             self._trust_error = (
                 "Não foi possível ler a lista de confiança "
                 f"({e}). A opção \"Ignorar sempre\" fica desativada nesta sessão.")
+        self._excludes: ExcludeList | None = None
+        self._excludes_error: str | None = None
+        try:
+            self._excludes = ExcludeList(self._data / "excludes.json")
+        except OSError as e:
+            self._excludes_error = (
+                "Não foi possível ler a lista de pastas excluídas "
+                f"({e}). A edição de exclusões fica desativada nesta sessão.")
         self._build_ui()
         self._build_update_ui()
         if self._trust_error:
             self.statusBar().showMessage(self._trust_error)
+        elif self._excludes_error:
+            self.statusBar().showMessage(self._excludes_error)
 
     # ---------- interface ----------
     def _build_ui(self) -> None:
@@ -111,15 +169,20 @@ class MainWindow(QMainWindow):
         self.btn_desktop = QPushButton("Área de Trabalho")
         self.btn_folder = QPushButton("Pasta…")
         self.btn_stop = QPushButton("Parar")
+        self.btn_shred = QPushButton("Destruir pasta…")
+        self.btn_shred.setToolTip(
+            "Sobrescreve os arquivos com dados aleatórios e apaga definitivamente (sem possibilidade de restauração).")
         self.btn_downloads.clicked.connect(lambda: self._scan_standard(
             QStandardPaths.StandardLocation.DownloadLocation))
         self.btn_desktop.clicked.connect(lambda: self._scan_standard(
             QStandardPaths.StandardLocation.DesktopLocation))
         self.btn_folder.clicked.connect(self._pick_folder)
         self.btn_stop.clicked.connect(self.stop_scan)
+        self.btn_shred.clicked.connect(self._pick_shred_folder)
         for b in (self.btn_downloads, self.btn_desktop, self.btn_folder, self.btn_stop):
             row.addWidget(b)
         row.addStretch(1)
+        row.addWidget(self.btn_shred)
         lay.addLayout(row)
 
         self.progress = QProgressBar()
@@ -137,18 +200,20 @@ class MainWindow(QMainWindow):
         self.tree.setRootIsDecorated(True)
         self.tree.header().setStretchLastSection(False)
         self.tree.setColumnWidth(0, 90)
-        self.tree.setColumnWidth(1, 270)
+        self.tree.setColumnWidth(1, 250)
         self.tree.setColumnWidth(2, 200)
-        self.tree.setColumnWidth(3, 340)
+        self.tree.setColumnWidth(3, 410)
         lay.addWidget(self.tree, 1)
 
         tabs = QTabWidget()
+        self.tabs = tabs
         tabs.addTab(scan_tab, "Varredura")
         self.tbl_quarantine = self._make_table(
             ["Data", "Caminho original", "Severidade", "Regras", "Ações"], stretch=1)
         tabs.addTab(self.tbl_quarantine, "Quarentena")
         trust_tab = QWidget()
         tl = QVBoxLayout(trust_tab)
+        tl.addWidget(QLabel("Arquivos confiáveis (ignorados por hash SHA-256)"))
         self.lbl_trust = QLabel("")
         self.lbl_trust.setWordWrap(True)
         self.lbl_trust.setVisible(False)
@@ -156,6 +221,23 @@ class MainWindow(QMainWindow):
             ["Caminho quando confiado", "Data", "SHA-256", "Ações"], stretch=0)
         tl.addWidget(self.lbl_trust)
         tl.addWidget(self.tbl_trust, 1)
+
+        excl_hdr = QHBoxLayout()
+        excl_hdr.addWidget(QLabel("Pastas ignoradas na varredura"))
+        excl_hdr.addStretch(1)
+        self.btn_add_exclude = QPushButton("Adicionar pasta…")
+        self.btn_add_exclude.clicked.connect(self._pick_exclude_folder)
+        if self._excludes is None:
+            self.btn_add_exclude.setEnabled(False)
+            self.btn_add_exclude.setToolTip(self._excludes_error or "")
+        excl_hdr.addWidget(self.btn_add_exclude)
+        tl.addLayout(excl_hdr)
+        self.lbl_excludes = QLabel("")
+        self.lbl_excludes.setWordWrap(True)
+        self.lbl_excludes.setVisible(False)
+        self.tbl_excludes = self._make_table(["Pasta ignorada", "Data", "Ações"], stretch=0)
+        tl.addWidget(self.lbl_excludes)
+        tl.addWidget(self.tbl_excludes, 1)
         tabs.addTab(trust_tab, "Confiáveis")
         self.tbl_history = self._make_table(
             ["Data", "Pastas", "Arquivos", "Achados", "Duração", "Situação"], stretch=1)
@@ -226,17 +308,19 @@ class MainWindow(QMainWindow):
             try:
                 sev = m.get("severidade", "")
                 sev = SEV_LABEL.get(Severity[sev], sev) if sev in Severity.__members__ else sev
-                vals = (self._fmt_date(m["data"]), str(m["caminho_original"]), str(sev),
+                orig = str(m["caminho_original"])
+                vals = (self._fmt_date(m["data"]), orig, str(sev),
                         ", ".join(str(r) for r in m.get("regras", [])))
-                qrows.append((vals, str(m["id"])))
+                qrows.append((vals, str(m["id"]), str(m["sha256"]), Path(orig).name or orig))
             except (TypeError, ValueError, KeyError):
                 continue
         t = self.tbl_quarantine
         self._reset_table(t, len(qrows))
-        for r, (vals, qid) in enumerate(qrows):
+        for r, (vals, qid, sha, name) in enumerate(qrows):
             for c, v in enumerate(vals):
                 t.setItem(r, c, QTableWidgetItem(v))
             self._button_cell(t, r, 4, [
+                ("Analisar", lambda h=sha, n=name: self.analyze_hash(h, n)),
                 ("Restaurar", lambda q=qid: self.restore_item(q)),
                 ("Apagar", lambda q=qid: self.delete_item(q))])
 
@@ -263,6 +347,27 @@ class MainWindow(QMainWindow):
             t.item(r, 2).setToolTip(h)
             self._button_cell(t, r, 3, [("Remover", lambda x=h: self.remove_trusted(x))])
 
+        t = self.tbl_excludes
+        if self._excludes is None:
+            self.lbl_excludes.setText(self._excludes_error or "Lista de exclusões indisponível.")
+            self.lbl_excludes.setVisible(True)
+            excl_entries = []
+        else:
+            self.lbl_excludes.setVisible(False)
+            excl_entries = self._excludes.entries()
+        erows = []
+        for e in excl_entries:
+            try:
+                p = str(e["caminho"])
+                erows.append(((p, self._fmt_date(e.get("data", ""))), p))
+            except (TypeError, ValueError, KeyError):
+                continue
+        self._reset_table(t, len(erows))
+        for r, (vals, p) in enumerate(erows):
+            for c, v in enumerate(vals):
+                t.setItem(r, c, QTableWidgetItem(v))
+            self._button_cell(t, r, 2, [("Remover", lambda x=p: self.remove_excluded_folder(x))])
+
         hrows = []
         for e in self._history.recent(50):
             try:
@@ -284,7 +389,7 @@ class MainWindow(QMainWindow):
                 t.setItem(r, c, QTableWidgetItem(v))
 
     def _set_scanning(self, on: bool) -> None:
-        for b in (self.btn_downloads, self.btn_desktop, self.btn_folder):
+        for b in (self.btn_downloads, self.btn_desktop, self.btn_folder, self.btn_shred):
             b.setEnabled(not on)
         self.btn_stop.setEnabled(on)
 
@@ -343,7 +448,8 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Varrendo…")
         self._set_scanning(True)
         trusted = self._trust.hashes() if self._trust else set()
-        t = ScanThread([Path(p) for p in paths], self._scanner, trusted)
+        excluded = self._excludes.paths() if self._excludes else ()
+        t = ScanThread([Path(p) for p in paths], self._scanner, trusted, exclude=excluded)
         t.listing.connect(self._on_listing)
         t.progress.connect(self._on_progress)
         t.found.connect(self._on_found)
@@ -356,6 +462,9 @@ class MainWindow(QMainWindow):
         if self._thread is not None:
             self._thread.stop()
             self.statusBar().showMessage("Interrompendo…")
+        if self._shred_thread is not None:
+            self._shred_thread.stop()
+            self.statusBar().showMessage("Interrompendo destruição…")
 
     def _on_listing(self, count: int) -> None:
         self.lbl_file.setText(f"Listando… {count} arquivos")
@@ -401,7 +510,8 @@ class MainWindow(QMainWindow):
         w = QWidget()
         h = QHBoxLayout(w)
         h.setContentsMargins(2, 0, 2, 0)
-        for label, fn in (("Abrir local", self.open_location),
+        for label, fn in (("Analisar", self.analyze_finding),
+                          ("Abrir local", self.open_location),
                           ("Ignorar sempre", self.ignore_finding),
                           ("Quarentena", self.quarantine_finding)):
             b = QPushButton(label)
@@ -453,8 +563,162 @@ class MainWindow(QMainWindow):
         if self._thread is not None:
             self._thread.stop()
             self._thread.wait()
+        if self._shred_thread is not None:
+            self._shred_thread.stop()
+            self._shred_thread.wait()
+        for t in list(self._analysis_threads):
+            t.wait()
+        self._analysis_threads.clear()
+        self._analyzing_hashes.clear()
+        if self._req_watcher is not None:
+            self._req_watcher.deleteLater()
+            self._req_watcher = None
         self.update_bar.shutdown()
         super().closeEvent(e)
+
+    def _pick_shred_folder(self) -> None:
+        p = QFileDialog.getExistingDirectory(self, "Escolher pasta para destruir definitivamente")
+        if p:
+            self.shred_target(Path(p))
+
+    def shred_target(self, target: Path) -> None:
+        """Sobrescreve com dados aleatórios e apaga definitivamente um arquivo ou pasta."""
+        if self._thread is not None or self._shred_thread is not None:
+            return
+        p = Path(target)
+        if not self.confirm(
+                f"Destruir definitivamente?\n{p}\n\n"
+                "Todos os arquivos serão sobrescritos com dados aleatórios, renomeados e apagados "
+                "sem passar pela Lixeira. Esta ação NÃO pode ser desfeita."):
+            return
+        self.progress.setRange(0, 0)
+        self.lbl_file.setText(f"Destruindo definitivamente: {p}")
+        self.statusBar().showMessage("Destruindo arquivos…")
+        self._set_scanning(True)
+        t = ShredThread(p)
+        t.progress.connect(self._on_shred_progress)
+        t.done.connect(self._on_shred_done)
+        t.failed.connect(self._on_shred_failed)
+        self._shred_thread = t
+        t.start()
+
+    def _on_shred_progress(self, path: Path, i: int, total: int) -> None:
+        self.progress.setRange(0, max(total, 1))
+        self.progress.setValue(i)
+        self.lbl_file.setText(f"Destruindo ({i}/{total}): {path.name}")
+
+    def _finish_shred_thread(self) -> None:
+        t, self._shred_thread = self._shred_thread, None
+        if t is not None:
+            t.wait()
+            t.deleteLater()
+        self._set_scanning(False)
+
+    def _on_shred_done(self, summary: ShredSummary) -> None:
+        self._finish_shred_thread()
+        self.progress.setRange(0, 1)
+        self.progress.setValue(1 if summary.completed else 0)
+        msg = (f"Destruição concluída: {summary.files_shredded} arquivo(s) sobrescrito(s) e apagado(s), "
+               f"{summary.dirs_removed} pasta(s) removida(s).")
+        if not summary.completed:
+            msg = f"Destruição interrompida ({summary.files_shredded} arquivo(s) já destruído(s))."
+        if summary.errors:
+            msg += f"\n\nAvisos ({len(summary.errors)}):\n" + "\n".join(summary.errors[:10])
+            self.notify(msg)
+        else:
+            self.info(msg)
+        self.statusBar().showMessage("Destruição concluída" if summary.completed else "Destruição interrompida")
+        self.lbl_file.setText("Arraste uma pasta ou arquivo para cá, ou escolha acima.")
+        self.shred_finished.emit(summary)
+
+    def _on_shred_failed(self, msg: str) -> None:
+        self._finish_shred_thread()
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        self.statusBar().showMessage("Falha na destruição")
+        self.notify(f"Não foi possível destruir: {msg}")
+        self.shred_finished.emit(ShredSummary("", 0, 0, [msg], False))
+
+    # ---------- análise de hash ----------
+    def analyze_finding(self, path: Path) -> None:
+        f = self.findings.get(path)
+        if f is None:
+            return
+        self.analyze_hash(f.sha256, f.path.name)
+
+    def analyze_hash(self, sha256: str, label: str) -> None:
+        if sha256 in self._analyzing_hashes:
+            return
+        self._analyzing_hashes.add(sha256)
+        self.statusBar().showMessage(f"Analisando hash de {label}…")
+        t = HashAnalysisThread(sha256, label, analyzer=self.hash_analyzer)
+        t.done.connect(lambda lbl, h, res, th=t: self._on_analysis_done(th, lbl, h, res))
+        t.failed.connect(lambda lbl, msg, h=sha256, th=t: self._on_analysis_failed(th, lbl, h, msg))
+        self._analysis_threads.append(t)
+        t.start()
+
+    def _finish_analysis_thread(self, t: HashAnalysisThread, sha256: str) -> None:
+        self._analyzing_hashes.discard(sha256)
+        if t in self._analysis_threads:
+            self._analysis_threads.remove(t)
+        t.wait()
+        t.deleteLater()
+
+    def _on_analysis_done(self, t: HashAnalysisThread, label: str, sha256: str, res: AnalysisResult) -> None:
+        self._finish_analysis_thread(t, sha256)
+        self.statusBar().showMessage(res.summary)
+        self.info(format_analysis_result(label, sha256, res))
+        self.hash_analysis_finished.emit(sha256, res)
+
+    def _on_analysis_failed(self, t: HashAnalysisThread, label: str, sha256: str, msg: str) -> None:
+        self._finish_analysis_thread(t, sha256)
+        self.statusBar().showMessage("Falha na análise de hash")
+        self.notify(f"Não foi possível analisar o hash de {label}: {msg}")
+        self.hash_analysis_finished.emit(sha256, None)
+
+    # ---------- requisições externas (--scan / menu de contexto) ----------
+    def watch_scan_requests(self) -> None:
+        """Observa arquivos scan-req-*.json gravados por uma segunda instância (--scan)."""
+        self._data.mkdir(parents=True, exist_ok=True)
+        if self._req_watcher is None:
+            self._req_watcher = QFileSystemWatcher([str(self._data)], self)
+            self._req_watcher.directoryChanged.connect(lambda _: self.consume_scan_requests())
+        self.consume_scan_requests()
+
+    def consume_scan_requests(self) -> list[Path]:
+        """Lê e apaga requisições externas (`--scan` / `--shred`) e executa se a janela estiver livre."""
+        scan_paths_req: list[Path] = []
+        shred_paths_req: list[Path] = []
+        if not self._data.is_dir():
+            return []
+        for req in sorted(self._data.glob("scan-req-*.json")):
+            try:
+                raw = json.loads(req.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                raw = None
+            try:
+                req.unlink(missing_ok=True)
+            except OSError:
+                pass
+            if isinstance(raw, dict) and isinstance(raw.get("paths"), list):
+                action = raw.get("action", "scan")
+                dest = shred_paths_req if action == "shred" else scan_paths_req
+                for item in raw["paths"]:
+                    if isinstance(item, str) and item.strip():
+                        dest.append(Path(item))
+        if not scan_paths_req and not shred_paths_req:
+            return []
+        self.tabs.setCurrentIndex(0)
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        if self._thread is not None or self._shred_thread is not None:
+            self.statusBar().showMessage("Já há uma operação em andamento; aguarde terminar.")
+        elif shred_paths_req:
+            self.shred_target(shred_paths_req[0])
+        else:
+            self.start_scan(scan_paths_req)
+        return shred_paths_req or scan_paths_req
 
     # ---------- ações por achado ----------
     def _remove_row(self, path: Path) -> None:
@@ -536,6 +800,33 @@ class MainWindow(QMainWindow):
             self._trust.remove(sha256)
         except OSError as e:
             self.notify(f"Não foi possível salvar a lista de confiança: {e}")
+            return
+        self.refresh_tabs()
+
+    def _pick_exclude_folder(self) -> None:
+        p = QFileDialog.getExistingDirectory(self, "Escolher pasta para excluir da varredura")
+        if p:
+            self.add_excluded_folder(Path(p))
+
+    def add_excluded_folder(self, path: Path) -> None:
+        if self._excludes is None:
+            self.notify(self._excludes_error or "Lista de exclusões indisponível.")
+            return
+        try:
+            self._excludes.add(path)
+        except OSError as e:
+            self.notify(f"Não foi possível salvar as pastas excluídas: {e}")
+            return
+        self.refresh_tabs()
+
+    def remove_excluded_folder(self, path: str) -> None:
+        if self._excludes is None:
+            self.notify(self._excludes_error or "Lista de exclusões indisponível.")
+            return
+        try:
+            self._excludes.remove(path)
+        except OSError as e:
+            self.notify(f"Não foi possível salvar as pastas excluídas: {e}")
             return
         self.refresh_tabs()
 

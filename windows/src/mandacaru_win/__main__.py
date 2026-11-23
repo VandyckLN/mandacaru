@@ -1,15 +1,17 @@
 """Ponto de entrada: python -m mandacaru_win / mandacaru-win."""
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
 import traceback
+import uuid
 from datetime import datetime
 from importlib import resources
 from pathlib import Path
 
-from PySide6.QtCore import QLockFile
+from PySide6.QtCore import QLockFile, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -85,9 +87,63 @@ def app_icon() -> QIcon:
     return QIcon(str(resources.files("mandacaru_win") / "assets" / "mandacaru.png"))
 
 
+def _parse_flag_paths(argv: list[str], flag: str) -> list[Path]:
+    paths: list[Path] = []
+    prefix = flag + "="
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == flag and i + 1 < len(argv):
+            val = argv[i + 1].strip()
+            if val:
+                paths.append(Path(val))
+            i += 2
+            continue
+        if arg.startswith(prefix):
+            val = arg.split("=", 1)[1].strip()
+            if val:
+                paths.append(Path(val))
+        i += 1
+    return paths
+
+
+def parse_scan_args(argv: list[str]) -> list[Path]:
+    """Extrai caminhos passados via `--scan CAMINHO` (usado pelo menu de contexto do Explorer)."""
+    return _parse_flag_paths(argv, "--scan")
+
+
+def parse_shred_args(argv: list[str]) -> list[Path]:
+    """Extrai caminhos passados via `--shred CAMINHO` (destruição definitiva pelo Explorer)."""
+    return _parse_flag_paths(argv, "--shred")
+
+
+def _forward_request(directory: Path, action: str, paths: list[Path]) -> Path:
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    name = f"scan-req-{uuid.uuid4().hex}.json"
+    tmp = directory / (name + ".tmp")
+    dest = directory / name
+    payload = json.dumps({"action": action, "paths": [str(p) for p in paths]}, ensure_ascii=False)
+    tmp.write_text(payload, encoding="utf-8")
+    os.replace(tmp, dest)
+    return dest
+
+
+def forward_scan_request(directory: Path, paths: list[Path]) -> Path:
+    """Grava uma requisição atômica para a instância já aberta iniciar a varredura."""
+    return _forward_request(directory, "scan", paths)
+
+
+def forward_shred_request(directory: Path, target: Path) -> Path:
+    """Grava uma requisição atômica para a instância já aberta pedir confirmação e destruir o alvo."""
+    return _forward_request(directory, "shred", [target])
+
+
 def main() -> int:
     if "--selftest" in sys.argv:
         return selftest()
+    scan_targets = parse_scan_args(sys.argv[1:])
+    shred_targets = parse_shred_args(sys.argv[1:])
     set_app_id()  # antes de criar qualquer janela
     app = QApplication(sys.argv)
     app.setApplicationName("Mandacaru")
@@ -96,11 +152,28 @@ def main() -> int:
     install_excepthook(data)
     lock = acquire_lock(data)
     if lock is None:
+        if shred_targets:
+            try:
+                forward_shred_request(data, shred_targets[0])
+                return 0
+            except OSError:
+                pass
+        elif scan_targets:
+            try:
+                forward_scan_request(data, scan_targets)
+                return 0
+            except OSError:
+                pass
         QMessageBox.information(None, "Mandacaru", "O Mandacaru já está em execução.")
         return 0
     win = MainWindow(data)
     win.show()
+    win.watch_scan_requests()
     win.check_updates()  # em thread; no máximo 1×/24 h
+    if shred_targets:
+        QTimer.singleShot(0, lambda w=win, t=shred_targets[0]: w.shred_target(t))
+    elif scan_targets:
+        QTimer.singleShot(0, lambda w=win, t=scan_targets: w.start_scan(t))
     rc = app.exec()
     # a janela precisa morrer antes do QApplication, senão o Windows fecha com access violation
     del win
