@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QFileSystemWatcher, QStandardPaths, Qt, QUrl, Signal
+from PySide6.QtCore import QEvent, QFileSystemWatcher, QStandardPaths, Qt, QUrl, Signal
 from PySide6.QtGui import QBrush, QColor, QDesktopServices, QFontMetrics
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
-    QProgressBar,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -36,6 +35,7 @@ from mandacaru_win.quarantine import Quarantine, QuarantineError
 from mandacaru_win.scan import Finding, ScanSummary, make_scanner
 from mandacaru_win.shred import ShredSummary
 from mandacaru_win.store import UPDATE_KIND, ExcludeList, History, TrustList
+from mandacaru_win.theme import build_stylesheet, is_dark_palette, style_button
 from mandacaru_win.update_ui import UpdateBar
 from mandacaru_win.updates import (
     APP_INSTALLER_URI,
@@ -46,6 +46,7 @@ from mandacaru_win.updates import (
     UpdateService,
     WingetUnavailable,
 )
+from mandacaru_win.widgets import BadgeDelegate, MandacaruProgressBar
 from mandacaru_win.worker import (
     HashAnalysisThread,
     ScanThread,
@@ -153,23 +154,37 @@ class MainWindow(QMainWindow):
             self._excludes_error = (
                 "Não foi possível ler a lista de pastas excluídas "
                 f"({e}). A edição de exclusões fica desativada nesta sessão.")
+        self._dark_theme: bool | None = None
         self._build_ui()
         self._build_update_ui()
+        self._apply_theme()
         if self._trust_error:
             self.statusBar().showMessage(self._trust_error)
         elif self._excludes_error:
             self.statusBar().showMessage(self._excludes_error)
+
+    def _apply_theme(self) -> None:
+        dark = is_dark_palette(self)
+        if dark == self._dark_theme:
+            return
+        self._dark_theme = dark
+        self.setStyleSheet(build_stylesheet(dark))
+
+    def changeEvent(self, event) -> None:  # noqa: N802 - API Qt
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
+            self._apply_theme()
 
     # ---------- interface ----------
     def _build_ui(self) -> None:
         scan_tab = QWidget()
         lay = QVBoxLayout(scan_tab)
         row = QHBoxLayout()
-        self.btn_downloads = QPushButton("Downloads")
-        self.btn_desktop = QPushButton("Área de Trabalho")
-        self.btn_folder = QPushButton("Pasta…")
-        self.btn_stop = QPushButton("Parar")
-        self.btn_shred = QPushButton("Destruir pasta…")
+        self.btn_downloads = style_button(QPushButton("Downloads"), "scan")
+        self.btn_desktop = style_button(QPushButton("Área de Trabalho"), "scan")
+        self.btn_folder = style_button(QPushButton("Pasta…"), "scan")
+        self.btn_stop = style_button(QPushButton("Parar"), "danger")
+        self.btn_shred = style_button(QPushButton("Destruir pasta…"), "danger")
         self.btn_shred.setToolTip(
             "Sobrescreve os arquivos com dados aleatórios e apaga definitivamente (sem possibilidade de restauração).")
         self.btn_downloads.clicked.connect(lambda: self._scan_standard(
@@ -185,7 +200,7 @@ class MainWindow(QMainWindow):
         row.addWidget(self.btn_shred)
         lay.addLayout(row)
 
-        self.progress = QProgressBar()
+        self.progress = MandacaruProgressBar()
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
         self.lbl_file = QLabel("Arraste uma pasta ou arquivo para cá, ou escolha acima.")
@@ -199,10 +214,11 @@ class MainWindow(QMainWindow):
         self.tree.setHeaderLabels(["Severidade", "Arquivo", "Motivo", "Ações"])
         self.tree.setRootIsDecorated(True)
         self.tree.header().setStretchLastSection(False)
-        self.tree.setColumnWidth(0, 90)
+        self.tree.setColumnWidth(0, 100)
         self.tree.setColumnWidth(1, 250)
         self.tree.setColumnWidth(2, 200)
-        self.tree.setColumnWidth(3, 410)
+        self.tree.setColumnWidth(3, 430)
+        self.tree.setItemDelegateForColumn(0, BadgeDelegate(self.tree))
         lay.addWidget(self.tree, 1)
 
         tabs = QTabWidget()
@@ -210,6 +226,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(scan_tab, "Varredura")
         self.tbl_quarantine = self._make_table(
             ["Data", "Caminho original", "Severidade", "Regras", "Ações"], stretch=1)
+        self.tbl_quarantine.setItemDelegateForColumn(2, BadgeDelegate(self.tbl_quarantine))
         tabs.addTab(self.tbl_quarantine, "Quarentena")
         trust_tab = QWidget()
         tl = QVBoxLayout(trust_tab)
@@ -255,6 +272,7 @@ class MainWindow(QMainWindow):
         t.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         t.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         t.verticalHeader().setVisible(False)
+        t.verticalHeader().setDefaultSectionSize(34)
         t.setWordWrap(False)
         hh = t.horizontalHeader()
         hh.setStretchLastSection(False)
@@ -275,12 +293,15 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _button_cell(table: QTableWidget, row: int, col: int,
-                     buttons: list[tuple[str, Callable[[], None]]]) -> None:
+                     buttons: list[tuple]) -> None:
         w = QWidget()
         h = QHBoxLayout(w)
-        h.setContentsMargins(2, 0, 2, 0)
-        for label, fn in buttons:
-            b = QPushButton(label)
+        h.setContentsMargins(4, 2, 4, 2)
+        h.setSpacing(6)
+        for item in buttons:
+            label, fn = item[0], item[1]
+            role = item[2] if len(item) > 2 else "neutral"
+            b = style_button(QPushButton(label), role, compact=True)
             b.clicked.connect(lambda _=False, fn=fn: fn())
             h.addWidget(b)
         table.setCellWidget(row, col, w)
@@ -320,9 +341,9 @@ class MainWindow(QMainWindow):
             for c, v in enumerate(vals):
                 t.setItem(r, c, QTableWidgetItem(v))
             self._button_cell(t, r, 4, [
-                ("Analisar", lambda h=sha, n=name: self.analyze_hash(h, n)),
-                ("Restaurar", lambda q=qid: self.restore_item(q)),
-                ("Apagar", lambda q=qid: self.delete_item(q))])
+                ("Analisar", lambda h=sha, n=name: self.analyze_hash(h, n), "analyze"),
+                ("Restaurar", lambda q=qid: self.restore_item(q), "neutral"),
+                ("Apagar", lambda q=qid: self.delete_item(q), "danger")])
 
         t = self.tbl_trust
         if self._trust is None:
@@ -443,6 +464,7 @@ class MainWindow(QMainWindow):
         self.findings.clear()
         self._items.clear()
         self._files = 0
+        self.progress.set_tone("normal")
         self.progress.setRange(0, 0)  # indeterminado até saber o total
         self.lbl_count.setText("0 arquivos · 0 achados")
         self.statusBar().showMessage("Varrendo…")
@@ -509,12 +531,13 @@ class MainWindow(QMainWindow):
     def _actions_widget(self, path: Path) -> QWidget:
         w = QWidget()
         h = QHBoxLayout(w)
-        h.setContentsMargins(2, 0, 2, 0)
-        for label, fn in (("Analisar", self.analyze_finding),
-                          ("Abrir local", self.open_location),
-                          ("Ignorar sempre", self.ignore_finding),
-                          ("Quarentena", self.quarantine_finding)):
-            b = QPushButton(label)
+        h.setContentsMargins(4, 2, 4, 2)
+        h.setSpacing(6)
+        for label, fn, role in (("Analisar", self.analyze_finding, "analyze"),
+                                ("Abrir local", self.open_location, "neutral"),
+                                ("Ignorar sempre", self.ignore_finding, "neutral"),
+                                ("Quarentena", self.quarantine_finding, "quarantine")):
+            b = style_button(QPushButton(label), role, compact=True)
             b.clicked.connect(lambda _=False, p=path, fn=fn: fn(p))
             if fn == self.ignore_finding and self._trust is None:
                 b.setEnabled(False)
@@ -534,11 +557,14 @@ class MainWindow(QMainWindow):
         self._set_scanning(False)
         self.refresh_tabs()
         if summary.completed:
+            self.progress.set_tone("normal")
             self.progress.setRange(0, max(summary.files, 1))
             self.progress.setValue(summary.files)
-        elif self.progress.maximum() == 0:  # parou ainda na listagem
-            self.progress.setRange(0, 1)
-            self.progress.setValue(0)
+        else:
+            self.progress.set_tone("warning")
+            if self.progress.maximum() == 0:  # parou ainda na listagem
+                self.progress.setRange(0, 1)
+                self.progress.setValue(0)
         self.statusBar().showMessage("Concluída" if summary.completed else "Interrompida")
         self.scan_finished.emit(summary)
 
@@ -548,6 +574,7 @@ class MainWindow(QMainWindow):
             t.wait()
             t.deleteLater()
         self._set_scanning(False)
+        self.progress.set_tone("error")
         if self.progress.maximum() == 0:
             self.progress.setRange(0, 1)
             self.progress.setValue(0)
@@ -591,6 +618,7 @@ class MainWindow(QMainWindow):
                 "Todos os arquivos serão sobrescritos com dados aleatórios, renomeados e apagados "
                 "sem passar pela Lixeira. Esta ação NÃO pode ser desfeita."):
             return
+        self.progress.set_tone("shred")
         self.progress.setRange(0, 0)
         self.lbl_file.setText(f"Destruindo definitivamente: {p}")
         self.statusBar().showMessage("Destruindo arquivos…")
@@ -616,6 +644,7 @@ class MainWindow(QMainWindow):
 
     def _on_shred_done(self, summary: ShredSummary) -> None:
         self._finish_shred_thread()
+        self.progress.set_tone("shred" if summary.completed and not summary.errors else "warning")
         self.progress.setRange(0, 1)
         self.progress.setValue(1 if summary.completed else 0)
         msg = (f"Destruição concluída: {summary.files_shredded} arquivo(s) sobrescrito(s) e apagado(s), "
@@ -633,6 +662,7 @@ class MainWindow(QMainWindow):
 
     def _on_shred_failed(self, msg: str) -> None:
         self._finish_shred_thread()
+        self.progress.set_tone("error")
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
         self.statusBar().showMessage("Falha na destruição")
@@ -841,10 +871,10 @@ class MainWindow(QMainWindow):
         tab = QWidget()
         lay = QVBoxLayout(tab)
         row = QHBoxLayout()
-        self.btn_upd_quick = QPushButton("Verificação rápida")
-        self.btn_upd_full = QPushButton("Verificação completa")
-        self.btn_upd_stop = QPushButton("Parar")
-        self.btn_open_wu = QPushButton("Abrir Windows Update")
+        self.btn_upd_quick = style_button(QPushButton("Verificação rápida"), "scan")
+        self.btn_upd_full = style_button(QPushButton("Verificação completa"), "scan")
+        self.btn_upd_stop = style_button(QPushButton("Parar"), "danger")
+        self.btn_open_wu = style_button(QPushButton("Abrir Windows Update"), "neutral")
         self.btn_upd_quick.setToolTip("Programas com versão nova e falhas já usadas em ataques (segundos).")
         self.btn_upd_full.setToolTip("Também consulta CVEs na NVD e as atualizações pendentes do Windows "
                                      "(minutos). Só o nome e a versão dos programas são enviados à NVD.")
@@ -858,7 +888,7 @@ class MainWindow(QMainWindow):
         row.addWidget(self.btn_open_wu)
         lay.addLayout(row)
 
-        self.upd_progress = QProgressBar()
+        self.upd_progress = MandacaruProgressBar()
         self.upd_progress.setRange(0, 1)
         self.upd_progress.setValue(0)
         self.lbl_upd = QLabel("Veja se os seus programas estão em dia. Nada é alterado sem você mandar.")
@@ -868,6 +898,7 @@ class MainWindow(QMainWindow):
 
         self.tbl_updates = self._make_table(["", "Programa", "Instalada → Disponível", "Risco", "Situação"],
                                             stretch=1)
+        self.tbl_updates.setItemDelegateForColumn(3, BadgeDelegate(self.tbl_updates))
         self.tbl_updates.horizontalHeaderItem(0).setToolTip("Marcados serão atualizados")
         lay.addWidget(self.tbl_updates, 1)
 
@@ -881,10 +912,10 @@ class MainWindow(QMainWindow):
                               "quiser. Programas instalados para todos os usuários podem pedir permissão do "
                               "Windows (UAC).")
         self.lbl_uac.setWordWrap(True)
-        self.btn_get_winget = QPushButton("Instalar o winget (Microsoft Store)")
+        self.btn_get_winget = style_button(QPushButton("Instalar o winget (Microsoft Store)"), "neutral")
         self.btn_get_winget.clicked.connect(lambda: self._open_uri(APP_INSTALLER_URI))
         self.btn_get_winget.setVisible(False)
-        self.btn_upd_apply = QPushButton("Atualizar selecionados")
+        self.btn_upd_apply = style_button(QPushButton("Atualizar selecionados"), "scan")
         self.btn_upd_apply.clicked.connect(self.apply_selected_updates)
         bottom.addWidget(self.lbl_uac, 1)
         bottom.addWidget(self.btn_get_winget)
@@ -932,6 +963,7 @@ class MainWindow(QMainWindow):
             return
         self.btn_get_winget.setVisible(False)
         self.lbl_wu.setVisible(False)
+        self.upd_progress.set_tone("normal")
         self.upd_progress.setRange(0, 0)
         self.lbl_upd.setText("Verificando…")
         self._upd_items = []
@@ -992,6 +1024,7 @@ class MainWindow(QMainWindow):
 
     def _on_upd_failed(self, exc: object) -> None:
         self._finish_upd_thread()
+        self.upd_progress.set_tone("error")
         self.upd_progress.setValue(0)
         if isinstance(exc, WingetUnavailable):
             self.lbl_upd.setText("Para listar e atualizar programas, o Mandacaru usa o winget, que vem com o "
@@ -1050,6 +1083,7 @@ class MainWindow(QMainWindow):
         t.failed.connect(self._on_apply_failed)
         self._apply_thread = t
         self._set_updating(True)
+        self.upd_progress.set_tone("normal")
         self.upd_progress.setRange(0, len(rows))
         self.upd_progress.setValue(0)
         t.start()
