@@ -540,3 +540,26 @@ def test_settings_tab_cron_and_scheduled_background_scan(app, tmp_path, scanner,
     assert win.save_schedule_settings()
     assert not win._schedule_timer.isActive()
     assert win.check_scheduled_scan(now=datetime.now() + timedelta(days=1)) is False
+
+
+def test_settings_chips_builder_and_scopes(app, tmp_path, scanner):
+    from PySide6.QtCore import QTime
+
+    win = make_win(tmp_path, scanner)
+    win._select_freq_mode("1h")
+    assert win.txt_sched_cron.text() == "0 * * * *"
+
+    win._select_freq_mode("diario")
+    win.time_sched.setTime(QTime(8, 30))
+    win._set_daily_weekdays(True)
+    assert win.txt_sched_cron.text() == "30 8 * * 1-5"
+
+    win._select_freq_mode("semanal")
+    win._dow_chips[1].setChecked(True)
+    win._dow_chips[5].setChecked(True)
+    win._sync_cron_from_visual()
+    assert win.txt_sched_cron.text() == "30 8 * * 1,5"
+
+    win._select_scope("completa")
+    assert win.save_schedule_settings()
+    assert win._schedule_store.get().scope == "completa"

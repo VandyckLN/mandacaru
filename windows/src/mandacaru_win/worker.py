@@ -20,12 +20,22 @@ class ScanThread(QThread):
     done = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, paths: list[Path], scanner, trusted: set[str], exclude: Iterable[str] = ()):
+    def __init__(
+        self,
+        paths: list[Path],
+        scanner,
+        trusted: set[str],
+        exclude: Iterable[str] = (),
+        batch_size: int = 0,
+        batch_pause_s: float = 0.0,
+    ):
         super().__init__()
         self._paths = paths
         self._scanner = scanner
         self._trusted = trusted
         self._exclude = tuple(exclude)
+        self._batch_size = batch_size
+        self._batch_pause_s = batch_pause_s
         self._stop = False
         self._last_progress = self._last_listing = 0.0
 
@@ -55,6 +65,8 @@ class ScanThread(QThread):
                 should_stop=lambda: self._stop,
                 on_listing=self._emit_listing,
                 exclude=self._exclude,
+                batch_size=self._batch_size,
+                batch_pause_s=self._batch_pause_s,
             )
         except Exception as e:  # noqa: BLE001 - qualquer falha deve liberar a janela
             self.failed.emit(f"{type(e).__name__}: {e}")

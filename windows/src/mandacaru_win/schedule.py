@@ -187,11 +187,17 @@ def describe_cron(expr: str) -> str:
     return f"Agendamento personalizado ({norm})"
 
 
+VALID_SCOPES = ("principais", "completa", "personalizada")
+DEFAULT_BATCH_SIZE = 200
+DEFAULT_BATCH_PAUSE_S = 0.05
+
+
 @dataclass
 class ScheduleConfig:
     enabled: bool = True
     cron: str = DEFAULT_CRON
-    paths: list[str] = field(default_factory=list)  # vazio = Downloads e Área de Trabalho
+    paths: list[str] = field(default_factory=list)
+    scope: str = "completa"  # principais | completa (em lotes) | personalizada
     minimize_to_tray: bool = True
     last_run: float | None = None
 
@@ -226,12 +232,17 @@ class ScheduleStore:
         enabled = data.get("enabled")
         minimize = data.get("minimize_to_tray")
         paths = data.get("paths")
+        clean_paths = ([os.path.abspath(p) for p in paths if isinstance(p, str) and p.strip()]
+                       if isinstance(paths, list) else [])
+        scope = data.get("scope")
+        if scope not in VALID_SCOPES:
+            scope = "personalizada" if clean_paths else "completa"
         last_run = data.get("last_run")
         return ScheduleConfig(
             enabled=enabled if isinstance(enabled, bool) else True,
             cron=cron,
-            paths=[os.path.abspath(p) for p in paths if isinstance(p, str) and p.strip()]
-            if isinstance(paths, list) else [],
+            paths=clean_paths,
+            scope=scope,
             minimize_to_tray=minimize if isinstance(minimize, bool) else True,
             last_run=float(last_run) if isinstance(last_run, (int, float)) and not isinstance(last_run, bool) else None,
         )
@@ -241,16 +252,19 @@ class ScheduleStore:
             enabled=self._cfg.enabled,
             cron=self._cfg.cron,
             paths=list(self._cfg.paths),
+            scope=self._cfg.scope,
             minimize_to_tray=self._cfg.minimize_to_tray,
             last_run=self._cfg.last_run,
         )
 
     def save(self, cfg: ScheduleConfig) -> None:
         normalized = parse_cron(cfg.cron).expr
+        scope = cfg.scope if cfg.scope in VALID_SCOPES else "completa"
         clean = ScheduleConfig(
             enabled=bool(cfg.enabled),
             cron=normalized,
             paths=list(dict.fromkeys(os.path.abspath(p) for p in cfg.paths if str(p).strip())),
+            scope=scope,
             minimize_to_tray=bool(cfg.minimize_to_tray),
             last_run=cfg.last_run,
         )
@@ -258,6 +272,7 @@ class ScheduleStore:
             "enabled": clean.enabled,
             "cron": clean.cron,
             "paths": clean.paths,
+            "scope": clean.scope,
             "minimize_to_tray": clean.minimize_to_tray,
             "last_run": clean.last_run,
         })

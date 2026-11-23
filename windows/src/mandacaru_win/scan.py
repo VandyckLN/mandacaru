@@ -142,6 +142,8 @@ def scan_paths(
     should_stop: Callable[[], bool],
     on_listing: Callable[[int], None] | None = None,
     exclude: Iterable[str | os.PathLike] = (),
+    batch_size: int = 0,
+    batch_pause_s: float = 0.0,
 ) -> ScanSummary:
     started = time.time()
     files = list_files(paths, scanner, should_stop, on_listing, exclude=exclude)
@@ -158,15 +160,19 @@ def scan_paths(
             alerts = []
         scanned += 1
         on_progress(f, i, total)
-        if not alerts:
-            continue
-        try:
-            digest = sha256_file(f)
-        except OSError:
-            continue
-        if digest in trusted:
-            continue
-        findings += 1
-        on_finding(Finding(f, digest, max(a.severity for a in alerts), alerts))
+        if alerts:
+            try:
+                digest = sha256_file(f)
+            except OSError:
+                digest = ""
+            if digest and digest not in trusted:
+                findings += 1
+                on_finding(Finding(f, digest, max(a.severity for a in alerts), alerts))
+        # Em varredura em segundo plano, cede brevemente CPU/I/O entre lotes para manter o PC ágil.
+        if batch_size > 0 and batch_pause_s > 0 and i % batch_size == 0 and i < total:
+            if should_stop():
+                completed = False
+                break
+            time.sleep(batch_pause_s)
     return ScanSummary(started, [str(p) for p in paths], scanned, findings,
                        time.time() - started, completed)

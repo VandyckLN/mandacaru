@@ -10,13 +10,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QEvent, QFileSystemWatcher, QStandardPaths, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, QFileSystemWatcher, QStandardPaths, Qt, QTime, QTimer, QUrl, Signal
 from PySide6.QtGui import QBrush, QColor, QDesktopServices, QFontMetrics
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QFileDialog,
-    QGroupBox,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -26,11 +25,13 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSystemTrayIcon,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
+    QTimeEdit,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -42,7 +43,8 @@ from mandacaru.events import Severity
 from mandacaru_win.quarantine import Quarantine, QuarantineError
 from mandacaru_win.scan import Finding, ScanSummary, make_scanner
 from mandacaru_win.schedule import (
-    CRON_PRESETS,
+    DEFAULT_BATCH_PAUSE_S,
+    DEFAULT_BATCH_SIZE,
     CronError,
     ScheduleConfig,
     ScheduleStore,
@@ -178,6 +180,7 @@ class MainWindow(QMainWindow):
             self._schedule_error = f"Não foi possível ler o agendamento ({e})."
         self._next_scheduled_run: datetime | None = None
         self._background_scan = False
+        self._bg_critical_alerted = False
         self._force_quit = False
         self._tray: QSystemTrayIcon | None = None
         self._tray_notified = False
@@ -247,11 +250,15 @@ class MainWindow(QMainWindow):
         self.tree.setColumnCount(4)
         self.tree.setHeaderLabels(["Severidade", "Arquivo", "Motivo", "Ações"])
         self.tree.setRootIsDecorated(True)
-        self.tree.header().setStretchLastSection(False)
+        th = self.tree.header()
+        th.setStretchLastSection(False)
+        th.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        th.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        th.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        th.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
         self.tree.setColumnWidth(0, 100)
-        self.tree.setColumnWidth(1, 250)
-        self.tree.setColumnWidth(2, 200)
-        self.tree.setColumnWidth(3, 430)
+        self.tree.setColumnWidth(1, 240)
+        self.tree.setColumnWidth(3, 420)
         self.tree.setItemDelegateForColumn(0, BadgeDelegate(self.tree))
         lay.addWidget(self.tree, 1)
 
@@ -502,6 +509,7 @@ class MainWindow(QMainWindow):
         if self._thread is not None or self._shred_thread is not None:
             return
         self._background_scan = background
+        self._bg_critical_alerted = False
         self.tree.clear()
         self.findings.clear()
         self._items.clear()
@@ -509,11 +517,18 @@ class MainWindow(QMainWindow):
         self.progress.set_tone("normal")
         self.progress.setRange(0, 0)  # indeterminado até saber o total
         self.lbl_count.setText("0 arquivos · 0 achados")
-        self.statusBar().showMessage("Varredura agendada em segundo plano…" if background else "Varrendo…")
+        self.statusBar().showMessage("Varredura agendada em lotes (segundo plano)…" if background else "Varrendo…")
         self._set_scanning(True)
         trusted = self._trust.hashes() if self._trust else set()
         excluded = self._excludes.paths() if self._excludes else ()
-        t = ScanThread([Path(p) for p in paths], self._scanner, trusted, exclude=excluded)
+        t = ScanThread(
+            [Path(p) for p in paths],
+            self._scanner,
+            trusted,
+            exclude=excluded,
+            batch_size=DEFAULT_BATCH_SIZE if background else 0,
+            batch_pause_s=DEFAULT_BATCH_PAUSE_S if background else 0.0,
+        )
         t.listing.connect(self._on_listing)
         t.progress.connect(self._on_progress)
         t.found.connect(self._on_found)
@@ -569,6 +584,18 @@ class MainWindow(QMainWindow):
         self._items[f.path] = item
         self.tree.setItemWidget(item, 3, self._actions_widget(f.path))
         self._update_count()
+        # Em varredura em lotes no segundo plano, alerta imediatamente ao achar algo CRÍTICO.
+        if (self._background_scan and f.severity >= Severity.CRITICAL
+                and not self._bg_critical_alerted
+                and self._tray is not None and self._tray.isVisible()):
+            self._bg_critical_alerted = True
+            motivo = f.alerts[0].summary if f.alerts else "Ameaça crítica"
+            self._tray.showMessage(
+                "Mandacaru — Ameaça CRÍTICA detectada!",
+                f"{f.path.name}: {motivo}. Clique para revisar agora.",
+                QSystemTrayIcon.MessageIcon.Critical,
+                10000,
+            )
 
     def _actions_widget(self, path: Path) -> QWidget:
         w = QWidget()
@@ -612,13 +639,15 @@ class MainWindow(QMainWindow):
                 self.progress.setValue(0)
         self.statusBar().showMessage("Concluída" if summary.completed else "Interrompida")
         if was_bg and summary.findings > 0 and self._tray is not None and self._tray.isVisible():
-            self._tray.showMessage(
-                "Mandacaru — Ameaça encontrada",
-                f"A varredura em segundo plano encontrou {summary.findings} arquivo(s) suspeito(s). "
-                "Clique para revisar.",
-                QSystemTrayIcon.MessageIcon.Warning,
-                8000,
-            )
+            has_crit = any(f.severity >= Severity.CRITICAL for f in self.findings.values())
+            if has_crit and not self._bg_critical_alerted:
+                self._tray.showMessage(
+                    "Mandacaru — Ameaça CRÍTICA encontrada",
+                    f"A varredura em segundo plano encontrou {summary.findings} arquivo(s) suspeito(s) "
+                    "(incluindo alerta crítico). Clique para revisar.",
+                    QSystemTrayIcon.MessageIcon.Critical,
+                    10000,
+                )
         self.scan_finished.emit(summary)
 
     def _on_failed(self, msg: str) -> None:
@@ -1226,77 +1255,201 @@ class MainWindow(QMainWindow):
 
     # ---------- aba Configurações + monitoramento agendado (Cron) ----------
     def _build_settings_tab(self) -> QWidget:
-        tab = QWidget()
-        lay = QVBoxLayout(tab)
+        scroll = QScrollArea()
+        scroll.setObjectName("settingsScroll")
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        lay = QVBoxLayout(content)
+        lay.setContentsMargins(12, 12, 12, 12)
+        lay.setSpacing(12)
 
-        grp_cron = QGroupBox("Monitoramento em segundo plano (Cron)")
-        gl = QVBoxLayout(grp_cron)
+        # --- Cartão 1: Monitoramento e construtor rápido de Cron ---
+        card_cron = QFrame()
+        card_cron.setObjectName("settingsCard")
+        cl = QVBoxLayout(card_cron)
+        cl.setContentsMargins(16, 14, 16, 14)
+        cl.setSpacing(10)
 
-        self.chk_sched_enabled = QCheckBox("Ativar varredura automática em segundo plano")
-        self.chk_sched_tray = QCheckBox("Manter ícone na bandeja ao fechar a janela (para continuar monitorando)")
-        gl.addWidget(self.chk_sched_enabled)
-        gl.addWidget(self.chk_sched_tray)
+        hdr = QHBoxLayout()
+        title = QLabel("Monitoramento em segundo plano")
+        title.setObjectName("cardTitle")
+        self.lbl_sched_cron_badge = QLabel("0 */4 * * *")
+        self.lbl_sched_cron_badge.setObjectName("cronBadge")
+        hdr.addWidget(title)
+        hdr.addStretch(1)
+        hdr.addWidget(self.lbl_sched_cron_badge)
+        cl.addLayout(hdr)
 
-        preset_row = QHBoxLayout()
-        preset_row.addWidget(QLabel("Frequência:"))
-        self.cmb_sched_preset = QComboBox()
-        for label, expr in CRON_PRESETS:
-            self.cmb_sched_preset.addItem(f"{label}  ({expr})", expr)
-        self.cmb_sched_preset.addItem("Personalizado", "")
-        self.cmb_sched_preset.currentIndexChanged.connect(self._on_preset_changed)
-        preset_row.addWidget(self.cmb_sched_preset, 1)
-        gl.addLayout(preset_row)
+        toggles = QHBoxLayout()
+        toggles.setSpacing(18)
+        self.chk_sched_enabled = QCheckBox("Ativar varredura automática")
+        self.chk_sched_tray = QCheckBox("Manter na bandeja ao fechar a janela")
+        toggles.addWidget(self.chk_sched_enabled)
+        toggles.addWidget(self.chk_sched_tray)
+        toggles.addStretch(1)
+        cl.addLayout(toggles)
 
+        lbl_freq = QLabel("Escolha a frequência com um clique:")
+        lbl_freq.setObjectName("mutedLabel")
+        cl.addWidget(lbl_freq)
+
+        # Chips de 1 clique (substituem combo + digitação manual na maioria dos casos)
+        self._freq_chips: dict[str, QPushButton] = {}
+        chips_row = QHBoxLayout()
+        chips_row.setSpacing(6)
+        for key, label in (
+            ("1h", "1h"),
+            ("2h", "2h"),
+            ("4h", "4h (padrão)"),
+            ("6h", "6h"),
+            ("12h", "12h"),
+            ("diario", "Diário"),
+            ("semanal", "Semanal"),
+            ("cron", "Cron avançado"),
+        ):
+            b = style_button(QPushButton(label), "chip")
+            b.setCheckable(True)
+            b.clicked.connect(lambda _=False, k=key: self._select_freq_mode(k))
+            self._freq_chips[key] = b
+            chips_row.addWidget(b)
+        chips_row.addStretch(1)
+        cl.addLayout(chips_row)
+
+        # Painel contextual: Diário / Semanal (horário + dias da semana)
+        self._panel_visual = QWidget()
+        vl = QHBoxLayout(self._panel_visual)
+        vl.setContentsMargins(0, 2, 0, 2)
+        vl.setSpacing(8)
+        vl.addWidget(QLabel("Horário:"))
+        self.time_sched = QTimeEdit(QTime(12, 0))
+        self.time_sched.setDisplayFormat("HH:mm")
+        self.time_sched.setFixedWidth(84)
+        self.time_sched.timeChanged.connect(lambda _: self._sync_cron_from_visual())
+        vl.addWidget(self.time_sched)
+
+        self._panel_daily_days = QWidget()
+        dl = QHBoxLayout(self._panel_daily_days)
+        dl.setContentsMargins(6, 0, 0, 0)
+        dl.setSpacing(6)
+        self.btn_day_all = style_button(QPushButton("Todos os dias"), "chip")
+        self.btn_day_work = style_button(QPushButton("Seg–Sex"), "chip")
+        for b in (self.btn_day_all, self.btn_day_work):
+            b.setCheckable(True)
+        self.btn_day_all.setChecked(True)
+        self.btn_day_all.clicked.connect(lambda: self._set_daily_weekdays(False))
+        self.btn_day_work.clicked.connect(lambda: self._set_daily_weekdays(True))
+        dl.addWidget(self.btn_day_all)
+        dl.addWidget(self.btn_day_work)
+        vl.addWidget(self._panel_daily_days)
+
+        self._panel_weekly_days = QWidget()
+        wl = QHBoxLayout(self._panel_weekly_days)
+        wl.setContentsMargins(6, 0, 0, 0)
+        wl.setSpacing(4)
+        self._dow_chips: dict[int, QPushButton] = {}
+        for dow, dlabel in ((0, "Dom"), (1, "Seg"), (2, "Ter"), (3, "Qua"), (4, "Qui"), (5, "Sex"), (6, "Sáb")):
+            db = style_button(QPushButton(dlabel), "chip")
+            db.setCheckable(True)
+            if dow == 1:
+                db.setChecked(True)
+            db.clicked.connect(lambda _: self._sync_cron_from_visual())
+            self._dow_chips[dow] = db
+            wl.addWidget(db)
+        vl.addWidget(self._panel_weekly_days)
+        vl.addStretch(1)
+        self._panel_visual.setVisible(False)
+        cl.addWidget(self._panel_visual)
+
+        # Painel contextual: Cron avançado
+        self._panel_cron = QWidget()
+        cr_lay = QVBoxLayout(self._panel_cron)
+        cr_lay.setContentsMargins(0, 2, 0, 2)
+        cr_lay.setSpacing(4)
         cron_row = QHBoxLayout()
         cron_row.addWidget(QLabel("Expressão cron:"))
         self.txt_sched_cron = QLineEdit()
         self.txt_sched_cron.setPlaceholderText("0 */4 * * *")
         self.txt_sched_cron.textChanged.connect(self._on_cron_text_changed)
         cron_row.addWidget(self.txt_sched_cron, 1)
-        gl.addLayout(cron_row)
-
+        cr_lay.addLayout(cron_row)
         lbl_help = QLabel(
-            "Formato (5 campos): minuto hora dia-do-mês mês dia-da-semana — "
-            "ex.: 0 */4 * * * (a cada 4 horas), 30 12 * * * (todo dia às 12:30), 0 9 * * 1-5 (seg–sex às 09:00).")
+            "5 campos: minuto hora dia-do-mês mês dia-da-semana — "
+            "ex.: 0 */4 * * * (a cada 4h), 30 12 * * * (todo dia 12:30), 0 9 * * 1-5 (seg–sex 09:00).")
+        lbl_help.setObjectName("mutedLabel")
         lbl_help.setWordWrap(True)
-        gl.addWidget(lbl_help)
+        cr_lay.addWidget(lbl_help)
+        self._panel_cron.setVisible(False)
+        cl.addWidget(self._panel_cron)
 
         self.lbl_sched_preview = QLabel("")
         self.lbl_sched_preview.setWordWrap(True)
-        gl.addWidget(self.lbl_sched_preview)
+        cl.addWidget(self.lbl_sched_preview)
 
+        footer = QHBoxLayout()
+        footer.setSpacing(8)
         self.lbl_sched_last = QLabel("")
-        gl.addWidget(self.lbl_sched_last)
-
-        btn_row = QHBoxLayout()
+        self.lbl_sched_last.setObjectName("mutedLabel")
+        self.btn_sched_run_now = style_button(QPushButton("Executar agora"), "neutral")
         self.btn_sched_save = style_button(QPushButton("Salvar configurações"), "scan")
-        self.btn_sched_run_now = style_button(QPushButton("Executar varredura agendada agora"), "neutral")
-        self.btn_sched_save.clicked.connect(self.save_schedule_settings)
+        self.btn_sched_run_now.setMinimumHeight(34)
+        self.btn_sched_save.setMinimumHeight(34)
         self.btn_sched_run_now.clicked.connect(self.run_scheduled_now)
+        self.btn_sched_save.clicked.connect(self.save_schedule_settings)
         if self._schedule_store is None:
             self.btn_sched_save.setEnabled(False)
-        btn_row.addWidget(self.btn_sched_save)
-        btn_row.addWidget(self.btn_sched_run_now)
-        btn_row.addStretch(1)
-        gl.addLayout(btn_row)
-        lay.addWidget(grp_cron)
+        footer.addWidget(self.lbl_sched_last, 1)
+        footer.addWidget(self.btn_sched_run_now)
+        footer.addWidget(self.btn_sched_save)
+        cl.addLayout(footer)
+        lay.addWidget(card_cron)
 
-        grp_paths = QGroupBox("Pastas monitoradas na varredura agendada")
-        pl = QVBoxLayout(grp_paths)
-        hdr = QHBoxLayout()
-        lbl_info = QLabel("Sem pastas listadas, o Mandacaru varre automaticamente Downloads e Área de Trabalho.")
-        lbl_info.setWordWrap(True)
-        self.btn_sched_add_path = style_button(QPushButton("Adicionar pasta…"), "neutral")
+        # --- Cartão 2: Escopo em lotes e pastas monitoradas ---
+        card_scope = QFrame()
+        card_scope.setObjectName("settingsCard")
+        sl = QVBoxLayout(card_scope)
+        sl.setContentsMargins(16, 14, 16, 14)
+        sl.setSpacing(10)
+
+        stitle = QLabel("Escopo da varredura em segundo plano (em lotes leves)")
+        stitle.setObjectName("cardTitle")
+        sl.addWidget(stitle)
+
+        self._scope_chips: dict[str, QPushButton] = {}
+        self._selected_scope = "completa"
+        sc_row = QHBoxLayout()
+        sc_row.setSpacing(6)
+        for key, label in (
+            ("completa", "Completa do usuário (em lotes)"),
+            ("principais", "Pastas principais"),
+            ("personalizada", "Pastas personalizadas"),
+        ):
+            sb = style_button(QPushButton(label), "chip")
+            sb.setCheckable(True)
+            sb.clicked.connect(lambda _=False, k=key: self._select_scope(k))
+            self._scope_chips[key] = sb
+            sc_row.addWidget(sb)
+        sc_row.addStretch(1)
+        self.btn_sched_add_path = style_button(QPushButton("Adicionar pasta…"), "neutral", compact=True)
         self.btn_sched_add_path.clicked.connect(self._pick_scheduled_folder)
         if self._schedule_store is None:
             self.btn_sched_add_path.setEnabled(False)
-        hdr.addWidget(lbl_info, 1)
-        hdr.addWidget(self.btn_sched_add_path)
-        pl.addLayout(hdr)
+        sc_row.addWidget(self.btn_sched_add_path)
+        sl.addLayout(sc_row)
+
+        self.lbl_scope_desc = QLabel("")
+        self.lbl_scope_desc.setObjectName("mutedLabel")
+        self.lbl_scope_desc.setWordWrap(True)
+        sl.addWidget(self.lbl_scope_desc)
+
         self.tbl_sched_paths = self._make_table(["Pasta monitorada", "Ações"], stretch=0)
-        pl.addWidget(self.tbl_sched_paths, 1)
-        lay.addWidget(grp_paths, 1)
-        return tab
+        self.tbl_sched_paths.setMinimumHeight(110)
+        sl.addWidget(self.tbl_sched_paths)
+        lay.addWidget(card_scope)
+        lay.addStretch(1)
+
+        scroll.setWidget(content)
+        self._freq_mode = "4h"
+        return scroll
 
     def _setup_tray(self) -> None:
         if not QSystemTrayIcon.isSystemTrayAvailable():
@@ -1321,32 +1474,116 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
-    def _on_preset_changed(self, idx: int) -> None:
-        expr = self.cmb_sched_preset.itemData(idx)
-        if expr and self.txt_sched_cron.text().strip() != expr:
-            self.txt_sched_cron.setText(expr)
+    def _select_freq_mode(self, mode: str) -> None:
+        self._freq_mode = mode
+        for k, b in self._freq_chips.items():
+            b.setChecked(k == mode)
+        quick = {"1h": "0 * * * *", "2h": "0 */2 * * *", "4h": "0 */4 * * *",
+                 "6h": "0 */6 * * *", "12h": "0 */12 * * *"}
+        self._panel_visual.setVisible(mode in ("diario", "semanal"))
+        self._panel_daily_days.setVisible(mode == "diario")
+        self._panel_weekly_days.setVisible(mode == "semanal")
+        self._panel_cron.setVisible(mode == "cron")
+        if mode in quick:
+            self._set_cron_text_silent(quick[mode])
+        elif mode in ("diario", "semanal"):
+            self._sync_cron_from_visual()
+
+    def _set_daily_weekdays(self, workdays_only: bool) -> None:
+        self.btn_day_all.setChecked(not workdays_only)
+        self.btn_day_work.setChecked(workdays_only)
+        self._sync_cron_from_visual()
+
+    def _sync_cron_from_visual(self) -> None:
+        t = self.time_sched.time()
+        m, h = t.minute(), t.hour()
+        if self._freq_mode == "diario":
+            dow = "1-5" if self.btn_day_work.isChecked() else "*"
+            self._set_cron_text_silent(f"{m} {h} * * {dow}")
+        elif self._freq_mode == "semanal":
+            chosen = [str(d) for d, b in sorted(self._dow_chips.items()) if b.isChecked()]
+            if not chosen:
+                self._dow_chips[1].setChecked(True)
+                chosen = ["1"]
+            self._set_cron_text_silent(f"{m} {h} * * {','.join(chosen)}")
+
+    def _set_cron_text_silent(self, expr: str) -> None:
+        self.txt_sched_cron.blockSignals(True)
+        self.txt_sched_cron.setText(expr)
+        self.txt_sched_cron.blockSignals(False)
+        self._update_cron_preview(expr)
+
+    def _detect_mode_from_cron(self, expr: str) -> None:
+        norm = " ".join(expr.strip().split())
+        quick_rev = {"0 * * * *": "1h", "0 */2 * * *": "2h", "0 */4 * * *": "4h",
+                     "0 */6 * * *": "6h", "0 */12 * * *": "12h"}
+        if norm in quick_rev:
+            mode = quick_rev[norm]
+        else:
+            parts = norm.split()
+            if len(parts) == 5 and parts[0].isdigit() and parts[1].isdigit() and parts[2] == "*" and parts[3] == "*":
+                m, h, dow = int(parts[0]), int(parts[1]), parts[4]
+                self.time_sched.blockSignals(True)
+                self.time_sched.setTime(QTime(h, m))
+                self.time_sched.blockSignals(False)
+                if dow in ("*", "1-5"):
+                    mode = "diario"
+                    self.btn_day_all.setChecked(dow == "*")
+                    self.btn_day_work.setChecked(dow == "1-5")
+                else:
+                    mode = "semanal"
+                    try:
+                        dows = parse_cron(norm).dows
+                        for d, b in self._dow_chips.items():
+                            b.setChecked(d in dows)
+                    except CronError:
+                        mode = "cron"
+            else:
+                mode = "cron"
+        self._freq_mode = mode
+        for k, b in self._freq_chips.items():
+            b.setChecked(k == mode)
+        self._panel_visual.setVisible(mode in ("diario", "semanal"))
+        self._panel_daily_days.setVisible(mode == "diario")
+        self._panel_weekly_days.setVisible(mode == "semanal")
+        self._panel_cron.setVisible(mode == "cron")
+
+    def _select_scope(self, scope: str) -> None:
+        self._selected_scope = scope
+        for k, b in self._scope_chips.items():
+            b.setChecked(k == scope)
+        descs = {
+            "completa": (
+                "Varre toda a pasta do usuário em lotes leves (200 arquivos por lote com pausa entre lotes) "
+                "para manter o PC rápido e seguro. Alertas aparecem na hora se algo crítico for encontrado."
+            ),
+            "principais": (
+                "Varre em lotes leves apenas Downloads, Área de Trabalho e Documentos. "
+                "Alertas aparecem na hora se algo crítico for encontrado."
+            ),
+            "personalizada": (
+                "Varre em lotes leves somente as pastas listadas abaixo. "
+                "Se a lista estiver vazia, volta para Downloads e Área de Trabalho."
+            ),
+        }
+        self.lbl_scope_desc.setText(descs.get(scope, descs["completa"]))
+        show_custom = scope == "personalizada" or self.tbl_sched_paths.rowCount() > 0
+        self.tbl_sched_paths.setVisible(show_custom)
+        self.btn_sched_add_path.setVisible(True)
 
     def _on_cron_text_changed(self, text: str) -> None:
-        norm = " ".join(text.strip().split())
-        match_idx = self.cmb_sched_preset.count() - 1  # Personalizado
-        for i in range(self.cmb_sched_preset.count() - 1):
-            if self.cmb_sched_preset.itemData(i) == norm:
-                match_idx = i
-                break
-        if self.cmb_sched_preset.currentIndex() != match_idx:
-            self.cmb_sched_preset.blockSignals(True)
-            self.cmb_sched_preset.setCurrentIndex(match_idx)
-            self.cmb_sched_preset.blockSignals(False)
         self._update_cron_preview(text)
 
     def _update_cron_preview(self, text: str) -> None:
+        norm = " ".join(text.strip().split())
+        self.lbl_sched_cron_badge.setText(norm or "—")
         try:
             sched = parse_cron(text)
             nxt = sched.next_run(datetime.now())
             desc = describe_cron(sched.expr)
             self.lbl_sched_preview.setStyleSheet("color: #2e7d32; font-weight: 600;")
             self.lbl_sched_preview.setText(
-                f"Válida ({desc}) — Próxima varredura: {nxt.strftime('%d/%m/%Y %H:%M')}")
+                f"Agendamento pronto: {desc} · Próxima varredura: {nxt.strftime('%d/%m/%Y %H:%M')}")
         except CronError as e:
             self.lbl_sched_preview.setStyleSheet("color: #c62828; font-weight: 600;")
             self.lbl_sched_preview.setText(f"Expressão inválida: {e}")
@@ -1355,12 +1592,13 @@ class MainWindow(QMainWindow):
         cfg = self._schedule_store.get() if self._schedule_store else ScheduleConfig()
         self.chk_sched_enabled.setChecked(cfg.enabled)
         self.chk_sched_tray.setChecked(cfg.minimize_to_tray)
-        self.txt_sched_cron.setText(cfg.cron)
-        self._on_cron_text_changed(cfg.cron)
+        self._set_cron_text_silent(cfg.cron)
+        self._detect_mode_from_cron(cfg.cron)
         self.lbl_sched_last.setText(
-            f"Última varredura agendada: {self._fmt_date(cfg.last_run)}"
-            if cfg.last_run else "Última varredura agendada: ainda não executada")
+            f"Última agendada: {self._fmt_date(cfg.last_run)}"
+            if cfg.last_run else "Última agendada: ainda não executada")
         self._refresh_scheduled_paths_table(cfg.paths)
+        self._select_scope(cfg.scope)
         if cfg.enabled:
             self._next_scheduled_run = parse_cron(cfg.cron).next_run(now or datetime.now())
             if not self._schedule_timer.isActive():
@@ -1391,6 +1629,7 @@ class MainWindow(QMainWindow):
             enabled=self.chk_sched_enabled.isChecked(),
             cron=expr,
             paths=cur.paths,
+            scope=self._selected_scope,
             minimize_to_tray=self.chk_sched_tray.isChecked(),
             last_run=cur.last_run,
         )
@@ -1416,6 +1655,7 @@ class MainWindow(QMainWindow):
             return
         cfg = self._schedule_store.get()
         cfg.paths.append(str(path))
+        cfg.scope = "personalizada"
         try:
             self._schedule_store.save(cfg)
         except OSError as e:
@@ -1438,11 +1678,16 @@ class MainWindow(QMainWindow):
 
     def scheduled_target_paths(self) -> list[Path]:
         cfg = self._schedule_store.get() if self._schedule_store else ScheduleConfig()
-        if cfg.paths:
+        if cfg.scope == "personalizada" and cfg.paths:
             return [Path(p) for p in cfg.paths]
+        if cfg.scope == "completa":
+            home = Path.home()
+            if home.exists():
+                return [home]
         defaults: list[Path] = []
         for loc in (QStandardPaths.StandardLocation.DownloadLocation,
-                    QStandardPaths.StandardLocation.DesktopLocation):
+                    QStandardPaths.StandardLocation.DesktopLocation,
+                    QStandardPaths.StandardLocation.DocumentsLocation):
             p = QStandardPaths.writableLocation(loc)
             if p and Path(p).exists():
                 defaults.append(Path(p))
