@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from mandacaru_win.scan import ScanSummary
-from mandacaru_win.store import History, TrustList
+from mandacaru_win.store import ExcludeList, History, TrustList
 
 
 def test_trust_add_remove_persists(tmp_path):
@@ -133,3 +133,22 @@ def test_history_keeps_update_rounds_next_to_scans(tmp_path):
     rows = h.recent()
     assert [r.get("tipo") for r in rows] == ["atualizacao", None]
     assert rows[0]["programas"][0]["resultado"] == "ok" and rows[0]["duration"] == 3.5
+
+
+def test_exclude_list_add_remove_persists_and_deduplicates(tmp_path):
+    p = tmp_path / "excludes.json"
+    alvo = tmp_path / "jogos"
+    ex = ExcludeList(p)
+    ex.add(alvo)
+    ex.add(alvo)  # repetido não duplica
+    assert len(ex.entries()) == 1
+    assert ExcludeList(p).paths() == [str(alvo.resolve())]
+    ex.remove(alvo)
+    assert ExcludeList(p).paths() == []
+
+
+def test_corrupt_excludes_starts_empty_and_keeps_backup(tmp_path):
+    p = tmp_path / "excludes.json"
+    p.write_text("{quebrado")
+    assert ExcludeList(p).paths() == []
+    assert (tmp_path / "excludes.json.corrompido").read_text() == "{quebrado"

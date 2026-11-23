@@ -36,6 +36,30 @@ Name: "{userdesktop}\Mandacaru"; Filename: "{app}\Mandacaru.exe"; AppUserModelID
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+Name: "contextmenu"; Description: "Adicionar ""Varrer com Mandacaru"" ao menu de contexto do Explorer"; GroupDescription: "Integração com o Windows:"
+
+[Registry]
+; Menu de contexto por usuário (HKCU — sem precisar de administrador) para arquivos, pastas e fundo de pasta.
+Root: HKCU; Subkey: "Software\Classes\*\shell\MandacaruScan"; ValueType: string; ValueName: ""; ValueData: "Varrer com Mandacaru"; Flags: uninsdeletekey; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\*\shell\MandacaruScan"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\Mandacaru.exe"",0"; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\*\shell\MandacaruScan\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Mandacaru.exe"" --scan ""%1"""; Tasks: contextmenu
+
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\MandacaruScan"; ValueType: string; ValueName: ""; ValueData: "Varrer com Mandacaru"; Flags: uninsdeletekey; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\MandacaruScan"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\Mandacaru.exe"",0"; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\MandacaruScan\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Mandacaru.exe"" --scan ""%1"""; Tasks: contextmenu
+
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\MandacaruScan"; ValueType: string; ValueName: ""; ValueData: "Varrer com Mandacaru"; Flags: uninsdeletekey; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\MandacaruScan"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\Mandacaru.exe"",0"; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\MandacaruScan\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Mandacaru.exe"" --scan ""%V"""; Tasks: contextmenu
+
+; Destruição definitiva (sobrescreve com dados aleatórios e apaga) só no clique direto em arquivo ou pasta (nunca no fundo de pasta).
+Root: HKCU; Subkey: "Software\Classes\*\shell\MandacaruShred"; ValueType: string; ValueName: ""; ValueData: "Destruir definitivamente com Mandacaru"; Flags: uninsdeletekey; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\*\shell\MandacaruShred"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\Mandacaru.exe"",0"; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\*\shell\MandacaruShred\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Mandacaru.exe"" --shred ""%1"""; Tasks: contextmenu
+
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\MandacaruShred"; ValueType: string; ValueName: ""; ValueData: "Destruir definitivamente com Mandacaru"; Flags: uninsdeletekey; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\MandacaruShred"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\Mandacaru.exe"",0"; Tasks: contextmenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\MandacaruShred\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Mandacaru.exe"" --shred ""%1"""; Tasks: contextmenu
 
 [Run]
 Filename: "{app}\Mandacaru.exe"; Description: "{cm:LaunchProgram,Mandacaru}"; Flags: nowait postinstall skipifsilent

@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from mandacaru_win.scan import Finding
+from mandacaru_win.shred import ShredError, shred_file
 
 KEY = b"mandacaru-quarentena"
 CHUNK = 1024 * 1024
@@ -272,7 +273,8 @@ class Quarantine:
     def delete(self, qid: str) -> None:
         binp, jsonp = self._paths(qid)
         try:
-            binp.unlink(missing_ok=True)
-            jsonp.unlink(missing_ok=True)
-        except OSError as e:
+            for p in (binp, jsonp):
+                if p.exists():
+                    shred_file(p)
+        except (ShredError, OSError) as e:
             raise QuarantineError(f"Não foi possível apagar o item: {e}") from e

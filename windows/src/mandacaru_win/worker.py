@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
+from mandacaru.analysis import AnalysisResult, analyze
+from mandacaru.config import Config
 from mandacaru_win.scan import scan_paths
+from mandacaru_win.shred import shred_path
 
 
 class ScanThread(QThread):
@@ -16,11 +20,12 @@ class ScanThread(QThread):
     done = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, paths: list[Path], scanner, trusted: set[str]):
+    def __init__(self, paths: list[Path], scanner, trusted: set[str], exclude: Iterable[str] = ()):
         super().__init__()
         self._paths = paths
         self._scanner = scanner
         self._trusted = trusted
+        self._exclude = tuple(exclude)
         self._stop = False
         self._last_progress = self._last_listing = 0.0
 
@@ -49,9 +54,70 @@ class ScanThread(QThread):
                 on_finding=lambda f: self.found.emit(f),
                 should_stop=lambda: self._stop,
                 on_listing=self._emit_listing,
+                exclude=self._exclude,
             )
         except Exception as e:  # noqa: BLE001 - qualquer falha deve liberar a janela
             self.failed.emit(f"{type(e).__name__}: {e}")
+            return
+        self.done.emit(summary)
+
+
+class HashAnalysisThread(QThread):
+    """Consulta reputação de um SHA-256 fora da thread da interface (só o hash sai da máquina)."""
+
+    done = Signal(str, str, object)  # (nome_arquivo, sha256, AnalysisResult)
+    failed = Signal(str, str)        # (nome_arquivo, erro)
+
+    def __init__(self, sha256: str, label: str, analyzer: Callable[[str], AnalysisResult] | None = None):
+        super().__init__()
+        self._sha256 = sha256
+        self._label = label
+        self._analyzer = analyzer
+
+    def run(self) -> None:
+        try:
+            fn = self._analyzer or (lambda h: analyze(h[:12], h, Config()))
+            result = fn(self._sha256)
+        except Exception as e:  # noqa: BLE001 - falha na rede/consulta nunca trava a janela
+            self.failed.emit(self._label, f"{type(e).__name__}: {e}")
+            return
+        self.done.emit(self._label, self._sha256, result)
+
+
+class ShredThread(QThread):
+    """Destruição segura de arquivo ou pasta fora da thread da interface."""
+
+    progress = Signal(object, int, int)
+    done = Signal(object)    # ShredSummary
+    failed = Signal(str)
+
+    def __init__(self, target: Path, passes: int = 1):
+        super().__init__()
+        self._target = Path(target)
+        self._passes = passes
+        self._stop = False
+        self._last = 0.0
+
+    def stop(self) -> None:
+        self._stop = True
+
+    def _emit_progress(self, p: Path, i: int, n: int) -> None:
+        now = time.monotonic()
+        if i == n or now - self._last >= 0.05:
+            self._last = now
+            self.progress.emit(p, i, n)
+
+    def run(self) -> None:
+        self._last = 0.0
+        try:
+            summary = shred_path(
+                self._target,
+                passes=self._passes,
+                should_stop=lambda: self._stop,
+                on_progress=self._emit_progress,
+            )
+        except Exception as e:  # noqa: BLE001
+            self.failed.emit(str(e))
             return
         self.done.emit(summary)
 

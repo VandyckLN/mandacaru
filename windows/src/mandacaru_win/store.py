@@ -18,6 +18,40 @@ def data_dir() -> Path:
     return d
 
 
+def _atomic_write_json(path: Path, data: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(data, ensure_ascii=False, indent=2))
+            fh.flush()
+            os.fsync(fh.fileno())
+        for attempt in range(5):  # antivírus/indexador podem segurar o destino
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.05)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
+def _backup_corrupt(path: Path) -> None:
+    """Preserva o arquivo corrompido sem sobrescrever backups anteriores."""
+    dest = path.with_name(path.name + ".corrompido")
+    n = 1
+    while dest.exists():
+        dest = path.with_name(f"{path.name}.corrompido.{n}")
+        n += 1
+    os.replace(path, dest)
+
+
 class TrustList:
     """Arquivos confiáveis pelo usuário, identificados pelo SHA-256."""
 
@@ -38,39 +72,11 @@ class TrustList:
                 raise ValueError("formato inesperado")
             return [e for e in data if isinstance(e, dict) and isinstance(e.get("sha256"), str)]
         except ValueError:  # inclui UnicodeDecodeError e JSONDecodeError
-            # Preserva o arquivo ruim (sem sobrescrever backups anteriores).
-            dest = self._path.with_name(self._path.name + ".corrompido")
-            n = 1
-            while dest.exists():
-                dest = self._path.with_name(f"{self._path.name}.corrompido.{n}")
-                n += 1
-            # Se não der para guardar o arquivo ruim, não começamos vazios (um
-            # salvamento depois o sobrescreveria): o app desativa "Ignorar".
-            os.replace(self._path, dest)
+            _backup_corrupt(self._path)
             return []
 
     def _save(self, entries: list[dict]) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_name(self._path.name + ".tmp")
-        try:
-            with open(tmp, "w", encoding="utf-8") as fh:
-                fh.write(json.dumps(entries, ensure_ascii=False, indent=2))
-                fh.flush()
-                os.fsync(fh.fileno())
-            for attempt in range(5):  # antivírus/indexador podem segurar o destino
-                try:
-                    os.replace(tmp, self._path)
-                    break
-                except PermissionError:
-                    if attempt == 4:
-                        raise
-                    time.sleep(0.05)
-        except OSError:
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise
+        _atomic_write_json(self._path, entries)
 
     def hashes(self) -> set[str]:
         return {e["sha256"] for e in self._entries}
@@ -91,6 +97,62 @@ class TrustList:
 
     def remove(self, sha256: str) -> None:
         entries = [e for e in self._entries if e["sha256"] != sha256]
+        self._save(entries)
+        self._entries = entries
+
+
+class ExcludeList:
+    """Pastas excluídas da varredura pelo usuário."""
+
+    def __init__(self, path: Path):
+        self._path = Path(path)
+        self._entries: list[dict] = self._load()
+
+    @staticmethod
+    def _key(path: str | os.PathLike) -> str:
+        return os.path.normcase(os.path.abspath(path))
+
+    def _load(self) -> list[dict]:
+        if not self._path.exists():
+            return []
+        try:
+            raw = self._path.read_bytes()
+        except FileNotFoundError:
+            return []
+        try:
+            data = json.loads(raw.decode("utf-8"))
+            if not isinstance(data, list):
+                raise ValueError("formato inesperado")
+            return [e for e in data if isinstance(e, dict) and isinstance(e.get("caminho"), str)
+                    and e["caminho"].strip()]
+        except ValueError:
+            _backup_corrupt(self._path)
+            return []
+
+    def _save(self, entries: list[dict]) -> None:
+        _atomic_write_json(self._path, entries)
+
+    def paths(self) -> list[str]:
+        return [e["caminho"] for e in self._entries]
+
+    def entries(self) -> list[dict]:
+        return list(self._entries)
+
+    def add(self, path: str | os.PathLike) -> None:
+        full = os.path.abspath(path)
+        key = self._key(full)
+        if any(self._key(e["caminho"]) == key for e in self._entries):
+            return
+        entries = [*self._entries, {
+            "caminho": full,
+            "data": datetime.now().isoformat(timespec="seconds"),
+        }]
+        self._save(entries)
+        self._entries = entries
+
+    def remove(self, path: str | os.PathLike) -> None:
+        key = self._key(path)
+        entries = [e for e in self._entries if self._key(e["caminho"]) != key]
         self._save(entries)
         self._entries = entries
 
