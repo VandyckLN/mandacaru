@@ -17,9 +17,11 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLayout,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -272,7 +274,7 @@ class MainWindow(QMainWindow):
         t.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         t.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         t.verticalHeader().setVisible(False)
-        t.verticalHeader().setDefaultSectionSize(34)
+        t.verticalHeader().setDefaultSectionSize(36)
         t.setWordWrap(False)
         hh = t.horizontalHeader()
         hh.setStretchLastSection(False)
@@ -296,15 +298,18 @@ class MainWindow(QMainWindow):
                      buttons: list[tuple]) -> None:
         w = QWidget()
         h = QHBoxLayout(w)
-        h.setContentsMargins(4, 2, 4, 2)
+        h.setContentsMargins(6, 2, 6, 2)
         h.setSpacing(6)
+        h.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         for item in buttons:
             label, fn = item[0], item[1]
             role = item[2] if len(item) > 2 else "neutral"
             b = style_button(QPushButton(label), role, compact=True)
+            b.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
             b.clicked.connect(lambda _=False, fn=fn: fn())
             h.addWidget(b)
         table.setCellWidget(row, col, w)
+        table.resizeColumnToContents(col)
 
     @staticmethod
     def _reset_table(t: QTableWidget, rows: int) -> None:
@@ -533,11 +538,13 @@ class MainWindow(QMainWindow):
         h = QHBoxLayout(w)
         h.setContentsMargins(4, 2, 4, 2)
         h.setSpacing(6)
+        h.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         for label, fn, role in (("Analisar", self.analyze_finding, "analyze"),
                                 ("Abrir local", self.open_location, "neutral"),
                                 ("Ignorar sempre", self.ignore_finding, "neutral"),
                                 ("Quarentena", self.quarantine_finding, "quarantine")):
             b = style_button(QPushButton(label), role, compact=True)
+            b.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
             b.clicked.connect(lambda _=False, p=path, fn=fn: fn(p))
             if fn == self.ignore_finding and self._trust is None:
                 b.setEnabled(False)
