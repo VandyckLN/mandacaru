@@ -42,6 +42,29 @@ mandacaru scan ~/Downloads
 
 No PyPI o pacote se chama `mandacaru-edr`; o comando é `mandacaru`. Se o `pip` precisar compilar o YARA e reclamar de `Python.h`, instale `python3-dev libssl-dev`.
 
+### Windows (aplicativo com janela)
+
+Para Windows 10 e 11 (64 bits). Não precisa de administrador: instala só no seu usuário (`%LOCALAPPDATA%\Programs\Mandacaru`), cria atalhos no Menu Iniciar e na Área de Trabalho e não substitui o antivírus do Windows (use como segunda opinião).
+
+**Instalar.** Baixe `Mandacaru-<versão>-setup.exe` na [última versão](https://github.com/VandyckLN/mandacaru/releases/latest) e execute. Se o Windows exibir "O Windows protegeu o computador", clique em **Mais informações** → **Executar assim mesmo** (o instalador ainda não tem assinatura digital paga). Deixe marcada a opção de integração com o menu de contexto do Explorer para usar pelo botão direito.
+
+**Funcionalidades e como usar:**
+
+- **Varredura sob demanda:** clique em **Downloads**, **Área de Trabalho** ou **Pasta…** (ou arraste arquivos/pastas para a janela). Em cada achado há quatro ações:
+  - **Analisar:** consulta apenas o hash SHA-256 nas bases gratuitas Team Cymru MHR e CIRCL hashlookup (o arquivo não sai do computador) para ajudar a confirmar se é legítimo conhecido ou malicioso.
+  - **Abrir local:** abre a pasta no Explorer com o arquivo selecionado.
+  - **Ignorar sempre:** adiciona o hash SHA-256 à aba **Confiáveis**.
+  - **Quarentena:** move o arquivo embaralhado para a aba **Quarentena** (onde você pode **Analisar**, **Restaurar** ou **Apagar** definitivamente).
+- **Menu de contexto no Windows Explorer (botão direito):**
+  - **Varrer com Mandacaru:** disponível ao clicar com o botão direito em arquivos, pastas ou no fundo de uma pasta (abre o app ou encaminha para a janela já aberta).
+  - **Destruir definitivamente com Mandacaru:** disponível ao clicar diretamente sobre um arquivo ou pasta; abre o app pedindo confirmação antes de sobrescrever e apagar.
+  - **Dica para Windows 11:** o menu compacto do botão direito mostra apenas apps em pacote MSIX; para ver as opções do Mandacaru imediatamente, use **`Shift + botão direito`** (ou clique em **Mostrar mais opções** / `Shift + F10`).
+- **Destruição segura (shred):** pelo botão **Destruir pasta…** na aba *Varredura*, pelo botão direito no Explorer ou ao clicar em **Apagar** na aba *Quarentena*. Sobrescreve os arquivos com dados aleatórios, trunca, renomeia e apaga sem passar pela Lixeira (com travas de segurança que impedem destruir raízes de unidade e pastas do sistema ou do usuário).
+- **Pastas ignoradas na varredura:** na aba **Confiáveis**, use **Adicionar pasta…** em *Pastas ignoradas na varredura* para pular pastas específicas (como projetos ou jogos) e **Remover** quando quiser voltar a varrê-las.
+- **Atualizações e autoatualização:** a aba **Atualizações** lista programas desatualizados/vulneráveis (`winget`, CISA KEV e NVD) para atualizar selecionados em um clique; o próprio Mandacaru verifica novas versões ao abrir (1×/dia) e em **Ajuda → Verificar atualizações**.
+
+Mais detalhes em [windows/README.md](windows/README.md). Também existe o `mandacaru.exe` de linha de comando anexado ao release (`mandacaru.exe scan "C:\pasta"`).
+
 ### Desenvolvimento
 
 ```bash
