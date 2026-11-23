@@ -1,3 +1,17 @@
+mandacaru (0.8.0) unstable; urgency=medium
+
+  * 5 novas regras YARA (JS_Exec_Decoded_Payload, Cron_Persistence_From_Script,
+    Win_LOLBin_Download_Exec, Win_Persistence_Registry_Or_Task e
+    Prompt_Injection_Hidden_Unicode).
+  * mandacaru ml avaliar: streaming em --jsonl, recusa --json+--jsonl juntos,
+    CRLF e bytes UTF-8 invalidos no --stdin.
+  * Engine reutiliza SCRIPT_EXT em process_start; BehaviorEngine amplia
+    credenciais sensiveis monitoradas em agentes de IA.
+  * App Windows: destruicao segura (shred), botao Analisar hash, menu de
+    contexto no Explorer e pastas ignoradas na varredura.
+
+ -- Vandyck Diniz <noreply@users.noreply.github.com>  Mon, 23 Nov 2026 11:55:00 -0300
+
 mandacaru (0.7.0) unstable; urgency=medium
 
   * mandacaru atualizacoes listar|aplicar: pendencias de apt, Snap e Flatpak

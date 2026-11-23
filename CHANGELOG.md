@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.0
+
+Novas regras YARA (JS, cron, Windows LOLBins/persistência e prompt injection oculto), melhorias no motor/ML e grandes novidades no app Windows (destruição segura, análise de hash, menu de contexto no Explorer e pastas ignoradas).
+
+- **Windows, destruição segura (shred)**: sobrescreve arquivos com dados aleatórios + `fsync`, trunca, renomeia e apaga sem passar pela Lixeira (com travas de segurança para raízes de unidade, pastas do sistema e pasta do usuário; não segue symlinks/junções). Disponível pelo botão **Destruir pasta…** na aba *Varredura*, pelo menu de contexto do Explorer e ao clicar em **Apagar** na aba *Quarentena*.
+- **Windows, botão "Analisar" (hash)**: nos achados e na aba *Quarentena*, consulta apenas o hash SHA-256 no Team Cymru MHR e no CIRCL hashlookup fora da thread da interface (gratuito, sem chave).
+- **Windows, menu de contexto no Explorer (HKCU, sem administrador)**: **Varrer com Mandacaru** (`--scan`) em arquivos, pastas e fundo de pasta, e **Destruir definitivamente com Mandacaru** (`--shred`) em clique direto sobre arquivo/pasta, com encaminhamento para a instância já aberta (no Windows 11, use `Shift + botão direito` ou *Mostrar mais opções*).
+- **Windows, pastas ignoradas na varredura**: nova seção na aba *Confiáveis* (`excludes.json` atômico) para adicionar/remover pastas que devem ser puladas.
+- **5 novas regras YARA** (`base.yar`, Linux e Windows): `JS_Exec_Decoded_Payload`, `Cron_Persistence_From_Script`, `Win_LOLBin_Download_Exec`, `Win_Persistence_Registry_Or_Task` e `Prompt_Injection_Hidden_Unicode`.
+- **Motor e CLI ML**: `mandacaru ml avaliar --jsonl` imprime em streaming (`flush=True`), recusa `--json` + `--jsonl` juntos e trata CRLF e bytes UTF-8 inválidos no `--stdin`; `Engine` passa a usar `SCRIPT_EXT` completo em `process_start` e `BehaviorEngine` amplia credenciais monitoradas em agentes de IA (`.npmrc`, `.pypirc`, `.config/gh/`, `.azure/`, `.config/gcloud/`).
+
 ## 0.7.0
 
 Atualizações: o Mandacaru passa a mostrar os programas desatualizados e vulneráveis e a atualizá-los com um clique, e se atualiza sozinho no Windows.

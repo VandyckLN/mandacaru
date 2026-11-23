@@ -6,7 +6,7 @@
 
 Antivírus/EDR de código aberto (**GPLv3**) feito para a nova geração de ataques: malware que muda a cada geração (escrito ou reescrito por IA), phishing sob medida e abuso de agentes de IA e servidores MCP.
 
-> Status: **v0.7**, em Python. No Linux detecta, registra, audita CVEs/atualizações e põe em quarentena os arquivos detectados (HIGH ou mais); ainda não bloqueia nem mata processos. No **Windows** tem aplicativo com janela (varredura sob demanda, quarentena do usuário, aba Atualizações e autoatualização) e executável de linha de comando (`mandacaru.exe`).
+> Status: **v0.8**, em Python. No Linux detecta, registra, audita CVEs/atualizações e põe em quarentena os arquivos detectados (HIGH ou mais); ainda não bloqueia nem mata processos. No **Windows** tem aplicativo com janela (varredura sob demanda, quarentena do usuário, aba Atualizações e autoatualização) e executável de linha de comando (`mandacaru.exe`).
 
 ## Por que outro antivírus?
 
@@ -26,7 +26,7 @@ Antivírus clássicos dependem de assinaturas e hashes. Um LLM consegue gerar mi
 Baixe o `.deb` da [página de Releases](https://github.com/VandyckLN/mandacaru/releases) e instale:
 
 ```bash
-sudo apt install ./mandacaru_0.7.0_all.deb
+sudo apt install ./mandacaru_0.8.0_all.deb
 systemctl status mandacaru                      # o serviço já sobe sozinho
 sudo tail -f /var/log/mandacaru/alerts.jsonl    # alertas em tempo real
 ```
