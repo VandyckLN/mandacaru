@@ -4,8 +4,8 @@ O que ficou para depois. Marque `[x]` quando fizer.
 
 ## Antes da Tarefa 14 (conferir falsos positivos nos seus arquivos)
 
-- [ ] `mandacaru ml avaliar --jsonl` imprimir cada linha na hora, em vez de só no fim. Hoje, um Ctrl-C ou um erro no meio de uma lista grande perde tudo.
-- [ ] `--stdin`: tirar o `\r` de entradas com CRLF; recusar `--json` e `--jsonl` juntos; caminhos com bytes inválidos em UTF-8.
+- [x] `mandacaru ml avaliar --jsonl` imprimir cada linha na hora, em vez de só no fim. Hoje, um Ctrl-C ou um erro no meio de uma lista grande perde tudo.
+- [x] `--stdin`: tirar o `\r` de entradas com CRLF; recusar `--json` e `--jsonl` juntos; caminhos com bytes inválidos em UTF-8.
 
 ## Decisão sua
 

@@ -109,3 +109,72 @@ rule Prompt_Injection_Instructions
         (filesize < 2MB and for any i in (1..#act1) : (
             for any j in (1..#ai) : (@ai[j] - @act1[i] < 300 and @act1[i] - @ai[j] < 300)))
 }
+
+rule JS_Exec_Decoded_Payload
+{
+    meta:
+        description = "JavaScript executando payload decodificado (atob/Buffer.from)"
+        severity = "HIGH"
+        mitre = "T1027,T1059.007"
+    strings:
+        $eval_atob = /\beval\s*\(\s*atob\s*\(/
+        $eval_buf = /\beval\s*\(\s*Buffer\.from\s*\([^)\n]{1,200}['"](base64|hex)['"]/
+        $fn_atob = /\bnew\s+Function\s*\([^)\n]{0,120}\batob\s*\(/
+        $fn_buf = /\bnew\s+Function\s*\([^)\n]{0,120}\bBuffer\.from\s*\([^)\n]{1,200}['"](base64|hex)['"]/
+    condition:
+        any of them
+}
+
+rule Cron_Persistence_From_Script
+{
+    meta:
+        description = "Script instalando tarefa agendada no crontab (persistencia)"
+        severity = "MEDIUM"
+        mitre = "T1053.003"
+    strings:
+        $pipe = /\|\s*crontab\s+-(\s|$|;|#)/
+        $tmp = /\bcrontab\s+(\/tmp|\/var\/tmp|\/dev\/shm)\/\S+/
+    condition:
+        any of them
+}
+
+rule Win_LOLBin_Download_Exec
+{
+    meta:
+        description = "Utilitario nativo do Windows (LOLBin) baixando ou executando payload remoto"
+        severity = "HIGH"
+        mitre = "T1105,T1218"
+    strings:
+        $certutil = /\bcertutil(\.exe)?\b[^\n]{0,120}-urlcache[^\n]{0,120}https?:\/\// nocase
+        $mshta = /\bmshta(\.exe)?\s+["']?https?:\/\// nocase
+        $regsvr = /\bregsvr32(\.exe)?\b[^\n]{0,100}\/i:https?:\/\/[^\n]{0,120}scrobj\.dll/ nocase
+        $bits = /\bbitsadmin(\.exe)?\b[^\n]{0,80}\/transfer\b[^\n]{0,160}https?:\/\// nocase
+    condition:
+        any of them
+}
+
+rule Win_Persistence_Registry_Or_Task
+{
+    meta:
+        description = "Script configurando persistencia no Windows (Registro Run ou tarefa agendada)"
+        severity = "MEDIUM"
+        mitre = "T1547.001,T1053.005"
+    strings:
+        $reg_run = /\breg(\.exe)?\s+add\b[^\n]{0,160}\\CurrentVersion\\Run(Once)?\b/ nocase
+        $schtasks = /\bschtasks(\.exe)?\s+\/create\b[^\n]{0,200}\/tr\s+["']?[^\n]{0,120}(powershell|pwsh|cmd\.exe|wscript|cscript|mshta|\\temp\\|%temp%|%appdata%)/ nocase
+    condition:
+        any of them
+}
+
+rule Prompt_Injection_Hidden_Unicode
+{
+    meta:
+        description = "Texto oculto com caracteres Unicode Tags (possivel prompt injection invisivel)"
+        severity = "MEDIUM"
+        mitre = "T1027,T1204"
+    strings:
+        // sequencia longa (12+) de caracteres U+E0000..U+E007F (acima de emojis de bandeira, que usam ate 7)
+        $tags = /(\xf3\xa0\x80[\x80-\xbf]|\xf3\xa0\x81[\x80-\xbf]){12,}/
+    condition:
+        filesize < 2MB and $tags
+}

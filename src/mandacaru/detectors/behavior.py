@@ -20,7 +20,7 @@ AI_AGENT_HINTS = ("claude", "mcp", "ollama", "codex", "aider", "copilot", "curso
 TEMP_DIRS = ("/tmp/", "/var/tmp/", "/dev/shm/", "\\appdata\\local\\temp\\", "\\windows\\temp\\")
 SENSITIVE = (".ssh/", ".aws/credentials", ".env", ".kube/config", ".docker/config.json",
              "login data", "cookies", "keychain", ".gnupg/", "id_rsa", "id_ed25519", ".netrc",
-             ".git-credentials")
+             ".git-credentials", ".npmrc", ".pypirc", ".config/gh/", ".azure/", ".config/gcloud/")
 
 
 def _name(path_or_name: str | None) -> str:

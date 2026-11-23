@@ -6,7 +6,7 @@
 
 Antivírus/EDR de código aberto (**GPLv3**) feito para a nova geração de ataques: malware que muda a cada geração (escrito ou reescrito por IA), phishing sob medida e abuso de agentes de IA e servidores MCP.
 
-> Status: **v0.4**, em Python, voltado para Linux. Detecta, registra e põe em quarentena os arquivos detectados (HIGH ou mais); ainda não bloqueia nem mata processos. Também roda no Windows, mas sem eBPF, serviço nem quarentena.
+> Status: **v0.7**, em Python. No Linux detecta, registra, audita CVEs/atualizações e põe em quarentena os arquivos detectados (HIGH ou mais); ainda não bloqueia nem mata processos. No **Windows** tem aplicativo com janela (varredura sob demanda, quarentena do usuário, aba Atualizações e autoatualização) e executável de linha de comando (`mandacaru.exe`).
 
 ## Por que outro antivírus?
 
@@ -26,7 +26,7 @@ Antivírus clássicos dependem de assinaturas e hashes. Um LLM consegue gerar mi
 Baixe o `.deb` da [página de Releases](https://github.com/VandyckLN/mandacaru/releases) e instale:
 
 ```bash
-sudo apt install ./mandacaru_0.4.0_all.deb
+sudo apt install ./mandacaru_0.7.0_all.deb
 systemctl status mandacaru                      # o serviço já sobe sozinho
 sudo tail -f /var/log/mandacaru/alerts.jsonl    # alertas em tempo real
 ```
@@ -263,7 +263,7 @@ coletores (procmon | ebpf | fsmon) ──► fila ──► Engine ──► det
 ## Testes e falsos positivos
 
 ```bash
-pytest -q          # 408 testes (+1 de desempenho opcional), com amostras inofensivas que imitam as técnicas
+pytest -q          # 560 testes (+1 de desempenho opcional; +154 em windows/tests), com amostras inofensivas que imitam as técnicas
 ```
 
 Varredura de cerca de 91 mil arquivos legítimos (stdlib do Python, dist-packages e `/usr/share`): **0 alertas HIGH/CRITICAL**. Ficaram 1 MEDIUM (documentação com `curl | bash`) e 1 LOW (bundle JS grande).

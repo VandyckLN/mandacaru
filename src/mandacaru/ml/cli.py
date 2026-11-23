@@ -47,16 +47,66 @@ def _status(args) -> int:
     return 0
 
 
+def _safe_text(s: str) -> str:
+    """Garante string UTF-8 valida para impressao/JSON, trocando bytes invalidos (surrogateescape) por U+FFFD."""
+    return s.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+
+
 def _caminhos(args) -> list[str]:
     caminhos = list(args.arquivos or [])
     if getattr(args, "stdin", False):
-        bruto = sys.stdin.buffer.read() if hasattr(sys.stdin, "buffer") else sys.stdin.read().encode()
+        if hasattr(sys.stdin, "buffer"):
+            bruto = sys.stdin.buffer.read()
+        else:
+            bruto = sys.stdin.read().encode("utf-8", "surrogateescape")
         sep = b"\0" if b"\0" in bruto else b"\n"
-        caminhos += [c.decode("utf-8", "surrogateescape") for c in bruto.split(sep) if c.strip()]
+        for item in bruto.split(sep):
+            if sep == b"\n":
+                item = item.rstrip(b"\r")
+            if item.strip():
+                caminhos.append(item.decode("utf-8", "surrogateescape"))
     return caminhos
 
 
+def _avaliar_um(classifier, arquivo: str) -> tuple[dict, int]:
+    """Avalia um unico arquivo e devolve (linha_resultado, codigo_saida)."""
+    rotulo = _safe_text(arquivo)
+    try:
+        with open(arquivo, "rb") as fh:
+            data = fh.read(MAX_BYTES)
+    except OSError as exc:
+        return {"path": rotulo, "erro": exc.strerror or str(exc)}, 0
+    if len(data) >= MAX_BYTES:
+        return {"path": rotulo, "nao_avaliado": "maior que 8 MB"}, 0
+    v = classifier.score(data, path=str(Path(arquivo).resolve()))
+    if v is None:
+        return {"path": rotulo, "nao_avaliado": "tipo nao suportado"}, 0
+    rc = 2 if v.band in ("alto", "reforco") else 0
+    return {
+        "path": rotulo, "band": v.band, "score": round(v.score, 4), "kind": v.kind,
+        "model_id": v.model_id, "known_good": v.known_good,
+        "motivos": [m.text for m in v.reasons[:3]],
+    }, rc
+
+
+def _imprimir_texto(row: dict) -> None:
+    if "erro" in row:
+        print(f"{row['path']}: erro ao ler ({row['erro']})")
+    elif "nao_avaliado" in row:
+        print(f"{row['path']}: nao avaliado ({row['nao_avaliado']})")
+    else:
+        extra = " [identico a arquivo de pacote instalado]" if row["known_good"] else ""
+        motivos = "; ".join(row["motivos"]) or "-"
+        print(f"{row['path']}: {row['band']} {round(row['score'] * 100)}% ({row['kind']}, {row['model_id']})"
+              f" - {motivos}{extra}")
+
+
 def _evaluate(args) -> int:
+    as_json = bool(getattr(args, "as_json", False))
+    as_jsonl = bool(getattr(args, "jsonl", False))
+    if as_json and as_jsonl:
+        print("mandacaru: use apenas --json ou --jsonl, nao ambos", file=sys.stderr)
+        return 1
     caminhos = _caminhos(args)
     if not caminhos:
         print("mandacaru: informe arquivos ou use --stdin", file=sys.stderr)
@@ -67,41 +117,17 @@ def _evaluate(args) -> int:
         return 1
     rows, worst = [], 0
     for arquivo in caminhos:
-        try:
-            with open(arquivo, "rb") as fh:
-                data = fh.read(MAX_BYTES)
-        except OSError as exc:
-            rows.append({"path": arquivo, "erro": exc.strerror or str(exc)})
-            continue
-        if len(data) >= MAX_BYTES:
-            rows.append({"path": arquivo, "nao_avaliado": "maior que 8 MB"})
-            continue
-        v = r.classifier.score(data, path=str(Path(arquivo).resolve()))
-        if v is None:
-            rows.append({"path": arquivo, "nao_avaliado": "tipo nao suportado"})
-            continue
-        if v.band in ("alto", "reforco"):
-            worst = 2
-        rows.append({"path": arquivo, "band": v.band, "score": round(v.score, 4), "kind": v.kind,
-                     "model_id": v.model_id, "known_good": v.known_good,
-                     "motivos": [m.text for m in v.reasons[:3]]})
-    if args.as_json:
-        print(json.dumps(rows, ensure_ascii=False, indent=2))
-        return worst
-    if getattr(args, "jsonl", False):
-        for row in rows:
-            print(json.dumps(row, ensure_ascii=False))
-        return worst
-    for row in rows:
-        if "erro" in row:
-            print(f"{row['path']}: erro ao ler ({row['erro']})")
-        elif "nao_avaliado" in row:
-            print(f"{row['path']}: nao avaliado ({row['nao_avaliado']})")
+        row, rc = _avaliar_um(r.classifier, arquivo)
+        if rc > worst:
+            worst = rc
+        if as_jsonl:
+            print(json.dumps(row, ensure_ascii=False), flush=True)
+        elif as_json:
+            rows.append(row)
         else:
-            extra = " [identico a arquivo de pacote instalado]" if row["known_good"] else ""
-            motivos = "; ".join(row["motivos"]) or "-"
-            print(f"{row['path']}: {row['band']} {round(row['score'] * 100)}% ({row['kind']}, {row['model_id']})"
-                  f" - {motivos}{extra}")
+            _imprimir_texto(row)
+    if as_json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
     return worst
 
 

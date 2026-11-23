@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, TextIO
 
 from .detectors.behavior import BehaviorEngine
-from .detectors.static import StaticScanner
+from .detectors.static import SCRIPT_EXT, StaticScanner
 from .events import Alert, Event, Severity
 
 if TYPE_CHECKING:
@@ -184,11 +184,11 @@ class Engine:
                 alerts += found
         if ev.kind == "process_start":
             exe = ev.data.get("exe")
-            if exe and Path(exe).suffix.lower() in {".py", ".ps1", ".sh", ".js", ".vbs", ".bat"}:
+            if exe and Path(exe).suffix.lower() in SCRIPT_EXT:
                 alerts += self.scanner.scan_file(exe)
-            # scripts passados como argumento (python x.py, bash y.sh, powershell -File z.ps1)
+            # scripts passados como argumento (python x.py, bash y.sh, powershell -File z.ps1, node z.mjs, ...)
             for arg in (ev.data.get("cmdline") or [])[1:4]:
-                if Path(arg).suffix.lower() in {".py", ".ps1", ".sh", ".js", ".vbs", ".bat"}:
+                if Path(arg).suffix.lower() in SCRIPT_EXT:
                     alerts += self.scanner.scan_file(arg)
         return [a for a in alerts if self.emit(a, force=a.quarantine_id is not None)]
 
