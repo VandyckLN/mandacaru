@@ -279,3 +279,14 @@ def test_run_installer_uses_injected_runner(tmp_path):
         raise OSError("bloqueado")
     with pytest.raises(UpdateError, match="bloqueado"):
         run_installer(setup, runner=boom)
+
+
+def test_check_reports_friendly_error_detail(tmp_path):
+    from mandacaru_win.updater import RELEASES_URL
+
+    err403 = urllib.error.HTTPError(RELEASES_URL, 403, "Forbidden", {}, None)
+    res403 = check(tmp_path, current="0.8.0", http=FakeHttp({RELEASES_URL: err403}), force=True)
+    assert res403.reason == "falha" and "limite temporário" in res403.detail
+
+    res_to = check(tmp_path, current="0.8.0", http=FakeHttp({RELEASES_URL: TimeoutError("timed out")}), force=True)
+    assert res_to.reason == "falha" and "tempo esgotado" in res_to.detail

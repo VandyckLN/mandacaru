@@ -11,9 +11,11 @@ import hashlib
 import json
 import os
 import re
+import ssl
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -26,7 +28,7 @@ RELEASES_URL = "https://api.github.com/repos/VandyckLN/mandacaru/releases/latest
 DOWNLOAD_PREFIX = "https://github.com/VandyckLN/mandacaru/releases/download/"
 CHECK_INTERVAL = 24 * 3600
 SNOOZE = 7 * 24 * 3600
-CHECK_TIMEOUT = 8.0
+CHECK_TIMEOUT = 10.0
 DOWNLOAD_TIMEOUT = 30.0
 MAX_JSON_BYTES = 2 * 1024 * 1024
 MAX_SETUP_BYTES = 512 * 1024 * 1024
@@ -61,6 +63,7 @@ class Update:
 class CheckResult:
     update: Update | None  # preenchido só quando a faixa deve aparecer
     reason: str  # disponivel | em_dia | adiado | recente | falha
+    detail: str = ""  # motivo legível quando reason == "falha"
 
 
 # ---------- versões ----------
@@ -116,18 +119,57 @@ def _request(url: str, accept: str) -> urllib.request.Request:
         "User-Agent": f"mandacaru/{__version__}", "Accept": accept})
 
 
+def _error_detail(exc: Exception) -> str:
+    if isinstance(exc, urllib.error.HTTPError):
+        if exc.code == 403:
+            return "limite temporário da API do GitHub; tente novamente em alguns minutos"
+        return f"HTTP {exc.code}"
+    if isinstance(exc, urllib.error.URLError):
+        reason = exc.reason
+        if isinstance(reason, ssl.SSLError):
+            return f"erro de certificado SSL: {reason}"
+        if isinstance(reason, TimeoutError):
+            return "tempo esgotado"
+        return str(reason)
+    if isinstance(exc, ssl.SSLError):
+        return f"erro de certificado SSL: {exc}"
+    if isinstance(exc, TimeoutError):
+        return "tempo esgotado"
+    return f"{type(exc).__name__}: {exc}"
+
+
+def fetch_latest_with_error(
+    http: Http = urllib.request.urlopen,
+    timeout: float = CHECK_TIMEOUT,
+) -> tuple[dict | None, str]:
+    """Retorna (json_release, detalhe_erro). Faz 1 nova tentativa em erro transitório de rede."""
+    last_err = ""
+    for attempt in range(2):
+        try:
+            req = _request(RELEASES_URL, "application/vnd.github+json")
+            with http(req, timeout=timeout) as resp:
+                body = resp.read(MAX_JSON_BYTES + 1)
+            if len(body) > MAX_JSON_BYTES:
+                return None, "resposta muito grande"
+            data = json.loads(body.decode("utf-8"))
+            if isinstance(data, dict):
+                return data, ""
+            return None, "resposta inesperada"
+        except urllib.error.HTTPError as exc:
+            return None, _error_detail(exc)  # erro HTTP (ex.: 403/404) não melhora repetindo na hora
+        except Exception as exc:  # noqa: BLE001 - rede, SSL, JSON: nunca derruba a interface
+            last_err = _error_detail(exc)
+            if attempt == 0 and http is urllib.request.urlopen:
+                time.sleep(0.5)
+                continue
+            return None, last_err
+    return None, last_err
+
+
 def fetch_latest(http: Http = urllib.request.urlopen, timeout: float = CHECK_TIMEOUT) -> dict | None:
     """JSON da última release, ou None em qualquer falha (rede, HTTP, JSON)."""
-    try:
-        req = _request(RELEASES_URL, "application/vnd.github+json")
-        with http(req, timeout=timeout) as resp:
-            body = resp.read(MAX_JSON_BYTES + 1)
-        if len(body) > MAX_JSON_BYTES:
-            return None
-        data = json.loads(body.decode("utf-8"))
-    except Exception:  # noqa: BLE001 - rede, HTTP, JSON: nada disso pode chegar à interface
-        return None
-    return data if isinstance(data, dict) else None
+    data, _ = fetch_latest_with_error(http, timeout)
+    return data
 
 
 # ---------- estado (update.json) ----------
@@ -191,9 +233,9 @@ def check(data: Path, current: str = __version__, http: Http = urllib.request.ur
         update = _cached_update(state, current)  # a faixa volta na próxima abertura
         reason = "recente"
     else:
-        release = fetch_latest(http, timeout)
+        release, err = fetch_latest_with_error(http, timeout)
         if release is None:
-            return CheckResult(None, "falha")  # sem carimbo: tenta de novo na próxima abertura
+            return CheckResult(None, "falha", err)  # sem carimbo: tenta de novo na próxima abertura
         update = pick_update(release, current)
         state["ultima_verificacao"] = t
         state["disponivel"] = asdict(update) if update else None
