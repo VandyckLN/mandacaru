@@ -1,3 +1,11 @@
+mandacaru (0.8.1) unstable; urgency=medium
+
+  * App Windows: barras de progresso personalizadas (MandacaruProgressBar),
+    botoes coloridos por funcao, badges de severidade/risco em pilula suave e
+    tema claro/escuro automatico.
+
+ -- Vandyck Diniz <noreply@users.noreply.github.com>  Mon, 23 Nov 2026 13:40:00 -0300
+
 mandacaru (0.8.0) unstable; urgency=medium
 
   * 5 novas regras YARA (JS_Exec_Decoded_Payload, Cron_Persistence_From_Script,

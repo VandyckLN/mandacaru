@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.1
+
+Melhorias visuais no aplicativo Windows, preservando a velocidade da varredura e com adaptação automática ao tema claro e escuro do Windows 11.
+
+- **Barras de progresso personalizadas (`MandacaruProgressBar`)**: visual em pílula com cores semânticas por estado (verde na varredura/atualizações, vermelho/laranja na destruição segura, dourado em interrupções e vermelho em falhas), sem timers em repouso (0% de CPU) e com animação suave apenas no modo indeterminado visível; também presente na faixa de autoatualização.
+- **Botões coloridos por função**: verde (varrer/atualizar), azul (analisar), laranja (quarentena), vermelho (destruir/apagar/parar) e neutro, com ajuste de largura mínima nas células para evitar quebra de texto.
+- **Badges de severidade e risco em pílula suave (`BadgeDelegate`)**: pintadas direto em `QPainter` (sem widgets extras por linha) nas abas *Varredura*, *Quarentena* e *Atualizações*.
+
 ## 0.8.0
 
 Novas regras YARA (JS, cron, Windows LOLBins/persistência e prompt injection oculto), melhorias no motor/ML e grandes novidades no app Windows (destruição segura, análise de hash, menu de contexto no Explorer e pastas ignoradas).

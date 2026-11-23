@@ -26,7 +26,7 @@ Antivírus clássicos dependem de assinaturas e hashes. Um LLM consegue gerar mi
 Baixe o `.deb` da [página de Releases](https://github.com/VandyckLN/mandacaru/releases) e instale:
 
 ```bash
-sudo apt install ./mandacaru_0.8.0_all.deb
+sudo apt install ./mandacaru_0.8.1_all.deb
 systemctl status mandacaru                      # o serviço já sobe sozinho
 sudo tail -f /var/log/mandacaru/alerts.jsonl    # alertas em tempo real
 ```
