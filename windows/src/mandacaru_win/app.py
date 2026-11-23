@@ -10,18 +10,24 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QEvent, QFileSystemWatcher, QStandardPaths, Qt, QUrl, Signal
+from PySide6.QtCore import QEvent, QFileSystemWatcher, QStandardPaths, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QBrush, QColor, QDesktopServices, QFontMetrics
 from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
     QFileDialog,
+    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLayout,
+    QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSizePolicy,
+    QSystemTrayIcon,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -35,6 +41,14 @@ from mandacaru.analysis import AnalysisResult
 from mandacaru.events import Severity
 from mandacaru_win.quarantine import Quarantine, QuarantineError
 from mandacaru_win.scan import Finding, ScanSummary, make_scanner
+from mandacaru_win.schedule import (
+    CRON_PRESETS,
+    CronError,
+    ScheduleConfig,
+    ScheduleStore,
+    describe_cron,
+    parse_cron,
+)
 from mandacaru_win.shred import ShredSummary
 from mandacaru_win.store import UPDATE_KIND, ExcludeList, History, TrustList
 from mandacaru_win.theme import build_stylesheet, is_dark_palette, style_button
@@ -156,14 +170,32 @@ class MainWindow(QMainWindow):
             self._excludes_error = (
                 "Não foi possível ler a lista de pastas excluídas "
                 f"({e}). A edição de exclusões fica desativada nesta sessão.")
+        self._schedule_store: ScheduleStore | None = None
+        self._schedule_error: str | None = None
+        try:
+            self._schedule_store = ScheduleStore(self._data / "schedule.json")
+        except OSError as e:
+            self._schedule_error = f"Não foi possível ler o agendamento ({e})."
+        self._next_scheduled_run: datetime | None = None
+        self._background_scan = False
+        self._force_quit = False
+        self._tray: QSystemTrayIcon | None = None
+        self._tray_notified = False
+        self._schedule_timer = QTimer(self)
+        self._schedule_timer.setInterval(30_000)
+        self._schedule_timer.timeout.connect(self.check_scheduled_scan)
         self._dark_theme: bool | None = None
         self._build_ui()
         self._build_update_ui()
         self._apply_theme()
+        self._setup_tray()
+        self._reload_schedule()
         if self._trust_error:
             self.statusBar().showMessage(self._trust_error)
         elif self._excludes_error:
             self.statusBar().showMessage(self._excludes_error)
+        elif self._schedule_error:
+            self.statusBar().showMessage(self._schedule_error)
 
     def _apply_theme(self) -> None:
         dark = is_dark_palette(self)
@@ -262,6 +294,7 @@ class MainWindow(QMainWindow):
             ["Data", "Pastas", "Arquivos", "Achados", "Duração", "Situação"], stretch=1)
         tabs.addTab(self.tbl_history, "Histórico")
         tabs.addTab(self._build_updates_tab(), "Atualizações")
+        tabs.addTab(self._build_settings_tab(), "Configurações")
         self.setCentralWidget(tabs)
         self.refresh_tabs()
         self.statusBar().showMessage("Pronto")
@@ -442,6 +475,9 @@ class MainWindow(QMainWindow):
         v.addWidget(self.update_bar)
         v.addWidget(tabs, 1)
         self.setCentralWidget(central)
+        file_menu = self.menuBar().addMenu("Arquivo")
+        self.act_quit = file_menu.addAction("Sair")
+        self.act_quit.triggered.connect(self.quit_app)
         self.act_check_updates = self.menuBar().addMenu("Ajuda").addAction("Verificar atualizações")
         self.act_check_updates.triggered.connect(lambda: self.check_updates(force=True))
 
@@ -462,9 +498,10 @@ class MainWindow(QMainWindow):
             self.start_scan(paths)
 
     # ---------- varredura ----------
-    def start_scan(self, paths: list[Path]) -> None:
-        if self._thread is not None:
+    def start_scan(self, paths: list[Path], *, background: bool = False) -> None:
+        if self._thread is not None or self._shred_thread is not None:
             return
+        self._background_scan = background
         self.tree.clear()
         self.findings.clear()
         self._items.clear()
@@ -472,7 +509,7 @@ class MainWindow(QMainWindow):
         self.progress.set_tone("normal")
         self.progress.setRange(0, 0)  # indeterminado até saber o total
         self.lbl_count.setText("0 arquivos · 0 achados")
-        self.statusBar().showMessage("Varrendo…")
+        self.statusBar().showMessage("Varredura agendada em segundo plano…" if background else "Varrendo…")
         self._set_scanning(True)
         trusted = self._trust.hashes() if self._trust else set()
         excluded = self._excludes.paths() if self._excludes else ()
@@ -553,6 +590,7 @@ class MainWindow(QMainWindow):
         return w
 
     def _on_done(self, summary: ScanSummary) -> None:
+        was_bg, self._background_scan = self._background_scan, False
         t, self._thread = self._thread, None
         if t is not None:
             t.wait()
@@ -573,9 +611,18 @@ class MainWindow(QMainWindow):
                 self.progress.setRange(0, 1)
                 self.progress.setValue(0)
         self.statusBar().showMessage("Concluída" if summary.completed else "Interrompida")
+        if was_bg and summary.findings > 0 and self._tray is not None and self._tray.isVisible():
+            self._tray.showMessage(
+                "Mandacaru — Ameaça encontrada",
+                f"A varredura em segundo plano encontrou {summary.findings} arquivo(s) suspeito(s). "
+                "Clique para revisar.",
+                QSystemTrayIcon.MessageIcon.Warning,
+                8000,
+            )
         self.scan_finished.emit(summary)
 
     def _on_failed(self, msg: str) -> None:
+        self._background_scan = False
         t, self._thread = self._thread, None
         if t is not None:
             t.wait()
@@ -590,10 +637,32 @@ class MainWindow(QMainWindow):
         self.scan_finished.emit(ScanSummary(0.0, [], self._files, len(self.findings),
                                             0.0, False))
 
+    def quit_app(self) -> None:
+        """Encerra o Mandacaru de verdade (sem minimizar para a bandeja)."""
+        self._force_quit = True
+        self.close()
+
     def closeEvent(self, e) -> None:
+        cfg = self._schedule_store.get() if self._schedule_store else ScheduleConfig(enabled=False)
+        if (not self._force_quit
+                and self._tray is not None and self._tray.isVisible()
+                and cfg.enabled and cfg.minimize_to_tray):
+            e.ignore()
+            self.hide()
+            if not self._tray_notified:
+                self._tray_notified = True
+                self._tray.showMessage(
+                    "Mandacaru",
+                    "O Mandacaru continua monitorando em segundo plano. "
+                    "Clique no ícone da bandeja para abrir ou sair.",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    4000,
+                )
+            return
         if not self._updates_allow_close():
             e.ignore()
             return
+        self._schedule_timer.stop()
         if self._thread is not None:
             self._thread.stop()
             self._thread.wait()
@@ -607,6 +676,10 @@ class MainWindow(QMainWindow):
         if self._req_watcher is not None:
             self._req_watcher.deleteLater()
             self._req_watcher = None
+        if self._tray is not None:
+            self._tray.hide()
+            self._tray.deleteLater()
+            self._tray = None
         self.update_bar.shutdown()
         super().closeEvent(e)
 
@@ -1150,3 +1223,264 @@ class MainWindow(QMainWindow):
         self._finish_apply_thread()
         self.lbl_upd.setText(f"A atualização falhou: {exc}")
         self._set_updating(False)
+
+    # ---------- aba Configurações + monitoramento agendado (Cron) ----------
+    def _build_settings_tab(self) -> QWidget:
+        tab = QWidget()
+        lay = QVBoxLayout(tab)
+
+        grp_cron = QGroupBox("Monitoramento em segundo plano (Cron)")
+        gl = QVBoxLayout(grp_cron)
+
+        self.chk_sched_enabled = QCheckBox("Ativar varredura automática em segundo plano")
+        self.chk_sched_tray = QCheckBox("Manter ícone na bandeja ao fechar a janela (para continuar monitorando)")
+        gl.addWidget(self.chk_sched_enabled)
+        gl.addWidget(self.chk_sched_tray)
+
+        preset_row = QHBoxLayout()
+        preset_row.addWidget(QLabel("Frequência:"))
+        self.cmb_sched_preset = QComboBox()
+        for label, expr in CRON_PRESETS:
+            self.cmb_sched_preset.addItem(f"{label}  ({expr})", expr)
+        self.cmb_sched_preset.addItem("Personalizado", "")
+        self.cmb_sched_preset.currentIndexChanged.connect(self._on_preset_changed)
+        preset_row.addWidget(self.cmb_sched_preset, 1)
+        gl.addLayout(preset_row)
+
+        cron_row = QHBoxLayout()
+        cron_row.addWidget(QLabel("Expressão cron:"))
+        self.txt_sched_cron = QLineEdit()
+        self.txt_sched_cron.setPlaceholderText("0 */4 * * *")
+        self.txt_sched_cron.textChanged.connect(self._on_cron_text_changed)
+        cron_row.addWidget(self.txt_sched_cron, 1)
+        gl.addLayout(cron_row)
+
+        lbl_help = QLabel(
+            "Formato (5 campos): minuto hora dia-do-mês mês dia-da-semana — "
+            "ex.: 0 */4 * * * (a cada 4 horas), 30 12 * * * (todo dia às 12:30), 0 9 * * 1-5 (seg–sex às 09:00).")
+        lbl_help.setWordWrap(True)
+        gl.addWidget(lbl_help)
+
+        self.lbl_sched_preview = QLabel("")
+        self.lbl_sched_preview.setWordWrap(True)
+        gl.addWidget(self.lbl_sched_preview)
+
+        self.lbl_sched_last = QLabel("")
+        gl.addWidget(self.lbl_sched_last)
+
+        btn_row = QHBoxLayout()
+        self.btn_sched_save = style_button(QPushButton("Salvar configurações"), "scan")
+        self.btn_sched_run_now = style_button(QPushButton("Executar varredura agendada agora"), "neutral")
+        self.btn_sched_save.clicked.connect(self.save_schedule_settings)
+        self.btn_sched_run_now.clicked.connect(self.run_scheduled_now)
+        if self._schedule_store is None:
+            self.btn_sched_save.setEnabled(False)
+        btn_row.addWidget(self.btn_sched_save)
+        btn_row.addWidget(self.btn_sched_run_now)
+        btn_row.addStretch(1)
+        gl.addLayout(btn_row)
+        lay.addWidget(grp_cron)
+
+        grp_paths = QGroupBox("Pastas monitoradas na varredura agendada")
+        pl = QVBoxLayout(grp_paths)
+        hdr = QHBoxLayout()
+        lbl_info = QLabel("Sem pastas listadas, o Mandacaru varre automaticamente Downloads e Área de Trabalho.")
+        lbl_info.setWordWrap(True)
+        self.btn_sched_add_path = style_button(QPushButton("Adicionar pasta…"), "neutral")
+        self.btn_sched_add_path.clicked.connect(self._pick_scheduled_folder)
+        if self._schedule_store is None:
+            self.btn_sched_add_path.setEnabled(False)
+        hdr.addWidget(lbl_info, 1)
+        hdr.addWidget(self.btn_sched_add_path)
+        pl.addLayout(hdr)
+        self.tbl_sched_paths = self._make_table(["Pasta monitorada", "Ações"], stretch=0)
+        pl.addWidget(self.tbl_sched_paths, 1)
+        lay.addWidget(grp_paths, 1)
+        return tab
+
+    def _setup_tray(self) -> None:
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        tray = QSystemTrayIcon(self.windowIcon(), self)
+        tray.setToolTip("Mandacaru")
+        menu = QMenu(self)
+        menu.addAction("Abrir Mandacaru").triggered.connect(self._bring_to_front)
+        menu.addAction("Varrer agora").triggered.connect(self.run_scheduled_now)
+        menu.addSeparator()
+        menu.addAction("Sair").triggered.connect(self.quit_app)
+        tray.setContextMenu(menu)
+        tray.activated.connect(lambda reason: self._bring_to_front()
+                               if reason in (QSystemTrayIcon.ActivationReason.Trigger,
+                                             QSystemTrayIcon.ActivationReason.DoubleClick) else None)
+        tray.messageClicked.connect(self._bring_to_front)
+        tray.show()
+        self._tray = tray
+
+    def _bring_to_front(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _on_preset_changed(self, idx: int) -> None:
+        expr = self.cmb_sched_preset.itemData(idx)
+        if expr and self.txt_sched_cron.text().strip() != expr:
+            self.txt_sched_cron.setText(expr)
+
+    def _on_cron_text_changed(self, text: str) -> None:
+        norm = " ".join(text.strip().split())
+        match_idx = self.cmb_sched_preset.count() - 1  # Personalizado
+        for i in range(self.cmb_sched_preset.count() - 1):
+            if self.cmb_sched_preset.itemData(i) == norm:
+                match_idx = i
+                break
+        if self.cmb_sched_preset.currentIndex() != match_idx:
+            self.cmb_sched_preset.blockSignals(True)
+            self.cmb_sched_preset.setCurrentIndex(match_idx)
+            self.cmb_sched_preset.blockSignals(False)
+        self._update_cron_preview(text)
+
+    def _update_cron_preview(self, text: str) -> None:
+        try:
+            sched = parse_cron(text)
+            nxt = sched.next_run(datetime.now())
+            desc = describe_cron(sched.expr)
+            self.lbl_sched_preview.setStyleSheet("color: #2e7d32; font-weight: 600;")
+            self.lbl_sched_preview.setText(
+                f"Válida ({desc}) — Próxima varredura: {nxt.strftime('%d/%m/%Y %H:%M')}")
+        except CronError as e:
+            self.lbl_sched_preview.setStyleSheet("color: #c62828; font-weight: 600;")
+            self.lbl_sched_preview.setText(f"Expressão inválida: {e}")
+
+    def _reload_schedule(self, now: datetime | None = None) -> None:
+        cfg = self._schedule_store.get() if self._schedule_store else ScheduleConfig()
+        self.chk_sched_enabled.setChecked(cfg.enabled)
+        self.chk_sched_tray.setChecked(cfg.minimize_to_tray)
+        self.txt_sched_cron.setText(cfg.cron)
+        self._on_cron_text_changed(cfg.cron)
+        self.lbl_sched_last.setText(
+            f"Última varredura agendada: {self._fmt_date(cfg.last_run)}"
+            if cfg.last_run else "Última varredura agendada: ainda não executada")
+        self._refresh_scheduled_paths_table(cfg.paths)
+        if cfg.enabled:
+            self._next_scheduled_run = parse_cron(cfg.cron).next_run(now or datetime.now())
+            if not self._schedule_timer.isActive():
+                self._schedule_timer.start()
+        else:
+            self._next_scheduled_run = None
+            self._schedule_timer.stop()
+
+    def _refresh_scheduled_paths_table(self, paths: list[str]) -> None:
+        t = self.tbl_sched_paths
+        self._reset_table(t, len(paths))
+        for r, p in enumerate(paths):
+            t.setItem(r, 0, QTableWidgetItem(p))
+            self._button_cell(t, r, 1, [("Remover", lambda x=p: self.remove_scheduled_folder(x), "neutral")])
+
+    def save_schedule_settings(self) -> bool:
+        if self._schedule_store is None:
+            self.notify(self._schedule_error or "Configurações de agendamento indisponíveis.")
+            return False
+        expr = self.txt_sched_cron.text().strip()
+        try:
+            parse_cron(expr)
+        except CronError as e:
+            self.notify(f"Expressão cron inválida: {e}")
+            return False
+        cur = self._schedule_store.get()
+        new_cfg = ScheduleConfig(
+            enabled=self.chk_sched_enabled.isChecked(),
+            cron=expr,
+            paths=cur.paths,
+            minimize_to_tray=self.chk_sched_tray.isChecked(),
+            last_run=cur.last_run,
+        )
+        try:
+            self._schedule_store.save(new_cfg)
+        except OSError as e:
+            self.notify(f"Não foi possível salvar o agendamento: {e}")
+            return False
+        self._reload_schedule()
+        self.statusBar().showMessage(
+            f"Agendamento salvo: {describe_cron(new_cfg.cron)}"
+            if new_cfg.enabled else "Monitoramento em segundo plano desativado.")
+        return True
+
+    def _pick_scheduled_folder(self) -> None:
+        p = QFileDialog.getExistingDirectory(self, "Escolher pasta para monitorar")
+        if p:
+            self.add_scheduled_folder(Path(p))
+
+    def add_scheduled_folder(self, path: Path) -> None:
+        if self._schedule_store is None:
+            self.notify(self._schedule_error or "Configurações de agendamento indisponíveis.")
+            return
+        cfg = self._schedule_store.get()
+        cfg.paths.append(str(path))
+        try:
+            self._schedule_store.save(cfg)
+        except OSError as e:
+            self.notify(f"Não foi possível salvar as pastas monitoradas: {e}")
+            return
+        self._reload_schedule()
+
+    def remove_scheduled_folder(self, path: str) -> None:
+        if self._schedule_store is None:
+            return
+        key = os.path.normcase(os.path.abspath(path))
+        cfg = self._schedule_store.get()
+        cfg.paths = [p for p in cfg.paths if os.path.normcase(os.path.abspath(p)) != key]
+        try:
+            self._schedule_store.save(cfg)
+        except OSError as e:
+            self.notify(f"Não foi possível salvar as pastas monitoradas: {e}")
+            return
+        self._reload_schedule()
+
+    def scheduled_target_paths(self) -> list[Path]:
+        cfg = self._schedule_store.get() if self._schedule_store else ScheduleConfig()
+        if cfg.paths:
+            return [Path(p) for p in cfg.paths]
+        defaults: list[Path] = []
+        for loc in (QStandardPaths.StandardLocation.DownloadLocation,
+                    QStandardPaths.StandardLocation.DesktopLocation):
+            p = QStandardPaths.writableLocation(loc)
+            if p and Path(p).exists():
+                defaults.append(Path(p))
+        return list(dict.fromkeys(defaults))
+
+    def run_scheduled_now(self) -> bool:
+        targets = self.scheduled_target_paths()
+        if not targets or self._thread is not None or self._shred_thread is not None:
+            return False
+        if self._schedule_store is not None:
+            try:
+                self._schedule_store.mark_run()
+            except OSError:
+                pass
+            self._reload_schedule()
+        self.start_scan(targets, background=True)
+        return True
+
+    def check_scheduled_scan(self, now: datetime | None = None) -> bool:
+        """Verifica se chegou a hora da próxima varredura agendada e dispara em segundo plano."""
+        if self._schedule_store is None or self._next_scheduled_run is None:
+            return False
+        cfg = self._schedule_store.get()
+        if not cfg.enabled:
+            return False
+        cur = now or datetime.now()
+        if cur < self._next_scheduled_run:
+            return False
+        self._next_scheduled_run = parse_cron(cfg.cron).next_run(cur)
+        if self._thread is not None or self._shred_thread is not None:
+            return False
+        targets = self.scheduled_target_paths()
+        if not targets:
+            return False
+        try:
+            self._schedule_store.mark_run(cur.timestamp())
+        except OSError:
+            pass
+        self._reload_schedule(now=cur)
+        self.start_scan(targets, background=True)
+        return True
