@@ -168,13 +168,23 @@ def test_normal_tone_uses_the_requested_gradient():
 
 
 def test_full_bar_shows_every_stop_left_to_right(app):
-    bar = _full_bar(100)
+    bar = _full_bar(100)  # sem texto: setTextVisible(False) é respeitado
     img = bar.grab().toImage()
-    y, w = img.height() // 2, img.width()
+    w = img.width()
     inner_left, inner_w = 2, w - 4  # borda de 1 px + recuo de 1 px
     for t, hexa in ((0.06, None), (0.25, "#004D00"), (0.5, "#3F8F3A"), (0.75, "#70C06A"), (0.97, None)):
-        c = QColor(img.pixel(int(inner_left + t * inner_w), y))
-        assert _close(c, hexa or widgets.gradient_color(GRADIENTE, t).name()), (t, c.name())
+        x = int(inner_left + t * inner_w)
+        for y in range(4, img.height() - 4):  # a coluna inteira, não só um pixel
+            c = QColor(img.pixel(x, y))
+            assert _close(c, hexa or widgets.gradient_color(GRADIENTE, t).name()), (t, y, c.name())
+
+
+def test_set_text_visible_false_hides_text(app):
+    bar = _full_bar(100)
+    img = bar.grab().toImage()
+    h = img.height()
+    dark = [QColor(img.pixel(x, y)).lightness() for x in range(200, 300) for y in range(4, h - 4)]
+    assert min(dark) > 20  # nenhum "100%" preto desenhado no meio
 
 
 def test_gradient_is_anchored_to_the_whole_bar(app):

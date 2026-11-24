@@ -229,7 +229,7 @@ class MandacaruProgressBar(QProgressBar):
         painter.setClipping(False)
 
         text = ""
-        if self._show_text:
+        if self._show_text and self.isTextVisible():  # respeita setTextVisible(False)
             pct = int(round(ratio * 100))
             text = self._caption or (f"{pct}%" if pct > 0 and not self.is_indeterminate() else "")
         if text:
