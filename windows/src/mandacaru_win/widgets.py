@@ -15,17 +15,66 @@ from PySide6.QtWidgets import QProgressBar, QStyle, QStyledItemDelegate, QStyleO
 
 from mandacaru_win.progress import eta_text
 
-# Paleta alinhada à identidade do Mandacaru (mandacaru.svg):
-# - normal: verde do cacto (#2c6b2c -> #4ca647)
+# Paleta alinhada à identidade do Mandacaru (mandacaru.svg), como paradas de gradiente
+# espalhadas por igual da esquerda para a direita da barra inteira:
+# - normal: verde do cacto, do quase preto ao verde-claro
+#   (CSS: linear-gradient(90deg, #001000, #004D00, #3F8F3A, #70C06A, #E1FFDE))
 # - shred: terracota/vermelho (destruição definitiva)
 # - warning: dourado dos óculos (interrompido / atenção)
 # - error: vermelho escuro (falha)
-_TONES: dict[str, tuple[str, str]] = {
-    "normal": ("#2c6b2c", "#52b34c"),
+_TONES: dict[str, tuple[str, ...]] = {
+    "normal": ("#001000", "#004D00", "#3F8F3A", "#70C06A", "#E1FFDE"),
     "shred": ("#b71c1c", "#e65100"),
     "warning": ("#c49022", "#e8b948"),
     "error": ("#9a1b1b", "#d32f2f"),
 }
+
+TEXT_LIGHT = QColor("#ffffff")  # sobre o preenchimento escuro
+TEXT_DARK = QColor("#000000")  # sobre o preenchimento claro; preto garante >= 4,5:1 em qualquer fundo
+
+
+def _luminance(c: QColor) -> float:
+    """Luminância relativa (WCAG 2)."""
+    def ch(v: float) -> float:
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    return 0.2126 * ch(c.redF()) + 0.7152 * ch(c.greenF()) + 0.0722 * ch(c.blueF())
+
+
+def contrast(a: QColor, b: QColor) -> float:
+    la, lb = sorted((_luminance(a), _luminance(b)))
+    return (lb + 0.05) / (la + 0.05)
+
+
+def gradient_color(stops: tuple[str, ...], t: float) -> QColor:
+    """Cor do gradiente na posição t (0..1), interpolada como o QLinearGradient faz."""
+    if len(stops) == 1:
+        return QColor(stops[0])
+    t = min(max(t, 0.0), 1.0) * (len(stops) - 1)
+    i = min(int(t), len(stops) - 2)
+    f = t - i
+    a, b = QColor(stops[i]), QColor(stops[i + 1])
+    return QColor.fromRgbF(*(x + (y - x) * f for x, y in zip(a.getRgbF()[:3], b.getRgbF()[:3], strict=True)))
+
+
+def _dark_text_spans(stops: tuple[str, ...], samples: int = 200) -> list[tuple[float, float]]:
+    """Trechos (t0, t1) do gradiente onde o texto escuro contrasta mais que o branco."""
+    spans: list[tuple[float, float]] = []
+    start = None
+    for k in range(samples + 1):
+        t = k / samples
+        c = gradient_color(stops, t)
+        dark = contrast(TEXT_DARK, c) > contrast(TEXT_LIGHT, c)
+        if dark and start is None:
+            start = t
+        elif not dark and start is not None:
+            spans.append((start, t))
+            start = None
+    if start is not None:
+        spans.append((start, 1.0))
+    return spans
+
+
+_DARK_SPANS = {tone: _dark_text_spans(stops) for tone, stops in _TONES.items()}
 
 
 class MandacaruProgressBar(QProgressBar):
@@ -147,9 +196,14 @@ class MandacaruProgressBar(QProgressBar):
         clip.addRoundedRect(inner, inner.height() / 2.0, inner.height() / 2.0)
         painter.setClipPath(clip)
 
-        c1, c2 = _TONES.get(self._tone, _TONES["normal"])
+        stops = _TONES.get(self._tone, _TONES["normal"])
+        # O gradiente é ancorado na barra inteira: cheia, ela mostra todas as paradas;
+        # no meio do caminho, a ponta tem a cor daquela posição (nunca some no trilho).
+        grad = QLinearGradient(inner.topLeft(), inner.topRight())
+        for k, c in enumerate(stops):
+            grad.setColorAt(k / max(len(stops) - 1, 1), QColor(c))
         ratio = 0.0
-        filled = QRectF()  # onde o texto fica branco
+        filled = QRectF()  # onde o texto troca de cor conforme o preenchimento
 
         if self.is_indeterminate():
             seg_w = max(inner.width() * 0.28, 36.0)
@@ -157,10 +211,6 @@ class MandacaruProgressBar(QProgressBar):
             pos = 0.5 - 0.5 * math.cos(self._phase * math.pi)
             x0 = inner.left() + pos * (inner.width() - seg_w)
             seg = QRectF(x0, inner.top(), seg_w, inner.height())
-            grad = QLinearGradient(seg.topLeft(), seg.topRight())
-            grad.setColorAt(0.0, QColor(c1))
-            grad.setColorAt(0.5, QColor(c2))
-            grad.setColorAt(1.0, QColor(c1))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(grad)
             painter.drawRoundedRect(seg, inner.height() / 2.0, inner.height() / 2.0)
@@ -171,9 +221,6 @@ class MandacaruProgressBar(QProgressBar):
                 ratio = max(0.0, min(1.0, (self.value() - self.minimum()) / span))
                 fill_w = max(inner.width() * ratio, inner.height())
                 fill = QRectF(inner.left(), inner.top(), min(fill_w, inner.width()), inner.height())
-                grad = QLinearGradient(fill.topLeft(), fill.topRight())
-                grad.setColorAt(0.0, QColor(c1))
-                grad.setColorAt(1.0, QColor(c2))
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(grad)
                 painter.drawRoundedRect(fill, inner.height() / 2.0, inner.height() / 2.0)
@@ -192,14 +239,21 @@ class MandacaruProgressBar(QProgressBar):
             painter.setFont(font)
             text = QFontMetrics(font).elidedText(text, Qt.TextElideMode.ElideRight,
                                                  int(inner.width() - inner.height()))
-            # Dois tons: a frase atravessa a ponta do preenchimento, então cada parte
-            # ganha a cor que contrasta com o que está atrás dela.
+            # A frase atravessa trilho e preenchimento, e o preenchimento vai do quase
+            # preto ao verde-claro: cada trecho ganha a cor que mais contrasta com o fundo.
             painter.setPen(QColor("#e0e6e1") if dark else QColor("#243326"))
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
             if not filled.isEmpty():
                 painter.setClipRect(filled)
-                painter.setPen(QColor("#ffffff"))
+                painter.setPen(TEXT_LIGHT)
                 painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+                for t0, t1 in _DARK_SPANS.get(self._tone, ()):
+                    span = QRectF(inner.left() + t0 * inner.width(), rect.top(),
+                                  (t1 - t0) * inner.width(), rect.height()).intersected(filled)
+                    if not span.isEmpty():
+                        painter.setClipRect(span)
+                        painter.setPen(TEXT_DARK)
+                        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
                 painter.setClipping(False)
 
         painter.end()

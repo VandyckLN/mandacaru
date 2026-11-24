@@ -4,6 +4,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from mandacaru_win import progress as pg  # noqa: E402
+from mandacaru_win import widgets  # noqa: E402
 from mandacaru_win.app import MainWindow  # noqa: E402
 from mandacaru_win.scan import ScanSummary  # noqa: E402
 from mandacaru_win.shred import ShredSummary  # noqa: E402
@@ -135,6 +136,76 @@ def test_caption_is_painted_in_two_tones(app, window_bg):
         assert max(on_track) > 200  # letras claras sobre o trilho escuro
     else:
         assert min(on_track) < 80  # letras escuras sobre o trilho claro
+
+
+# ---------- gradiente ----------
+GRADIENTE = ("#001000", "#004D00", "#3F8F3A", "#70C06A", "#E1FFDE")
+
+
+def _close(c: QColor, hexa: str, tol: int = 14) -> bool:
+    ref = QColor(hexa)
+    return all(abs(a - b) <= tol for a, b in ((c.red(), ref.red()), (c.green(), ref.green()),
+                                              (c.blue(), ref.blue())))
+
+
+def _full_bar(value=100, caption=""):
+    bar = keep(MandacaruProgressBar())
+    bar.resize(500, 18)
+    bar.setRange(0, 100)
+    bar.setValue(value)
+    bar.set_caption(caption)
+    bar.setTextVisible(bool(caption))
+    bar.show()
+    return bar
+
+
+def test_normal_tone_uses_the_requested_gradient():
+    # linear-gradient(90deg, #001000, #004D00, #3F8F3A, #70C06A, #E1FFDE)
+    assert widgets._TONES["normal"] == GRADIENTE
+    assert widgets.gradient_color(GRADIENTE, 0.0).name() == "#001000"
+    assert widgets.gradient_color(GRADIENTE, 0.5).name() == "#3f8f3a"
+    assert widgets.gradient_color(GRADIENTE, 1.0).name() == "#e1ffde"
+
+
+def test_full_bar_shows_every_stop_left_to_right(app):
+    bar = _full_bar(100)
+    img = bar.grab().toImage()
+    y, w = img.height() // 2, img.width()
+    inner_left, inner_w = 2, w - 4  # borda de 1 px + recuo de 1 px
+    for t, hexa in ((0.06, None), (0.25, "#004D00"), (0.5, "#3F8F3A"), (0.75, "#70C06A"), (0.97, None)):
+        c = QColor(img.pixel(int(inner_left + t * inner_w), y))
+        assert _close(c, hexa or widgets.gradient_color(GRADIENTE, t).name()), (t, c.name())
+
+
+def test_gradient_is_anchored_to_the_whole_bar(app):
+    # Pela metade, a ponta tem a cor do meio (#3F8F3A), e não o verde-claro do fim:
+    # assim ela nunca some no trilho claro.
+    img = _full_bar(50).grab().toImage()
+    y, w = img.height() // 2, img.width()
+    head = QColor(img.pixel(int(2 + 0.47 * (w - 4)), y))
+    assert _close(head, widgets.gradient_color(GRADIENTE, 0.47).name())
+    assert head.lightness() < 120
+
+
+def test_text_is_white_on_dark_green_and_black_on_light_green(app):
+    img = _full_bar(100, "Mandacaru " * 12).grab().toImage()
+    w = img.width()
+    dark_part = _lightness_in(img, 10, int(w * 0.40))
+    light_part = _lightness_in(img, int(w * 0.60), w - 10)
+    assert max(dark_part) > 230  # branco sobre #001000..#3F8F3A
+    assert min(light_part) < 30  # preto sobre #70C06A..#E1FFDE
+    assert max(light_part) < 250  # e nada de branco ali
+
+
+@pytest.mark.parametrize("tone", sorted(widgets._TONES))
+def test_text_contrast_is_aa_along_every_gradient(tone):
+    stops = widgets._TONES[tone]
+    spans = widgets._DARK_SPANS[tone]
+    for k in range(201):
+        t = k / 200
+        bg = widgets.gradient_color(stops, t)
+        fg = widgets.TEXT_DARK if any(a <= t <= b for a, b in spans) else widgets.TEXT_LIGHT
+        assert widgets.contrast(fg, bg) >= 4.5, (tone, t, bg.name())
 
 
 def test_long_caption_is_elided_not_overflowing(app):
