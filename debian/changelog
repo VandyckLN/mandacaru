@@ -1,3 +1,10 @@
+mandacaru (0.8.2) unstable; urgency=medium
+
+  * App Windows: barras de progresso com a frase completa (arquivos, porcentagem
+    e tempo restante), novo gradiente verde e texto com contraste AA.
+
+ -- Vandyck Diniz <noreply@users.noreply.github.com>  Tue, 24 Nov 2026 08:10:00 -0300
+
 mandacaru (0.8.1) unstable; urgency=medium
 
   * App Windows: barras de progresso personalizadas (MandacaruProgressBar),
