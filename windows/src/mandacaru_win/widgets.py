@@ -6,31 +6,92 @@ para não impactar a velocidade de varredura nem o consumo de CPU.
 from __future__ import annotations
 
 import math
+import time
+from typing import Callable
 
 from PySide6.QtCore import QRectF, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPalette, QPen
+from PySide6.QtGui import QColor, QFontMetrics, QLinearGradient, QPainter, QPainterPath, QPalette, QPen
 from PySide6.QtWidgets import QProgressBar, QStyle, QStyledItemDelegate, QStyleOptionViewItem
 
-# Paleta alinhada à identidade do Mandacaru (mandacaru.svg):
-# - normal: verde do cacto (#2c6b2c -> #4ca647)
+from mandacaru_win.progress import eta_text
+
+# Paleta alinhada à identidade do Mandacaru (mandacaru.svg), como paradas de gradiente
+# espalhadas por igual da esquerda para a direita da barra inteira:
+# - normal: verde do cacto, do quase preto ao verde-claro
+#   (CSS: linear-gradient(90deg, #001000, #004D00, #3F8F3A, #70C06A, #E1FFDE))
 # - shred: terracota/vermelho (destruição definitiva)
 # - warning: dourado dos óculos (interrompido / atenção)
 # - error: vermelho escuro (falha)
-_TONES: dict[str, tuple[str, str]] = {
-    "normal": ("#2c6b2c", "#52b34c"),
+_TONES: dict[str, tuple[str, ...]] = {
+    "normal": ("#001000", "#004D00", "#3F8F3A", "#70C06A", "#E1FFDE"),
     "shred": ("#b71c1c", "#e65100"),
     "warning": ("#c49022", "#e8b948"),
     "error": ("#9a1b1b", "#d32f2f"),
 }
 
+TEXT_LIGHT = QColor("#ffffff")  # sobre o preenchimento escuro
+TEXT_DARK = QColor("#000000")  # sobre o preenchimento claro; preto garante >= 4,5:1 em qualquer fundo
+
+
+def _luminance(c: QColor) -> float:
+    """Luminância relativa (WCAG 2)."""
+    def ch(v: float) -> float:
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    return 0.2126 * ch(c.redF()) + 0.7152 * ch(c.greenF()) + 0.0722 * ch(c.blueF())
+
+
+def contrast(a: QColor, b: QColor) -> float:
+    la, lb = sorted((_luminance(a), _luminance(b)))
+    return (lb + 0.05) / (la + 0.05)
+
+
+def gradient_color(stops: tuple[str, ...], t: float) -> QColor:
+    """Cor do gradiente na posição t (0..1), interpolada como o QLinearGradient faz."""
+    if len(stops) == 1:
+        return QColor(stops[0])
+    t = min(max(t, 0.0), 1.0) * (len(stops) - 1)
+    i = min(int(t), len(stops) - 2)
+    f = t - i
+    a, b = QColor(stops[i]), QColor(stops[i + 1])
+    return QColor.fromRgbF(*(x + (y - x) * f for x, y in zip(a.getRgbF()[:3], b.getRgbF()[:3], strict=True)))
+
+
+def _dark_text_spans(stops: tuple[str, ...], samples: int = 200) -> list[tuple[float, float]]:
+    """Trechos (t0, t1) do gradiente onde o texto escuro contrasta mais que o branco."""
+    spans: list[tuple[float, float]] = []
+    start = None
+    for k in range(samples + 1):
+        t = k / samples
+        c = gradient_color(stops, t)
+        dark = contrast(TEXT_DARK, c) > contrast(TEXT_LIGHT, c)
+        if dark and start is None:
+            start = t
+        elif not dark and start is not None:
+            spans.append((start, t))
+            start = None
+    if start is not None:
+        spans.append((start, 1.0))
+    return spans
+
+
+_DARK_SPANS = {tone: _dark_text_spans(stops) for tone, stops in _TONES.items()}
+
 
 class MandacaruProgressBar(QProgressBar):
-    """Barra de progresso personalizada em pílula com animação leve no modo indeterminado."""
+    """Barra de progresso personalizada em pílula com animação leve no modo indeterminado.
 
-    def __init__(self, parent=None, *, height: int = 18, show_text: bool = True):
+    Mostra uma frase inteira (set_caption) em vez de só "42%", em dois tons: escura sobre o
+    trilho e branca sobre o preenchimento. Sem frase, volta ao "42%" de antes.
+    """
+
+    def __init__(self, parent=None, *, height: int = 18, show_text: bool = True,
+                 clock: Callable[[], float] = time.monotonic):
         super().__init__(parent)
         self._tone = "normal"
         self._show_text = show_text
+        self._caption = ""
+        self._clock = clock
+        self._started: float | None = None
         self._phase = 0.0
         self._timer = QTimer(self)
         self._timer.setInterval(33)  # ~30 FPS apenas enquanto indeterminada e visível
@@ -48,6 +109,30 @@ class MandacaruProgressBar(QProgressBar):
         if tone != self._tone:
             self._tone = tone
             self.update()
+
+    def set_caption(self, text: str) -> None:
+        """Frase dentro da barra; vazio volta ao "42%" padrão."""
+        if text != self._caption:
+            self._caption = text
+            self.update()
+
+    def caption(self) -> str:
+        return self._caption
+
+    def text(self) -> str:
+        # É o que leitores de tela anunciam. Não usamos setFormat(): ele interpreta %p/%v/%m,
+        # e a frase pode trazer nomes de arquivos e programas.
+        return self._caption or super().text()
+
+    def start_clock(self) -> None:
+        """Marca o início para estimar o tempo restante (eta)."""
+        self._started = self._clock()
+
+    def eta(self) -> str:
+        if self._started is None:
+            return ""
+        return eta_text(self._clock() - self._started, self.value() - self.minimum(),
+                        self.maximum() - self.minimum())
 
     def is_indeterminate(self) -> bool:
         return self.minimum() == 0 and self.maximum() == 0
@@ -111,8 +196,14 @@ class MandacaruProgressBar(QProgressBar):
         clip.addRoundedRect(inner, inner.height() / 2.0, inner.height() / 2.0)
         painter.setClipPath(clip)
 
-        c1, c2 = _TONES.get(self._tone, _TONES["normal"])
+        stops = _TONES.get(self._tone, _TONES["normal"])
+        # O gradiente é ancorado na barra inteira: cheia, ela mostra todas as paradas;
+        # no meio do caminho, a ponta tem a cor daquela posição (nunca some no trilho).
+        grad = QLinearGradient(inner.topLeft(), inner.topRight())
+        for k, c in enumerate(stops):
+            grad.setColorAt(k / max(len(stops) - 1, 1), QColor(c))
         ratio = 0.0
+        filled = QRectF()  # onde o texto troca de cor conforme o preenchimento
 
         if self.is_indeterminate():
             seg_w = max(inner.width() * 0.28, 36.0)
@@ -120,41 +211,50 @@ class MandacaruProgressBar(QProgressBar):
             pos = 0.5 - 0.5 * math.cos(self._phase * math.pi)
             x0 = inner.left() + pos * (inner.width() - seg_w)
             seg = QRectF(x0, inner.top(), seg_w, inner.height())
-            grad = QLinearGradient(seg.topLeft(), seg.topRight())
-            grad.setColorAt(0.0, QColor(c1))
-            grad.setColorAt(0.5, QColor(c2))
-            grad.setColorAt(1.0, QColor(c1))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(grad)
             painter.drawRoundedRect(seg, inner.height() / 2.0, inner.height() / 2.0)
+            filled = seg
         else:
             span = self.maximum() - self.minimum()
             if span > 0 and self.value() > self.minimum():
                 ratio = max(0.0, min(1.0, (self.value() - self.minimum()) / span))
                 fill_w = max(inner.width() * ratio, inner.height())
                 fill = QRectF(inner.left(), inner.top(), min(fill_w, inner.width()), inner.height())
-                grad = QLinearGradient(fill.topLeft(), fill.topRight())
-                grad.setColorAt(0.0, QColor(c1))
-                grad.setColorAt(1.0, QColor(c2))
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(grad)
                 painter.drawRoundedRect(fill, inner.height() / 2.0, inner.height() / 2.0)
+                filled = fill
 
         painter.setClipping(False)
 
-        if self._show_text and not self.is_indeterminate():
+        text = ""
+        if self._show_text and self.isTextVisible():  # respeita setTextVisible(False)
             pct = int(round(ratio * 100))
-            if pct > 0:
-                font = painter.font()
-                font.setPointSize(max(font.pointSize() - 1, 8))
-                font.setBold(True)
-                painter.setFont(font)
-                # Texto claro quando a barra já passou do centro; cor do tema antes disso
-                text_color = QColor("#ffffff") if ratio >= 0.52 else (
-                    QColor("#e0e6e1") if dark else QColor("#243326")
-                )
-                painter.setPen(text_color)
-                painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, f"{pct}%")
+            text = self._caption or (f"{pct}%" if pct > 0 and not self.is_indeterminate() else "")
+        if text:
+            font = painter.font()
+            font.setPointSize(max(font.pointSize() - 1, 8))
+            font.setBold(True)
+            painter.setFont(font)
+            text = QFontMetrics(font).elidedText(text, Qt.TextElideMode.ElideRight,
+                                                 int(inner.width() - inner.height()))
+            # A frase atravessa trilho e preenchimento, e o preenchimento vai do quase
+            # preto ao verde-claro: cada trecho ganha a cor que mais contrasta com o fundo.
+            painter.setPen(QColor("#e0e6e1") if dark else QColor("#243326"))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+            if not filled.isEmpty():
+                painter.setClipRect(filled)
+                painter.setPen(TEXT_LIGHT)
+                painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+                for t0, t1 in _DARK_SPANS.get(self._tone, ()):
+                    span = QRectF(inner.left() + t0 * inner.width(), rect.top(),
+                                  (t1 - t0) * inner.width(), rect.height()).intersected(filled)
+                    if not span.isEmpty():
+                        painter.setClipRect(span)
+                        painter.setPen(TEXT_DARK)
+                        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+                painter.setClipping(False)
 
         painter.end()
 

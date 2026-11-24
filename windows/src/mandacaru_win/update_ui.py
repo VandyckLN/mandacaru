@@ -10,6 +10,7 @@ from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton
 
 from mandacaru_win import __version__, updater
+from mandacaru_win.progress import download_text
 from mandacaru_win.theme import style_button
 from mandacaru_win.widgets import MandacaruProgressBar
 
@@ -83,8 +84,8 @@ class UpdateBar(QFrame):
         row = QHBoxLayout(self)
         row.setContentsMargins(10, 6, 10, 6)
         self.label = QLabel("")
-        self.progress = MandacaruProgressBar(height=10, show_text=False)
-        self.progress.setFixedWidth(140)
+        self.progress = MandacaruProgressBar(height=16)  # "41% · 31 de 74 MB"
+        self.progress.setFixedWidth(200)
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
         self.progress.setVisible(False)
@@ -130,6 +131,7 @@ class UpdateBar(QFrame):
         self.label.setText(f"Mandacaru {update.version} disponível (você tem {update.current}).")
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
+        self.progress.set_caption("")
         self.progress.setVisible(False)
         self._set_busy(False)
         self.setVisible(True)
@@ -151,6 +153,7 @@ class UpdateBar(QFrame):
         self.label.setText(f"Baixando Mandacaru {self.pending.version}…")
         self.progress.set_tone("normal")
         self.progress.setRange(0, 0)
+        self.progress.set_caption("")
         self.progress.setVisible(True)
         t = UpdateDownloadThread(self.pending, self._data, self.http)
         t.progress.connect(self._on_progress)
@@ -171,8 +174,7 @@ class UpdateBar(QFrame):
         if total > 0:
             self.progress.setRange(0, total)
             self.progress.setValue(min(got, total))
-        pct = f" {got * 100 // total}%" if total else f" {got // (1024 * 1024)} MB"
-        self.label.setText(f"Baixando Mandacaru {self.pending.version}…{pct}")
+        self.progress.set_caption(download_text(got, total))
 
     def _on_failed(self, msg: str) -> None:
         self._release_download()

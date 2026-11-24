@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.2
+
+As barras de progresso do app Windows passam a dizer o que está acontecendo, não só a porcentagem, com o gradiente verde do Mandacaru.
+
+- **Frase completa nas barras**: *Varredura* mostra "Verificando 1.234 de 2.900 arquivos · 42% · cerca de 1 min" e, no fim, "Concluída", "Interrompida" ou "A varredura falhou"; a destruição segura mostra "Destruindo 3 de 10 arquivos · 30%"; *Atualizações* mostra "3 de 20 programas · 15%"; a faixa de autoatualização ganhou barra com "41% · 31 de 74 MB".
+- **Novo gradiente**: `#001000 → #004D00 → #3F8F3A → #70C06A → #E1FFDE`, ancorado na largura da barra (cheia, mostra todas as cores; no meio do caminho, a ponta nunca some no trilho).
+- **Texto legível em qualquer trecho**: branco sobre o verde escuro, preto sobre o verde-claro e a cor do tema sobre o trilho, com contraste mínimo de 4,5:1 (WCAG AA) em todos os tons. Leitores de tela leem a frase inteira.
+- A barra passa a respeitar `setTextVisible(False)`. Sem timers novos: a varredura continua limitada a ~20 atualizações por segundo.
+
 ## 0.8.1
 
 Melhorias visuais no aplicativo Windows, preservando a velocidade da varredura e com adaptação automática ao tema claro e escuro do Windows 11.
