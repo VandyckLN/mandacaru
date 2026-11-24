@@ -6,10 +6,14 @@ para não impactar a velocidade de varredura nem o consumo de CPU.
 from __future__ import annotations
 
 import math
+import time
+from typing import Callable
 
 from PySide6.QtCore import QRectF, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPalette, QPen
+from PySide6.QtGui import QColor, QFontMetrics, QLinearGradient, QPainter, QPainterPath, QPalette, QPen
 from PySide6.QtWidgets import QProgressBar, QStyle, QStyledItemDelegate, QStyleOptionViewItem
+
+from mandacaru_win.progress import eta_text
 
 # Paleta alinhada à identidade do Mandacaru (mandacaru.svg):
 # - normal: verde do cacto (#2c6b2c -> #4ca647)
@@ -25,12 +29,20 @@ _TONES: dict[str, tuple[str, str]] = {
 
 
 class MandacaruProgressBar(QProgressBar):
-    """Barra de progresso personalizada em pílula com animação leve no modo indeterminado."""
+    """Barra de progresso personalizada em pílula com animação leve no modo indeterminado.
 
-    def __init__(self, parent=None, *, height: int = 18, show_text: bool = True):
+    Mostra uma frase inteira (set_caption) em vez de só "42%", em dois tons: escura sobre o
+    trilho e branca sobre o preenchimento. Sem frase, volta ao "42%" de antes.
+    """
+
+    def __init__(self, parent=None, *, height: int = 18, show_text: bool = True,
+                 clock: Callable[[], float] = time.monotonic):
         super().__init__(parent)
         self._tone = "normal"
         self._show_text = show_text
+        self._caption = ""
+        self._clock = clock
+        self._started: float | None = None
         self._phase = 0.0
         self._timer = QTimer(self)
         self._timer.setInterval(33)  # ~30 FPS apenas enquanto indeterminada e visível
@@ -48,6 +60,30 @@ class MandacaruProgressBar(QProgressBar):
         if tone != self._tone:
             self._tone = tone
             self.update()
+
+    def set_caption(self, text: str) -> None:
+        """Frase dentro da barra; vazio volta ao "42%" padrão."""
+        if text != self._caption:
+            self._caption = text
+            self.update()
+
+    def caption(self) -> str:
+        return self._caption
+
+    def text(self) -> str:
+        # É o que leitores de tela anunciam. Não usamos setFormat(): ele interpreta %p/%v/%m,
+        # e a frase pode trazer nomes de arquivos e programas.
+        return self._caption or super().text()
+
+    def start_clock(self) -> None:
+        """Marca o início para estimar o tempo restante (eta)."""
+        self._started = self._clock()
+
+    def eta(self) -> str:
+        if self._started is None:
+            return ""
+        return eta_text(self._clock() - self._started, self.value() - self.minimum(),
+                        self.maximum() - self.minimum())
 
     def is_indeterminate(self) -> bool:
         return self.minimum() == 0 and self.maximum() == 0
@@ -113,6 +149,7 @@ class MandacaruProgressBar(QProgressBar):
 
         c1, c2 = _TONES.get(self._tone, _TONES["normal"])
         ratio = 0.0
+        filled = QRectF()  # onde o texto fica branco
 
         if self.is_indeterminate():
             seg_w = max(inner.width() * 0.28, 36.0)
@@ -127,6 +164,7 @@ class MandacaruProgressBar(QProgressBar):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(grad)
             painter.drawRoundedRect(seg, inner.height() / 2.0, inner.height() / 2.0)
+            filled = seg
         else:
             span = self.maximum() - self.minimum()
             if span > 0 and self.value() > self.minimum():
@@ -139,22 +177,30 @@ class MandacaruProgressBar(QProgressBar):
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(grad)
                 painter.drawRoundedRect(fill, inner.height() / 2.0, inner.height() / 2.0)
+                filled = fill
 
         painter.setClipping(False)
 
-        if self._show_text and not self.is_indeterminate():
+        text = ""
+        if self._show_text:
             pct = int(round(ratio * 100))
-            if pct > 0:
-                font = painter.font()
-                font.setPointSize(max(font.pointSize() - 1, 8))
-                font.setBold(True)
-                painter.setFont(font)
-                # Texto claro quando a barra já passou do centro; cor do tema antes disso
-                text_color = QColor("#ffffff") if ratio >= 0.52 else (
-                    QColor("#e0e6e1") if dark else QColor("#243326")
-                )
-                painter.setPen(text_color)
-                painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, f"{pct}%")
+            text = self._caption or (f"{pct}%" if pct > 0 and not self.is_indeterminate() else "")
+        if text:
+            font = painter.font()
+            font.setPointSize(max(font.pointSize() - 1, 8))
+            font.setBold(True)
+            painter.setFont(font)
+            text = QFontMetrics(font).elidedText(text, Qt.TextElideMode.ElideRight,
+                                                 int(inner.width() - inner.height()))
+            # Dois tons: a frase atravessa a ponta do preenchimento, então cada parte
+            # ganha a cor que contrasta com o que está atrás dela.
+            painter.setPen(QColor("#e0e6e1") if dark else QColor("#243326"))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+            if not filled.isEmpty():
+                painter.setClipRect(filled)
+                painter.setPen(QColor("#ffffff"))
+                painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+                painter.setClipping(False)
 
         painter.end()
 

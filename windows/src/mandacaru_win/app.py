@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from mandacaru.analysis import AnalysisResult
 from mandacaru.events import Severity
+from mandacaru_win.progress import count_text, scan_done_text, scan_text, shred_text
 from mandacaru_win.quarantine import Quarantine, QuarantineError
 from mandacaru_win.scan import Finding, ScanSummary, make_scanner
 from mandacaru_win.shred import ShredSummary
@@ -471,6 +472,8 @@ class MainWindow(QMainWindow):
         self._files = 0
         self.progress.set_tone("normal")
         self.progress.setRange(0, 0)  # indeterminado até saber o total
+        self.progress.set_caption("")
+        self.progress.start_clock()
         self.lbl_count.setText("0 arquivos · 0 achados")
         self.statusBar().showMessage("Varrendo…")
         self._set_scanning(True)
@@ -500,6 +503,7 @@ class MainWindow(QMainWindow):
         self._files = i
         self.progress.setRange(0, max(total, 1))
         self.progress.setValue(i)
+        self.progress.set_caption(scan_text(i, total, self.progress.eta()))
         fm = QFontMetrics(self.lbl_file.font())
         self.lbl_file.setText(fm.elidedText(str(path), Qt.TextElideMode.ElideMiddle,
                                             max(self.lbl_file.width(), 300)))
@@ -563,7 +567,9 @@ class MainWindow(QMainWindow):
             self.notify(f"Não foi possível gravar o histórico: {e}")
         self._set_scanning(False)
         self.refresh_tabs()
+        total = self.progress.maximum()
         if summary.completed:
+            total = summary.files
             self.progress.set_tone("normal")
             self.progress.setRange(0, max(summary.files, 1))
             self.progress.setValue(summary.files)
@@ -572,6 +578,7 @@ class MainWindow(QMainWindow):
             if self.progress.maximum() == 0:  # parou ainda na listagem
                 self.progress.setRange(0, 1)
                 self.progress.setValue(0)
+        self.progress.set_caption(scan_done_text(summary.files, total, summary.completed))
         self.statusBar().showMessage("Concluída" if summary.completed else "Interrompida")
         self.scan_finished.emit(summary)
 
@@ -585,6 +592,7 @@ class MainWindow(QMainWindow):
         if self.progress.maximum() == 0:
             self.progress.setRange(0, 1)
             self.progress.setValue(0)
+        self.progress.set_caption("A varredura falhou")
         self.statusBar().showMessage("Falhou")
         self.notify(f"A varredura falhou: {msg}")
         self.scan_finished.emit(ScanSummary(0.0, [], self._files, len(self.findings),
@@ -627,6 +635,7 @@ class MainWindow(QMainWindow):
             return
         self.progress.set_tone("shred")
         self.progress.setRange(0, 0)
+        self.progress.set_caption("")
         self.lbl_file.setText(f"Destruindo definitivamente: {p}")
         self.statusBar().showMessage("Destruindo arquivos…")
         self._set_scanning(True)
@@ -640,6 +649,7 @@ class MainWindow(QMainWindow):
     def _on_shred_progress(self, path: Path, i: int, total: int) -> None:
         self.progress.setRange(0, max(total, 1))
         self.progress.setValue(i)
+        self.progress.set_caption(shred_text(i, total))
         self.lbl_file.setText(f"Destruindo ({i}/{total}): {path.name}")
 
     def _finish_shred_thread(self) -> None:
@@ -654,6 +664,7 @@ class MainWindow(QMainWindow):
         self.progress.set_tone("shred" if summary.completed and not summary.errors else "warning")
         self.progress.setRange(0, 1)
         self.progress.setValue(1 if summary.completed else 0)
+        self.progress.set_caption("Destruição concluída" if summary.completed else "Destruição interrompida")
         msg = (f"Destruição concluída: {summary.files_shredded} arquivo(s) sobrescrito(s) e apagado(s), "
                f"{summary.dirs_removed} pasta(s) removida(s).")
         if not summary.completed:
@@ -672,6 +683,7 @@ class MainWindow(QMainWindow):
         self.progress.set_tone("error")
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
+        self.progress.set_caption("A destruição falhou")
         self.statusBar().showMessage("Falha na destruição")
         self.notify(f"Não foi possível destruir: {msg}")
         self.shred_finished.emit(ShredSummary("", 0, 0, [msg], False))
@@ -972,6 +984,7 @@ class MainWindow(QMainWindow):
         self.lbl_wu.setVisible(False)
         self.upd_progress.set_tone("normal")
         self.upd_progress.setRange(0, 0)
+        self.upd_progress.set_caption("")
         self.lbl_upd.setText("Verificando…")
         self._upd_items = []
         self._reset_table(self.tbl_updates, 0)
@@ -994,6 +1007,7 @@ class MainWindow(QMainWindow):
         if n > 0:
             self.upd_progress.setRange(0, n)
             self.upd_progress.setValue(i)
+            self.upd_progress.set_caption(count_text(i, n, "programa" if n == 1 else "programas"))
 
     def _finish_upd_thread(self) -> None:
         t, self._upd_thread = self._upd_thread, None
@@ -1002,6 +1016,7 @@ class MainWindow(QMainWindow):
             t.deleteLater()
         self.upd_progress.setRange(0, 1)
         self.upd_progress.setValue(1)
+        self.upd_progress.set_caption("Verificação concluída")
 
     def _on_upd_done(self, result: CheckResult) -> None:
         self._finish_upd_thread()
@@ -1033,6 +1048,7 @@ class MainWindow(QMainWindow):
         self._finish_upd_thread()
         self.upd_progress.set_tone("error")
         self.upd_progress.setValue(0)
+        self.upd_progress.set_caption("A verificação falhou")
         if isinstance(exc, WingetUnavailable):
             self.lbl_upd.setText("Para listar e atualizar programas, o Mandacaru usa o winget, que vem com o "
                                  "\"Instalador de Aplicativo\" da Microsoft. Ele não foi encontrado neste "
@@ -1093,6 +1109,7 @@ class MainWindow(QMainWindow):
         self.upd_progress.set_tone("normal")
         self.upd_progress.setRange(0, len(rows))
         self.upd_progress.setValue(0)
+        self._set_apply_caption()
         t.start()
 
     def _row_of(self, pid: str) -> int:
@@ -1117,6 +1134,12 @@ class MainWindow(QMainWindow):
             if res.success:
                 self.tbl_updates.item(r, 0).setCheckState(Qt.CheckState.Unchecked)
         self.upd_progress.setValue(self.upd_progress.value() + 1)
+        self._set_apply_caption()
+
+    def _set_apply_caption(self) -> None:
+        n = self.upd_progress.maximum()
+        self.upd_progress.set_caption(
+            count_text(self.upd_progress.value(), n, "programa atualizado" if n == 1 else "programas atualizados"))
 
     def _finish_apply_thread(self) -> None:
         t, self._apply_thread = self._apply_thread, None
@@ -1148,5 +1171,7 @@ class MainWindow(QMainWindow):
 
     def _on_apply_failed(self, exc: object) -> None:
         self._finish_apply_thread()
+        self.upd_progress.set_tone("error")
+        self.upd_progress.set_caption("A atualização falhou")
         self.lbl_upd.setText(f"A atualização falhou: {exc}")
         self._set_updating(False)
