@@ -105,6 +105,12 @@ def test_caption_is_literal_even_with_format_placeholders(app):
     assert bar.text() == "Consultando a NVD: app %p %v %m 100%"
 
 
+def _lightness_in(img, x0, x1):
+    """Lightness de todos os pixels da faixa central (onde fica o texto) entre x0 e x1."""
+    h = img.height()
+    return [QColor(img.pixel(x, y)).lightness() for x in range(x0, x1) for y in range(h // 4, h * 3 // 4)]
+
+
 @pytest.mark.parametrize("window_bg", ["#f5f5f5", "#1e1e1e"])
 def test_caption_is_painted_in_two_tones(app, window_bg):
     bar = keep(MandacaruProgressBar())
@@ -115,15 +121,20 @@ def test_caption_is_painted_in_two_tones(app, window_bg):
     bar.setRange(0, 100)
     bar.setValue(50)
     bar.show()
+    w = bar.width()
     plain = bar.grab().toImage()
-    bar.set_caption("█" * 80)  # bloco cheio: cobre a faixa do texto dos dois lados da ponta
+    # sem frase, o "50%" fica no meio: as pontas só têm verde e trilho
+    assert max(_lightness_in(plain, 10, int(w * 0.4))) < 200
+    # frase comum (glifos de qualquer fonte) que ocupa a barra inteira dos dois lados da ponta
+    bar.set_caption("Mandacaru " * 12)
     img = bar.grab().toImage()
-    assert img != plain
-    y = img.height() // 2
-    left, right = QColor(img.pixel(img.width() // 4, y)), QColor(img.pixel(img.width() * 3 // 4, y))
-    assert left.lightness() > 230  # branco sobre o verde
-    dark = window_bg == "#1e1e1e"
-    assert (right.lightness() > 200) if dark else (right.lightness() < 80)  # cor do tema sobre o trilho
+    on_green = _lightness_in(img, 10, int(w * 0.45))
+    on_track = _lightness_in(img, int(w * 0.55), w - 10)
+    assert max(on_green) > 230  # letras brancas sobre o verde
+    if window_bg == "#1e1e1e":
+        assert max(on_track) > 200  # letras claras sobre o trilho escuro
+    else:
+        assert min(on_track) < 80  # letras escuras sobre o trilho claro
 
 
 def test_long_caption_is_elided_not_overflowing(app):
