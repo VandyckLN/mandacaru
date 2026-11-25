@@ -1,6 +1,6 @@
 # Verificar projeto: ataques a desenvolvedores e a agentes de IA
 
-Data: 2026-11-25 · Estado: aguardando aprovação do dono
+Data: 2026-11-25 · Estado: aprovado (2026-11-25)
 
 ## Por quê
 
