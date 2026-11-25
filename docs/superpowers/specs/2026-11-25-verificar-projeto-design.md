@@ -1,6 +1,6 @@
 # Verificar projeto: ataques a desenvolvedores e a agentes de IA
 
-Data: 2026-11-25 · Estado: rascunho
+Data: 2026-11-25 · Estado: aguardando aprovação do dono
 
 ## Por quê
 
@@ -156,7 +156,7 @@ O rebaixamento em `tests/`, `docs/` e `.yar` existe para que projetos de seguran
 
 ### App Windows
 
-- **Arrastar uma pasta** que tem marca de projeto (`.git`, `package.json`, `pyproject.toml`, `requirements*.txt`, um dos lockfiles, `.vscode` ou um arquivo de agente): roda a varredura antivírus de sempre **e** a verificação de projeto, e os achados de projeto aparecem na mesma lista com o tipo "Projeto". Ver a pergunta em aberto abaixo.
+- **Arrastar uma pasta** que tem marca de projeto (`.git`, `package.json`, `pyproject.toml`, `requirements*.txt`, um dos lockfiles, `.vscode` ou um arquivo de agente): roda a varredura antivírus de sempre **e** a verificação de projeto, e os achados de projeto aparecem na mesma lista com o tipo "Projeto". Pasta sem marca de projeto: só a varredura antivírus, como hoje.
 - **Botão "Verificar projeto…"** na aba Varredura, para escolher uma pasta.
 - Ações por achado de projeto:
   - **Abrir local:** abre a pasta com o arquivo selecionado.
@@ -170,6 +170,7 @@ O rebaixamento em `tests/`, `docs/` e `.yar` existe para que projetos de seguran
 - Uso **antes de abrir o projeto**, pela linha de comando (`mandacaru dev`) e arrastando a pasta no app (2026-11-25).
 - Bibliotecas **sempre** verificadas. Aparece só falha conhecida ou pacote malicioso, nunca "só desatualizada" (2026-11-25).
 - Abordagem A, com verificador próprio (2026-11-25).
+- Arrastar uma pasta com marca de projeto roda **as duas** verificações, com os achados na mesma lista (2026-11-25).
 
 ## Decisões minhas (o dono pode corrigir)
 
@@ -187,7 +188,3 @@ O rebaixamento em `tests/`, `docs/` e `.yar` existe para que projetos de seguran
   - um "projeto comum" (React e Django mínimos) que deve sair sem MEDIUM ou mais;
   - o próprio repositório do Mandacaru, que **não** pode dar HIGH;
   - o OSV com `http` falso, como nos testes do `vuln`.
-
-## Em aberto (do dono)
-
-- Arrastar uma pasta de projeto roda as duas verificações juntas, na mesma lista, ou só a de projeto? (ver mensagem)
