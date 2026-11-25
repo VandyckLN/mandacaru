@@ -6,6 +6,7 @@ import pytest
 from mandacaru.events import Severity
 from mandacaru.projeto.achado import Achado
 from mandacaru.projeto.percurso import (
+    PULAR,
     excluir_por_globs,
     ler_texto,
     linha_de,
@@ -73,3 +74,16 @@ def test_excluir_por_globs():
     assert excluir_por_globs(["*/segredo*"])(Path("/p/segredo/x.md")) is True
     assert excluir_por_globs(["*/segredo*"])(Path("/p/outro/x.md")) is False
     assert excluir_por_globs([])(Path("/p/x.md")) is False
+
+
+def test_pular_exato():
+    assert PULAR == frozenset({"node_modules", ".venv", "venv", "__pycache__", "dist", "build"})
+
+
+def test_fifo_nao_trava(projeto):
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("mkfifo indisponivel")
+    raiz = projeto({"ok.md": "x"})
+    os.mkfifo(raiz / "AGENTS.md")
+    assert listar(raiz) == (["ok.md"], False)
+    assert ler_texto(raiz / "AGENTS.md") is None

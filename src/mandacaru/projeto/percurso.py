@@ -8,8 +8,7 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 
 PULAR: frozenset[str] = frozenset({
-    "node_modules", ".venv", "venv", "__pycache__", "dist", "build", "target",
-    ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".next", "site-packages",
+    "node_modules", ".venv", "venv", "__pycache__", "dist", "build",
 })
 MAX_BYTES = 2 * 1024 * 1024
 MAX_ARQUIVOS = 20_000
@@ -38,7 +37,10 @@ def listar(
         dirnames[:] = sorted(d for d in dirnames if d not in ignorar and not excluir(atual / d))
         for nome in sorted(filenames):
             alvo = atual / nome
-            if alvo.is_symlink() or excluir(alvo):
+            try:
+                if not stat.S_ISREG(os.lstat(alvo).st_mode) or excluir(alvo):
+                    continue
+            except OSError:
                 continue
             if len(rels) >= limite:
                 cortado = True
@@ -52,7 +54,7 @@ def listar(
 def ler_texto(caminho: Path) -> str | None:
     """Le ate MAX_BYTES sem seguir link; None se link, nao-arquivo ou binario (NUL)."""
     try:
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
         if not hasattr(os, "O_NOFOLLOW") and Path(caminho).is_symlink():
             return None
         fd = os.open(caminho, flags)
