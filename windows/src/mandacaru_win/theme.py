@@ -27,6 +27,9 @@ def build_stylesheet(dark: bool) -> str:
         border = "#38413b"
         hdr_bg, hdr_text = "#252b27", "#c7d1ca"
         upd_bg, upd_border, upd_text = "#1c3322", "#3b7a44", "#c8e6c9"
+        card_bg, muted_text = "#242a26", "#9fb0a3"
+        input_bg, input_text = "#1b201d", "#edf2ee"
+        chip_bg, chip_hover = "#2b322d", "#353f38"
     else:
         neutral_bg, neutral_border, neutral_text, neutral_hover = "#eef3ef", "#ccd6ce", "#1f2a22", "#e1eae3"
         dis_bg, dis_border, dis_text = "#e7ebe8", "#d5dcd7", "#949f97"
@@ -34,6 +37,9 @@ def build_stylesheet(dark: bool) -> str:
         border = "#d0dad2"
         hdr_bg, hdr_text = "#f3f6f4", "#334236"
         upd_bg, upd_border, upd_text = "#e8f5e9", "#81c784", "#1b5e20"
+        card_bg, muted_text = "#f7faf7", "#536357"
+        input_bg, input_text = "#ffffff", "#1b261d"
+        chip_bg, chip_hover = "#ebf0ec", "#dde7df"
 
     return f"""
 QPushButton {{
@@ -139,5 +145,73 @@ QTreeWidget::item, QTableWidget::item {{
 #faixaAtualizacao QLabel {{
     color: {upd_text};
     font-weight: 600;
+}}
+
+QFrame#settingsCard {{
+    background: {card_bg};
+    border: 1px solid {border};
+    border-radius: 10px;
+}}
+QLabel#cardTitle {{
+    font-size: 14px;
+    font-weight: 700;
+}}
+QLabel#mutedLabel {{
+    color: {muted_text};
+    font-size: 12px;
+}}
+QLabel#cronBadge {{
+    background: {chip_bg};
+    border: 1px solid {border};
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-family: Consolas, "Cascadia Mono", monospace;
+    font-size: 12px;
+    font-weight: 600;
+}}
+QPushButton[role="chip"] {{
+    background: {chip_bg};
+    color: {neutral_text};
+    border: 1px solid {border};
+    border-radius: 14px;
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 600;
+}}
+QPushButton[role="chip"]:hover {{
+    background: {chip_hover};
+}}
+QPushButton[role="chip"]:checked {{
+    background: #2e7d32;
+    color: #ffffff;
+    border: 1px solid #256628;
+}}
+QLineEdit, QTimeEdit {{
+    background: {input_bg};
+    color: {input_text};
+    border: 1px solid {border};
+    border-radius: 6px;
+    padding: 5px 9px;
+}}
+QLineEdit:focus, QTimeEdit:focus {{
+    border: 1px solid #3f8f3a;
+}}
+QCheckBox {{
+    spacing: 8px;
+}}
+QCheckBox::indicator {{
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: 1px solid {border};
+    background: {input_bg};
+}}
+QCheckBox::indicator:checked {{
+    background: #2e7d32;
+    border: 1px solid #256628;
+}}
+QScrollArea#settingsScroll {{
+    border: none;
+    background: transparent;
 }}
 """

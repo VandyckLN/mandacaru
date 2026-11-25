@@ -163,3 +163,15 @@ def test_excluded_folders_are_skipped_in_list_and_scan(tmp_path, scanner, ps_tex
     summary = scan_paths([tmp_path], scanner, frozenset(), lambda *_: None,
                          findings.append, lambda: False, exclude=[ignorar])
     assert summary.completed and summary.files == 1 and [f.path for f in findings] == [manter / "b.ps1"]
+
+
+def test_scan_paths_batches_pause_between_chunks(tmp_path, scanner, monkeypatch):
+    for i in range(5):
+        (tmp_path / f"{i}.txt").write_text("ok")
+    sleeps = []
+    monkeypatch.setattr("mandacaru_win.scan.time.sleep", sleeps.append)
+    summary = scan_paths([tmp_path], scanner, frozenset(), lambda *_: None,
+                         lambda _: None, lambda: False, batch_size=2, batch_pause_s=0.05)
+    assert summary.completed and summary.files == 5
+    # 5 arquivos com lote de 2 -> pausa após o 2º e após o 4º
+    assert sleeps == [0.05, 0.05]

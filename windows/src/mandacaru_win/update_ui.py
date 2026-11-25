@@ -121,9 +121,11 @@ class UpdateBar(QFrame):
         if res.update is not None:
             self.show_update(res.update)
         elif self._manual:
-            self.status("Não foi possível verificar atualizações agora. Verifique a conexão."
-                        if res.reason == "falha"
-                        else f"Você já tem a versão mais recente ({__version__}).")
+            if res.reason == "falha":
+                det = f" ({res.detail})" if res.detail else ". Verifique a conexão."
+                self.status(f"Não foi possível verificar atualizações agora{det}")
+            else:
+                self.status(f"Você já tem a versão mais recente ({__version__}).")
         self.checked.emit(res)
 
     def show_update(self, update: updater.Update) -> None:

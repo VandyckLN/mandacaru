@@ -501,3 +501,65 @@ def test_shred_folder_in_ui_respects_confirmation(app, tmp_path, scanner):
     assert box and box[0].completed and box[0].files_shredded == 1
     assert not alvo.exists()
     assert win.infos and "Destruição concluída" in win.infos[-1]
+
+
+def test_settings_tab_cron_and_scheduled_background_scan(app, tmp_path, scanner, ps_text):
+    from datetime import datetime, timedelta
+
+    d, _ = _scan_one(tmp_path, scanner, ps_text)
+    win = make_win(tmp_path, scanner)
+    assert win.chk_sched_enabled.isChecked()
+    assert win.txt_sched_cron.text() == "0 */4 * * *"
+    assert win._schedule_timer.isActive()
+
+    # Expressão inválida é recusada sem sobrescrever
+    win.txt_sched_cron.setText("invalido")
+    assert not win.save_schedule_settings()
+    assert win.msgs
+
+    # Configura pasta monitorada e cron válido
+    win.add_scheduled_folder(d)
+    assert win.tbl_sched_paths.rowCount() == 1
+    win.txt_sched_cron.setText("0 */2 * * *")
+    assert win.save_schedule_settings()
+    assert win._next_scheduled_run is not None
+
+    # Dispara varredura agendada simulando o horário alcançado
+    box = []
+    loop = QEventLoop()
+    win.scan_finished.connect(lambda s: (box.append(s), loop.quit()))
+    QTimer.singleShot(10000, loop.quit)
+    futuro = win._next_scheduled_run + timedelta(seconds=5)
+    assert win.check_scheduled_scan(now=futuro) is True
+    loop.exec()
+    assert box and box[0].completed and box[0].findings == 1
+    assert win._next_scheduled_run > futuro
+
+    # Desativar para o timer
+    win.chk_sched_enabled.setChecked(False)
+    assert win.save_schedule_settings()
+    assert not win._schedule_timer.isActive()
+    assert win.check_scheduled_scan(now=datetime.now() + timedelta(days=1)) is False
+
+
+def test_settings_chips_builder_and_scopes(app, tmp_path, scanner):
+    from PySide6.QtCore import QTime
+
+    win = make_win(tmp_path, scanner)
+    win._select_freq_mode("1h")
+    assert win.txt_sched_cron.text() == "0 * * * *"
+
+    win._select_freq_mode("diario")
+    win.time_sched.setTime(QTime(8, 30))
+    win._set_daily_weekdays(True)
+    assert win.txt_sched_cron.text() == "30 8 * * 1-5"
+
+    win._select_freq_mode("semanal")
+    win._dow_chips[1].setChecked(True)
+    win._dow_chips[5].setChecked(True)
+    win._sync_cron_from_visual()
+    assert win.txt_sched_cron.text() == "30 8 * * 1,5"
+
+    win._select_scope("completa")
+    assert win.save_schedule_settings()
+    assert win._schedule_store.get().scope == "completa"
