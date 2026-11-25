@@ -7,9 +7,9 @@ from mandacaru.projeto.unicode import (
     verificar,
 )
 
-RLO = "‮"
-LRI = "⁦"
-PDI = "⁩"
+RLO = "\u202e"
+LRI = "\u2066"
+PDI = "\u2069"
 
 
 def test_bidi_trojan_source(tmp_path):
@@ -60,14 +60,20 @@ def test_tags_bandeira_nao_conta():
 
 
 def test_largura_zero():
-    assert trechos_largura_zero("a​​​b") == [1]
-    assert trechos_largura_zero("a‍b") == []
+    assert trechos_largura_zero("a\u200b\u200b\u200bb") == [1]
+    assert trechos_largura_zero("a\u200db") == []
 
 
 def test_mostrar_invisiveis():
-    assert mostrar_invisiveis("a‮b\tc") == "a<U+202E>b\tc"
+    assert mostrar_invisiveis("a\u202eb\tc") == "a<U+202E>b\tc"
     assert len(mostrar_invisiveis("x" * 300)) == 120
 
 
 def test_trechos_bidi():
     assert trechos_bidi(f"a{RLO}b{LRI}") == [1, 3]
+
+
+def test_linha_correta_com_separadores_exoticos(tmp_path):
+    texto = "a = 1\x0c\nb = 2 c = 3\nd = \"x" + RLO + "\"\r\n"
+    achados = verificar(tmp_path, "x.py", texto)
+    assert [(a.linha, a.trecho) for a in achados] == [(3, 'd = "x<U+202E>"')]

@@ -8,15 +8,14 @@ from pathlib import Path
 from ..detectors.static import SCRIPT_EXT
 from ..events import Severity
 from .achado import Achado
-from .percurso import linha_de
 
 EXT_CODIGO = frozenset(SCRIPT_EXT) | {
     ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".c", ".cpp", ".h", ".cs", ".kt", ".swift",
 }
 
 _TAGS = re.compile("[\U000e0000-\U000e007f]+")
-_LARGURA_ZERO = re.compile("[​‌‍⁠﻿]{3,}")
-_BIDI = re.compile("[‪-‮⁦-⁩]")
+_LARGURA_ZERO = re.compile("[\u200b\u200c\u200d\u2060\ufeff]{3,}")
+_BIDI = re.compile("[\u202a-\u202e\u2066-\u2069]")
 _BANDEIRA = "\U0001f3f4"
 _MAX_TRECHO = 120
 
@@ -72,20 +71,15 @@ def verificar(raiz: Path, rel: str, texto: str) -> list[Achado]:
     if Path(rel).suffix.lower() not in EXT_CODIGO:
         return []
     achados: list[Achado] = []
-    vistas: set[int] = set()
-    for pos in trechos_bidi(texto):
-        linha = linha_de(texto, pos)
-        if linha in vistas:
-            continue
-        vistas.add(linha)
-        trecho = texto.splitlines()[linha - 1]
-        achados.append(Achado(
-            "projeto.unicode.bidi", Severity.HIGH, rel,
-            "caracteres de controle bidirecional no código (Trojan Source): "
-            "o texto exibido pode diferir do que é executado",
-            linha, mostrar_invisiveis(trecho), ("T1027",),
-        ))
-    for i, trecho in enumerate(texto.splitlines(), start=1):
+    linhas = [ln.removesuffix("\r") for ln in texto.split("\n")]
+    for i, trecho in enumerate(linhas, start=1):
+        if _BIDI.search(trecho):
+            achados.append(Achado(
+                "projeto.unicode.bidi", Severity.HIGH, rel,
+                "caracteres de controle bidirecional no código (Trojan Source): "
+                "o texto exibido pode diferir do que é executado",
+                i, mostrar_invisiveis(trecho), ("T1027",),
+            ))
         palavra = _mistura_escritas(trecho)
         if palavra:
             achados.append(Achado(
