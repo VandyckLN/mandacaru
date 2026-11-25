@@ -74,6 +74,6 @@ def test_trechos_bidi():
 
 
 def test_linha_correta_com_separadores_exoticos(tmp_path):
-    texto = "a = 1\x0c\nb = 2 c = 3\nd = \"x" + RLO + "\"\r\n"
+    texto = "a = 1\x0c\nb = 2\u2028c = 3\nd = \"x" + RLO + "\"\r\n"
     achados = verificar(tmp_path, "x.py", texto)
     assert [(a.linha, a.trecho) for a in achados] == [(3, 'd = "x<U+202E>"')]
