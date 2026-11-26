@@ -467,6 +467,16 @@ def test_detecta_persistencia_do_sistema_ligada_ao_incidente(tmp_path, monkeypat
             p.backup(e)
 
 
+def test_padroes_do_windows_nao_leem_a_maquina_nos_testes(monkeypatch):
+    # Simula o Windows: com os padrões, a fixture do conftest deixa HKLM e Inicializar global vazios.
+    from mandacaru_win import incident_persist
+    monkeypatch.setattr(sys, "platform", "win32")
+    p = incident_persist.Persistencia(registro=RegistroFalso(), run=lambda a, t: (0, ""), usuario="x")
+    assert p._hklm.valores(incident_persist.CHAVE_RUN_HKLM) == [] and p._hklm.subchaves("x") == []
+    assert p._pasta_global is not None and list(p._pasta_global.parents)[-1].exists()
+    assert p.detectar(["\x00\x01"]) == []
+
+
 def test_sem_hklm_nada_muda(tmp_path):
     p, _ = _pers(tmp_path)
     assert [e.tipo for e in p.detectar([EXE, PROJ])] == ["hkcu_run", "hkcu_runonce"]
