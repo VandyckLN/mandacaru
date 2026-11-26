@@ -34,7 +34,8 @@ _B64_PS_EXEC = re.compile(r"\b(?:iex|Invoke-Expression)\b", re.IGNORECASE)
 _B64_NODE = re.compile(r"Buffer\.from\([^)]{0,300}base64", re.IGNORECASE)
 _B64_NODE_EXEC = re.compile(r"eval|Function\(|node\s+-e", re.IGNORECASE)
 _CREDENCIAIS = re.compile(r"\.ssh|\.aws|\.env|id_rsa|credentials", re.IGNORECASE)
-_GIT_CONFIG = re.compile(r"^[ \t]*(hooksPath|fsmonitor|sshCommand)[ \t]*=[ \t]*(.*)$",
+_VERSAO_EXATA = re.compile(r"\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.-]+)?")
+_GIT_CONFIG = re.compile(r"^[ \t]*(?:\[[^\]\n]*\][ \t]*)?(hooksPath|fsmonitor|sshCommand)[ \t]*=[ \t]*(.*)$",
                          re.IGNORECASE | re.MULTILINE)
 _UNIDADE = re.compile(r"^[A-Za-z]:")
 
@@ -86,16 +87,18 @@ def _servidores(dados: object):
 def _nome_versao(ecossistema: str, arg: str) -> tuple[str, str]:
     if ecossistema == "npm":
         pos = arg.rfind("@")
-        return (arg[:pos], arg[pos + 1:]) if pos > 0 else (arg, "")
-    nome, sep, versao = arg.partition("==")
-    return (nome, versao) if sep else (arg, "")
+        nome, versao = (arg[:pos], arg[pos + 1:]) if pos > 0 else (arg, "")
+    else:
+        nome, _, versao = arg.partition("==")
+    return nome, versao if _VERSAO_EXATA.fullmatch(versao) else ""
 
 
 def pacotes_mcp(texto_json: object) -> list[tuple[str, str, str]]:
     """(ecossistema, nome, versao) dos servidores `npx` (npm) e `uvx` (PyPI)."""
     achados: list[tuple[str, str, str]] = []
     for _, srv in _servidores(texto_json):
-        eco = {"npx": "npm", "uvx": "PyPI"}.get(srv.get("command"))
+        comando = srv.get("command")
+        eco = {"npx": "npm", "uvx": "PyPI"}.get(comando) if isinstance(comando, str) else None
         args = srv.get("args")
         if eco is None or not isinstance(args, list):
             continue
@@ -281,11 +284,21 @@ def verificar(raiz: Path, rel: str, texto: str) -> list[Achado]:
 
 # --- git -------------------------------------------------------------------
 
+def _dir_real(caminho: Path) -> bool:
+    try:
+        return stat.S_ISDIR(os.lstat(caminho).st_mode)
+    except OSError:
+        return False
+
+
 def verificar_git(raiz: Path) -> list[Achado]:
     saida: list[Achado] = []
-    pasta = Path(raiz) / ".git" / "hooks"
+    dotgit = Path(raiz) / ".git"
+    pasta = dotgit / "hooks"
+    if not _dir_real(dotgit):
+        return saida
     try:
-        nomes = sorted(os.listdir(pasta))[:_MAX_HOOKS_GIT]
+        nomes = sorted(os.listdir(pasta))[:_MAX_HOOKS_GIT] if _dir_real(pasta) else []
     except OSError:
         nomes = []
     for nome in nomes:

@@ -139,3 +139,43 @@ def test_json_malformado(projeto):
     assert _rodar(projeto, ".vscode/tasks.json", '{"tasks": "x"}') == []
     assert _rodar(projeto, ".vscode/tasks.json", '[1, "x"]') == []
     assert _rodar(projeto, "outro.json", "{}") == []
+
+
+def test_mcp_tipos_hostis():
+    for cmd in ([], {}, 3, None):
+        assert pacotes_mcp({"mcpServers": {"x": {"command": cmd, "args": ["a"]}}}) == []
+    assert pacotes_mcp({"mcpServers": {"x": {"command": "npx", "args": [1, ["y"], "ok"]}}}) == [("npm", "ok", "")]
+
+
+def test_mcp_versao_so_exata():
+    def p(cmd, arg):
+        return pacotes_mcp({"mcpServers": {"x": {"command": cmd, "args": [arg]}}})
+    assert p("npx", "evil@latest") == [("npm", "evil", "")]
+    assert p("npx", "evil@^1.2") == [("npm", "evil", "")]
+    assert p("npx", "evil@1.0.2") == [("npm", "evil", "1.0.2")]
+    assert p("npx", "@s/evil@1.0.2-beta.1") == [("npm", "@s/evil", "1.0.2-beta.1")]
+    assert p("uvx", "pkg==2.0") == [("PyPI", "pkg", "2.0")]
+
+
+def test_git_config_na_linha_da_secao(projeto):
+    raiz = projeto({".git/config": "[core] hooksPath = ./evil\n"})
+    [a] = verificar_git(raiz)
+    assert a.severidade == Severity.MEDIUM and a.linha == 1
+
+
+def test_git_links_simbolicos_ignorados(projeto, tmp_path_factory):
+    import os
+    fora = tmp_path_factory.mktemp("fora")
+    (fora / "hooks").mkdir()
+    (fora / "hooks" / "pre-commit").write_text("curl x | sh\n")
+    (fora / "config").write_text("[core]\n\tfsmonitor = ./x\n")
+    p1 = tmp_path_factory.mktemp("p1")
+    p2 = tmp_path_factory.mktemp("p2")
+    (p1 / ".git").mkdir()
+    try:
+        os.symlink(fora / "hooks", p1 / ".git" / "hooks")
+        os.symlink(fora, p2 / ".git")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink indisponivel")
+    assert verificar_git(p1) == []
+    assert verificar_git(p2) == []
