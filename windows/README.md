@@ -64,6 +64,25 @@ confiáveis e pastas ignoradas).
   truncado para 0 bytes, renomeado para um nome aleatório e removido sem ir para
   a Lixeira. Raízes de unidade (`C:\`), pastas do sistema e a pasta do usuário
   são bloqueadas por segurança, e symlinks/junções nunca são seguidos.
+- **Resposta a incidente (`Incidentes`):** a partir de qualquer achado `Alta`
+  ou `Crítica` (botão **Responder…** na varredura, **Responder ao incidente…**
+  na faixa de alerta de projeto ou **Responder a incidente…** na aba
+  *Atualizações*), conduz a resposta em três fases encadeadas:
+  1. **Conter:** encerra processos suspeitos do usuário e seus filhos (só após
+     conferir caminho e SHA-256), move arquivos suspeitos para a **Quarentena**
+     com **Desfazer** e orienta o isolamento manual de rede em casos extremos.
+  2. **Neutralizar:** detecta e remove apenas entradas de persistência ligadas
+     ao incidente (`HKCU\...\Run` e `RunOnce`, pasta `Inicializar` e tarefas
+     agendadas do usuário), salvando backup completo em
+     `%LOCALAPPDATA%\Mandacaru\incidents\<id>.json` para **Desfazer** em um
+     clique; também oferece atalhos para **Destruir projeto…** ou atualizar via
+     `winget`. Ações de sistema aparecem visíveis com o selo *Requer Proteção
+     avançada*.
+  3. **Recuperar:** inicia varredura completa em lotes leves, traz checklist
+     marcável de credenciais para trocar com links oficiais auditados sob clique
+     (GitHub, Google, Microsoft, AWS, npm, PyPI) e exporta relatório em **HTML
+     autocontido** ou **JSON** com ocultação de usuário/caminhos ligada por
+     padrão.
 - **Pastas ignoradas na varredura (`Confiáveis`):** abaixo da lista de arquivos
   confiáveis por hash, clique em **Adicionar pasta…** para excluir pastas da
   varredura (ex.: pastas de projetos ou jogos) e **Remover** para voltar a

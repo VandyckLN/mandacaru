@@ -159,6 +159,55 @@ QTreeWidget::item, QTableWidget::item {{
     font-weight: 600;
 }}
 
+QFrame#incidentPhaseCard {{
+    background: {card_bg};
+    border: 1px solid {border};
+    border-radius: 10px;
+}}
+QFrame#incidentStepRow {{
+    border-top: 1px solid {border};
+}}
+QLabel#incidentDetails {{
+    background: {input_bg};
+    color: {muted_text};
+    border: 1px solid {border};
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-family: Consolas, "Cascadia Mono", monospace;
+    font-size: 12px;
+}}
+QLabel#incidentBadge {{
+    border-radius: 9px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 700;
+}}
+QLabel#incidentBadge[state="done"] {{
+    background: #1b5e20;
+    color: #e8f5e9;
+}}
+QLabel#incidentBadge[state="auto"] {{
+    background: #0d47a1;
+    color: #e3f2fd;
+}}
+QLabel#incidentBadge[state="pending"] {{
+    background: #e65100;
+    color: #fff3e0;
+}}
+QLabel#incidentBadge[state="failed"] {{
+    background: #b71c1c;
+    color: #ffebee;
+}}
+QLabel#incidentBadge[state="admin"] {{
+    background: {chip_bg};
+    color: {muted_text};
+    border: 1px solid {border};
+}}
+QLabel#incidentBadge[state="undone"] {{
+    background: #5d4037;
+    color: #efebe9;
+}}
+
 QFrame#settingsCard {{
     background: {card_bg};
     border: 1px solid {border};

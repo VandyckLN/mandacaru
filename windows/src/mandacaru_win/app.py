@@ -43,6 +43,8 @@ from mandacaru.events import Severity
 from mandacaru.projeto import Achado, RelatorioProjeto, parece_projeto
 from mandacaru.projeto.achado import exibivel
 from mandacaru_win import scan
+from mandacaru_win.incident import Incidente, IncidentError, IncidentStore
+from mandacaru_win.incident_ui import IncidentPanel
 from mandacaru_win.progress import (
     consulta_text,
     count_text,
@@ -192,6 +194,8 @@ class MainWindow(QMainWindow):
         self._scanner = scanner if scanner is not None else make_scanner()
         self._history = History(self._data / "history.jsonl")
         self._quarantine = Quarantine(self._data / "quarantine")
+        self._incident_store = IncidentStore(self._data / "incidents")
+        self._session_incidents: dict[str, str] = {}
         self._trust: TrustList | None = None
         self._trust_error: str | None = None
         try:
@@ -304,6 +308,14 @@ class MainWindow(QMainWindow):
         pal_lay.setSpacing(10)
         self.lbl_project_alert = QLabel("")
         self.lbl_project_alert.setWordWrap(True)
+        self.btn_respond_project = style_button(
+            QPushButton("Responder ao incidente…"), "quarantine", compact=True
+        )
+        self.btn_respond_project.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        self.btn_respond_project.setToolTip(
+            "Abre o painel guiado de Resposta a incidente (Conter -> Neutralizar -> Recuperar)."
+        )
+        self.btn_respond_project.clicked.connect(self.open_flagged_project_incident)
         self.btn_shred_project = style_button(QPushButton("Destruir projeto…"), "danger", compact=True)
         self.btn_shred_project.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         self.btn_shred_project.setToolTip(
@@ -311,6 +323,7 @@ class MainWindow(QMainWindow):
         )
         self.btn_shred_project.clicked.connect(self.shred_flagged_project)
         pal_lay.addWidget(self.lbl_project_alert, 1)
+        pal_lay.addWidget(self.btn_respond_project)
         pal_lay.addWidget(self.btn_shred_project)
         self.project_alert_bar.setVisible(False)
         lay.addWidget(self.project_alert_bar)
@@ -327,7 +340,7 @@ class MainWindow(QMainWindow):
         th.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
         self.tree.setColumnWidth(0, 100)
         self.tree.setColumnWidth(1, 240)
-        self.tree.setColumnWidth(3, 440)
+        self.tree.setColumnWidth(3, 510)
         self.tree.setItemDelegateForColumn(0, BadgeDelegate(self.tree))
         lay.addWidget(self.tree, 1)
 
@@ -338,6 +351,19 @@ class MainWindow(QMainWindow):
             ["Data", "Caminho original", "Severidade", "Regras", "Ações"], stretch=1)
         self.tbl_quarantine.setItemDelegateForColumn(2, BadgeDelegate(self.tbl_quarantine))
         tabs.addTab(self.tbl_quarantine, "Quarentena")
+        self.incident_panel = IncidentPanel(
+            self._incident_store,
+            self._quarantine,
+            notify=lambda t: self.notify(t),
+            info=lambda t: self.info(t),
+            confirm=lambda t: self.confirm(t),
+            on_quarantine_changed=self.refresh_tabs,
+            on_file_quarantined=self._on_file_quarantined_from_incident,
+            on_full_scan=self.start_full_recovery_scan,
+            on_shred_project=self.shred_project,
+            on_open_updates=lambda: self.tabs.setCurrentWidget(self._updates_tab_widget),
+        )
+        tabs.addTab(self.incident_panel, "Incidentes")
         trust_tab = QWidget()
         tl = QVBoxLayout(trust_tab)
         tl.addWidget(QLabel("Arquivos confiáveis (ignorados por hash SHA-256)"))
@@ -369,7 +395,8 @@ class MainWindow(QMainWindow):
         self.tbl_history = self._make_table(
             ["Data", "Pastas", "Arquivos", "Achados", "Duração", "Situação"], stretch=1)
         tabs.addTab(self.tbl_history, "Histórico")
-        tabs.addTab(self._build_updates_tab(), "Atualizações")
+        self._updates_tab_widget = self._build_updates_tab()
+        tabs.addTab(self._updates_tab_widget, "Atualizações")
         tabs.addTab(self._build_settings_tab(), "Configurações")
         self.setCentralWidget(tabs)
         self.refresh_tabs()
@@ -728,11 +755,16 @@ class MainWindow(QMainWindow):
 
     def _actions_widget(self, path: Path) -> QWidget:
         no_trust = (self._trust_error or "") if self._trust is None else None
-        return self._row_buttons(path, [
+        f = self.findings.get(path)
+        specs = [
             ("Analisar", self.analyze_finding, "analyze", None),
             ("Abrir local", self.open_location, "neutral", None),
             ("Ignorar sempre", self.ignore_finding, "neutral", no_trust),
-            ("Quarentena", self.quarantine_finding, "quarantine", None)])
+            ("Quarentena", self.quarantine_finding, "quarantine", None),
+        ]
+        if f is not None and f.severity >= Severity.HIGH:
+            specs.append(("Responder…", self.open_finding_incident, "danger", None))
+        return self._row_buttons(path, specs)
 
     def _on_done(self, summary: ScanSummary) -> None:
         was_bg, self._background_scan = self._background_scan, False
@@ -1179,6 +1211,7 @@ class MainWindow(QMainWindow):
         self._finish_shred_thread()
         if summary.completed and summary.target:
             self._purge_shredded_rows(summary.target)
+        self.incident_panel.refresh()
         self.progress.set_tone("shred" if summary.completed and not summary.errors else "warning")
         self.progress.setRange(0, 1)
         self.progress.setValue(1 if summary.completed else 0)
@@ -1339,6 +1372,137 @@ class MainWindow(QMainWindow):
             self._remove_project_row(path)
         self.refresh_tabs()
 
+    def _on_file_quarantined_from_incident(self, path: Path) -> None:
+        if path in self._items:
+            self._remove_row(path)
+        if path in self._proj_items:
+            self._remove_project_row(path)
+
+    def _show_or_create_incident(
+        self, chave: str, *, origem: str, ameaca: str, achados: list[dict], pasta: str | None = None
+    ) -> Incidente | None:
+        existente_id = self._session_incidents.get(chave)
+        if existente_id:
+            try:
+                inc = self._incident_store.carregar(existente_id)
+                self.incident_panel.load_incident(inc.id)
+                self.tabs.setCurrentWidget(self.incident_panel)
+                return inc
+            except IncidentError:
+                self._session_incidents.pop(chave, None)
+        try:
+            inc = self._incident_store.criar(origem=origem, ameaca=ameaca, achados=achados, pasta=pasta)
+        except IncidentError as e:
+            self.notify(str(e))
+            return None
+        self._session_incidents[chave] = inc.id
+        self.incident_panel.reload_list(select_id=inc.id)
+        self.tabs.setCurrentWidget(self.incident_panel)
+        return inc
+
+    def open_finding_incident(self, path: Path) -> Incidente | None:
+        """Abre ou retoma a resposta a incidente para um achado grave da varredura."""
+        f = self.findings.get(path)
+        if f is None:
+            return None
+        achados = [
+            {
+                "regra": a.rule,
+                "severidade": f.severity.name,
+                "caminho": str(f.path),
+                "sha256": f.sha256,
+                "mitre": list(a.mitre),
+            }
+            for a in (f.alerts or [])
+        ] or [{"regra": "varredura.achado", "severidade": f.severity.name, "caminho": str(f.path), "sha256": f.sha256}]
+        return self._show_or_create_incident(
+            f"varredura:{f.sha256}:{f.path}", origem="varredura", ameaca="malware", achados=achados
+        )
+
+    def open_flagged_project_incident(self) -> None:
+        if not self._flagged_projects:
+            return
+        if len(self._flagged_projects) == 1:
+            self.open_project_incident(self._flagged_projects[0])
+            return
+        menu = QMenu(self)
+        for p in list(self._flagged_projects):
+            rotulo = f"{_visivel(p.name or str(p))} — {_visivel(str(p))}"
+            act = menu.addAction(rotulo)
+            act.triggered.connect(lambda _=False, alvo=p: self.open_project_incident(alvo))
+        menu.exec(self.btn_respond_project.mapToGlobal(self.btn_respond_project.rect().bottomLeft()))
+
+    def open_project_incident(self, raiz: Path) -> Incidente | None:
+        """Cria ou reabre o incidente unificado de um projeto armado."""
+        raiz = Path(raiz)
+        achados: list[dict] = []
+        for _path, (proj_raiz, lista_achados, sha) in self._proj_rows.items():
+            if proj_raiz != raiz:
+                continue
+            for a in lista_achados:
+                item = {
+                    "regra": a.regra,
+                    "severidade": a.severidade.name,
+                    "caminho": str(raiz / a.caminho),
+                    "mitre": list(a.mitre),
+                }
+                if sha:
+                    item["sha256"] = sha
+                achados.append(item)
+        norm_raiz = (os.path.normcase(os.path.abspath(raiz)),)
+        for f in self.findings.values():
+            if scan._is_under(f.path, norm_raiz):
+                for al in f.alerts:
+                    achados.append(
+                        {
+                            "regra": al.rule,
+                            "severidade": f.severity.name,
+                            "caminho": str(f.path),
+                            "sha256": f.sha256,
+                            "mitre": list(al.mitre),
+                        }
+                    )
+        if not achados:
+            achados.append({"regra": "projeto.alerta", "severidade": "HIGH", "caminho": str(raiz)})
+        return self._show_or_create_incident(
+            f"projeto:{os.path.normcase(os.path.abspath(raiz))}",
+            origem="projeto",
+            ameaca="projeto",
+            achados=achados,
+            pasta=str(raiz),
+        )
+
+    def open_updates_incident(self) -> Incidente | None:
+        """Abre resposta a incidente para programas com vulnerabilidade explorada ou alta."""
+        graves = [a for a in self._upd_items if a.risk in ("Explorada", "Explorada (produto)", "Alta")]
+        if not graves:
+            return None
+        achados = [
+            {
+                "regra": (a.cves[0] if a.cves else "vuln.programa_desatualizado"),
+                "severidade": "CRITICAL" if a.risk.startswith("Explorada") else "HIGH",
+                "caminho": f"{a.program.name} ({a.program.installed} -> {a.program.available})",
+                "mitre": ["T1190"],
+            }
+            for a in graves
+        ]
+        ids_chave = ",".join(sorted(a.program.id for a in graves))
+        return self._show_or_create_incident(
+            f"atualizacoes:{ids_chave}", origem="atualizacoes", ameaca="vulnerabilidade", achados=achados
+        )
+
+    def start_full_recovery_scan(self) -> bool:
+        """Inicia varredura completa da pasta do usuário em lotes leves e foca na aba Varredura."""
+        if self._busy():
+            return False
+        home = Path.home()
+        alvos = [home] if home.exists() else self.scheduled_target_paths()
+        if not alvos:
+            return False
+        self.tabs.setCurrentIndex(0)
+        self.start_scan(alvos, background=True)
+        return True
+
     # ---------- ações das abas ----------
     def restore_item(self, qid: str) -> None:
         if not self.confirm("Este arquivo foi marcado como suspeito. Restaurar mesmo assim?"):
@@ -1454,10 +1618,16 @@ class MainWindow(QMainWindow):
         self.btn_get_winget = style_button(QPushButton("Instalar o winget (Microsoft Store)"), "neutral")
         self.btn_get_winget.clicked.connect(lambda: self._open_uri(APP_INSTALLER_URI))
         self.btn_get_winget.setVisible(False)
+        self.btn_upd_incident = style_button(QPushButton("Responder a incidente…"), "quarantine")
+        self.btn_upd_incident.setToolTip(
+            "Abre o painel de Resposta a incidente para programas com vulnerabilidade explorada ou alta."
+        )
+        self.btn_upd_incident.clicked.connect(self.open_updates_incident)
         self.btn_upd_apply = style_button(QPushButton("Atualizar selecionados"), "scan")
         self.btn_upd_apply.clicked.connect(self.apply_selected_updates)
         bottom.addWidget(self.lbl_uac, 1)
         bottom.addWidget(self.btn_get_winget)
+        bottom.addWidget(self.btn_upd_incident)
         bottom.addWidget(self.btn_upd_apply)
         lay.addLayout(bottom)
         self._set_updating(False)
@@ -1493,6 +1663,8 @@ class MainWindow(QMainWindow):
             b.setEnabled(not on)
         self.btn_upd_stop.setEnabled(on)
         self.btn_upd_apply.setEnabled(not on and bool(self._upd_items))
+        tem_grave = any(a.risk in ("Explorada", "Explorada (produto)", "Alta") for a in self._upd_items)
+        self.btn_upd_incident.setEnabled(not on and tem_grave)
 
     def _upd_busy(self) -> bool:
         return self._upd_thread is not None or self._apply_thread is not None
