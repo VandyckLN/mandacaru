@@ -606,7 +606,7 @@ def test_pipe_segundo_servidor_com_mesmo_nome_falha(tmp_path):
 def test_modulos_guard_sem_qt():
     import os
     import subprocess
-    codigo = ("import sys, mandacaru_win.guard_protocol, mandacaru_win.guard_service; "
+    codigo = ("import sys, mandacaru_win.guard_protocol, mandacaru_win.guard_service, mandacaru_win.guard_client; "
               "print('PySide6' in sys.modules)")
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)}
     saida = subprocess.run([sys.executable, "-c", codigo], capture_output=True, text=True, env=env, timeout=120)
