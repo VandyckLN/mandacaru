@@ -1209,6 +1209,9 @@ class MainWindow(QMainWindow):
 
     def _on_shred_done(self, summary: ShredSummary) -> None:
         self._finish_shred_thread()
+        alvo = (os.path.normcase(os.path.abspath(summary.target)),) if summary.target else ()
+        # Antes de limpar: a faixa de aviso some junto, e o lembrete não pode sumir com ela.
+        era_projeto = bool(alvo) and any(scan._is_under(p, alvo) for p in self._flagged_projects)
         if summary.completed and summary.target:
             self._purge_shredded_rows(summary.target)
         self.incident_panel.refresh()
@@ -1220,6 +1223,9 @@ class MainWindow(QMainWindow):
                f"{summary.dirs_removed} pasta(s) removida(s).")
         if not summary.completed:
             msg = f"Destruição interrompida ({summary.files_shredded} arquivo(s) já destruído(s))."
+        if era_projeto:
+            msg += ("\n\nDestruir a pasta não desfaz o que já foi executado: se você já abriu ou instalou "
+                    "este projeto, faça uma varredura completa e troque chaves e tokens.")
         if summary.errors:
             msg += f"\n\nAvisos ({len(summary.errors)}):\n" + "\n".join(summary.errors[:10])
             self.notify(msg)

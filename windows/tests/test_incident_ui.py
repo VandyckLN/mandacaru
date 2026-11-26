@@ -122,6 +122,97 @@ def make_win(tmp_path, scanner, *, procs=None, reg=None, startup=None, schtasks_
     return win, proc_backend, reg_backend
 
 
+EXE_MAL = r"C:\Users\ana\Downloads\setup.exe"
+SHA_MAL = "a" * 64
+
+
+class RespostaContada(Resposta):
+    """Conta as detecções (caras: schtasks, todos os processos, hashes)."""
+    contagem = {"proc": 0, "pers": 0}
+
+    def detectar_processos(self):
+        RespostaContada.contagem["proc"] += 1
+        return super().detectar_processos()
+
+    def detectar_persistencia(self):
+        RespostaContada.contagem["pers"] += 1
+        return super().detectar_persistencia()
+
+
+def _painel_com_processo(tmp_path, scanner, sha_disco):
+    win, procs, _reg = make_win(tmp_path, scanner, procs=ProcessosFalsos([ProcessoInfo(100, 1, EXE_MAL, 10.0)]))
+    pers = Persistencia(registro=RegistroFalso(), pasta_inicializar=tmp_path / "Startup",
+                        run=lambda a, t: (0, ""), usuario="ana")
+    RespostaContada.contagem = {"proc": 0, "pers": 0}
+    win.incident_panel.resposta_factory = lambda store, inc: RespostaContada(
+        store, inc, processos=procs, persistencia=pers, hash_fn=lambda p: sha_disco)
+    inc = win._incident_store.criar(origem="varredura", ameaca="malware", achados=[
+        {"regra": "hash.malicioso", "severidade": "CRITICAL", "caminho": EXE_MAL, "sha256": SHA_MAL}])
+    win.incident_panel.reload_list(select_id=inc.id)
+    return win, procs
+
+
+def _botao(painel, texto):
+    return next(b for b in painel.findChildren(QPushButton) if b.text() == texto and not b.isHidden())
+
+
+def test_encerrar_usa_sha_do_achado(app, tmp_path, scanner):
+    win, procs = _painel_com_processo(tmp_path, scanner, sha_disco="b" * 64)   # trocado no disco
+    btn = _botao(win.incident_panel, "Encerrar processo")
+    assert btn.isEnabled() is False and "mudou desde a detecção" in btn.toolTip()
+    btn.click()
+    assert procs.encerrados == [] and 100 in procs.vivos
+
+
+def test_encerrar_com_sha_conferido_funciona(app, tmp_path, scanner):
+    win, procs = _painel_com_processo(tmp_path, scanner, sha_disco=SHA_MAL)
+    btn = _botao(win.incident_panel, "Encerrar processo")
+    assert btn.isEnabled() is True
+    btn.click()
+    assert procs.encerrados == [100]
+
+
+def test_render_nao_redetecta_a_cada_acao(app, tmp_path, scanner):
+    win, procs = _painel_com_processo(tmp_path, scanner, sha_disco=SHA_MAL)
+    painel = win.incident_panel
+    assert RespostaContada.contagem == {"proc": 1, "pers": 1}
+    acao = painel.kill_process_step(100, EXE_MAL, SHA_MAL)
+    assert acao.resultado == "concluida"
+    assert RespostaContada.contagem == {"proc": 1, "pers": 1}              # ação não redetecta
+    assert painel.detected_processes() == []                               # o encerrado sai da lista
+    painel.refresh()
+    assert RespostaContada.contagem == {"proc": 2, "pers": 2}              # Atualizar redetecta
+
+
+def test_desfazer_quarentena_com_disco_cheio_nao_levanta(app, tmp_path, scanner, ps_text, monkeypatch):
+    from mandacaru_win.incident import IncidentError
+    d = tmp_path / "alvo"
+    d.mkdir()
+    suspeito = d / "loader.ps1"
+    suspeito.write_text(ps_text, encoding="utf-8")
+    win, _p, _r = make_win(tmp_path, scanner)
+    _esperar(win.scan_finished, lambda: win.start_scan([d]))
+    painel = win.incident_panel
+    inc = win.open_finding_incident(suspeito)
+    achado = inc.achados[0]
+    painel.quarantine_file_step(Path(achado["caminho"]), achado["sha256"], achado["severidade"], [achado["regra"]])
+    idx = len(painel.current_incident().acoes) - 1
+
+    original = win._incident_store.salvar
+    chamadas = []
+
+    def cheio(inc_):
+        chamadas.append(1)
+        if len(chamadas) == 1:                     # o "em andamento" grava; o disco enche depois
+            return original(inc_)
+        raise IncidentError("Não foi possível gravar o registro do incidente: disco cheio")
+    monkeypatch.setattr(win._incident_store, "salvar", cheio)
+    acao = painel.undo_action_step(idx)                                    # não pode levantar
+    assert len(chamadas) >= 2
+    assert acao.resultado == "concluida" and suspeito.exists()            # restaurou de verdade
+    assert "disco cheio" in acao.detalhe and win.msgs and "disco cheio" in win.msgs[-1]
+
+
 def test_abrir_incidente_pela_varredura_exibe_3_fases_quarentena_e_desfazer(app, tmp_path, scanner, ps_text):
     d = tmp_path / "alvo"
     d.mkdir()

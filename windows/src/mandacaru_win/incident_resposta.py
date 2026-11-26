@@ -10,6 +10,7 @@ import ntpath
 import os
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from mandacaru_win.incident import (
@@ -70,11 +71,13 @@ def _pasta_projeto_segura(pasta: object) -> bool:
 
 
 class Resposta:
-    def __init__(self, store: IncidentStore, inc: Incidente, *, processos=_PADRAO, persistencia=None):
+    def __init__(self, store: IncidentStore, inc: Incidente, *, processos=_PADRAO, persistencia=None,
+                 hash_fn: Callable[[Path], str | None] = sha256_arquivo):
         self._store = store
         self.inc = inc
         self._processos = _processos_padrao() if processos is _PADRAO else processos
         self._pers = persistencia if persistencia is not None else Persistencia()
+        self._hash = hash_fn
 
     # ---------- registro ----------
     def _comecar(self, acao: Acao) -> bool:
@@ -127,11 +130,34 @@ class Resposta:
             if hashes:
                 chave = ntpath.normcase(p.exe)
                 if chave not in cache_sha:
-                    sha = sha256_arquivo(Path(p.exe))
+                    sha = self._hash(Path(p.exe))
                     cache_sha[chave] = sha.lower() if sha else None
                 if cache_sha[chave] in hashes:
                     achados.append(p)
         return achados
+
+    def sha_para_encerrar(self, proc: ProcessoInfo) -> tuple[str | None, str | None]:
+        """(SHA-256 esperado, motivo de recusa). Nunca confia no disco quando o achado diz outra coisa.
+
+        Se um achado aponta para o executável do processo, só serve o SHA-256 desse achado: se o arquivo
+        no disco tem outro hash, não é mais o programa detectado (ex.: o instalador legítimo baixado
+        com o mesmo nome). Sem achado para o caminho (o processo casou pela pasta ou pelo hash), vale o
+        hash do disco.
+        """
+        if not proc.exe:
+            return None, "Não foi possível saber o executável deste processo."
+        do_achado = next((a["sha256"].lower() for a in self.inc.achados
+                          if isinstance(a.get("caminho"), str) and sha256_valido(a.get("sha256"))
+                          and ntpath.normcase(a["caminho"]) == ntpath.normcase(proc.exe)), None)
+        disco = self._hash(Path(proc.exe))
+        disco = disco.lower() if disco else None
+        if do_achado is not None:
+            if disco != do_achado:
+                return None, "O executável mudou desde a detecção; não dá para confirmar que é o mesmo programa."
+            return do_achado, None
+        if disco is None:
+            return None, "Não foi possível ler o executável para confirmar o processo."
+        return disco, None
 
     def encerrar_processo(self, pid: int, exe: str | os.PathLike, sha256: str, *, modo: str = "guiada") -> Acao:
         acao = Acao("encerrar_processo", "conter", modo, "em_andamento", "",
@@ -141,7 +167,7 @@ class Resposta:
         if self._processos is None:
             return self._terminar(acao, "falhou", "Encerrar processos só funciona no Windows.")
         try:
-            r = encerrar_arvore(self._processos, pid, exe, sha256)
+            r = encerrar_arvore(self._processos, pid, exe, sha256, hash_fn=self._hash)
         except OSError as e:
             return self._terminar(acao, "falhou", f"Não foi possível listar os processos: {e}")
         if r.recusa:

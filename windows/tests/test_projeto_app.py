@@ -497,6 +497,25 @@ def test_destruir_projeto_pela_faixa_apaga_pasta_e_limpa_linhas(app, tmp_path, s
     assert not win.project_alert_bar.isVisible()
 
 
+def test_destruir_projeto_lembra_que_nao_desfaz(app, tmp_path, scanner):
+    d = tmp_path / "proj_armado"
+    d.mkdir()
+    (d / "AGENTS.md").write_text(INJECAO)
+    win = make_win(tmp_path, scanner)
+    infos = []
+    win.info = infos.append
+    verificar(win, d)
+    esperar(win.shred_finished, win.btn_shred_project.click)
+    assert not d.exists()
+    assert infos and "Destruir a pasta não desfaz o que já foi executado" in infos[-1]
+    # Destruir uma pasta comum (sem aviso de projeto) não repete o lembrete.
+    comum = tmp_path / "comum"
+    comum.mkdir()
+    (comum / "a.txt").write_text("x")
+    esperar(win.shred_finished, lambda: win.shred_target(comum))
+    assert "não desfaz" not in infos[-1]
+
+
 def test_aviso_fixo_sanitiza_nome_hostil_e_suporta_multiplos_projetos(app, tmp_path, scanner):
     p1 = tmp_path / ("mal" + "\u202e" + "1")
     p2 = tmp_path / "mal2"

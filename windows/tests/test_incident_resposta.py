@@ -205,6 +205,21 @@ def test_detectar_processos_por_caminho_pasta_e_hash(tmp_path):
     assert [p.pid for p in achados] == [100, 101, 102]
 
 
+def test_sha_para_encerrar_usa_o_achado_e_nunca_o_disco_trocado(tmp_path):
+    store, inc = _inc(tmp_path)                                  # achado: EXE com SHA "a"*64
+    disco = {EXE: "b" * 64, r"C:\Users\ana\proj\tool.exe": "c" * 64, r"C:\Users\ana\proj\x.exe": None}
+    r = Resposta(store, inc, processos=None, persistencia=PersistenciaEspia(),
+                 hash_fn=lambda p: {k.lower(): v for k, v in disco.items()}[str(p).lower()])   # NTFS ignora a caixa
+    sha, motivo = r.sha_para_encerrar(ProcessoInfo(100, 1, EXE, 1.0))
+    assert sha is None and "mudou desde a detecção" in motivo     # trocado no disco: não confirma
+    disco[EXE] = SHA
+    assert r.sha_para_encerrar(ProcessoInfo(100, 1, EXE.upper(), 1.0)) == (SHA, None)
+    assert r.sha_para_encerrar(ProcessoInfo(101, 1, r"C:\Users\ana\proj\tool.exe", 1.0)) == ("c" * 64, None)
+    sha, motivo = r.sha_para_encerrar(ProcessoInfo(102, 1, r"C:\Users\ana\proj\x.exe", 1.0))
+    assert sha is None and "ler o executável" in motivo
+    assert r.sha_para_encerrar(ProcessoInfo(103, 1, None, 1.0))[0] is None
+
+
 def test_marcar_credencial_persiste_e_valida(tmp_path):
     store, inc = _inc(tmp_path)
     r = Resposta(store, inc, processos=None, persistencia=PersistenciaEspia())

@@ -426,7 +426,16 @@ class IncidentPanel(QWidget):
         if update_combo:
             self.reload_list(select_id=inc_id)
             return
+        self._detectar()
         self._render_current()
+
+    def _detectar(self) -> None:
+        """Detecção cara (schtasks, todos os processos, hashes): só ao abrir o incidente e no Atualizar."""
+        if self._inc is None:
+            return
+        resp = self._resposta(self._inc)
+        self._detected_procs = resp.detectar_processos()
+        self._detected_pers = resp.detectar_persistencia()
 
     def refresh(self) -> None:
         if self._inc is None:
@@ -456,6 +465,8 @@ class IncidentPanel(QWidget):
         acao = self._resposta(self._inc).encerrar_processo(pid, exe, sha256, modo="guiada")
         if acao.resultado == "falhou":
             self._notify(acao.detalhe)
+        encerrados = set(acao.alvo.get("encerrados") or ())
+        self._detected_procs = [p for p in self._detected_procs if p.pid not in encerrados]
         self._render_current()
         return acao
 
@@ -511,8 +522,19 @@ class IncidentPanel(QWidget):
         acao = self._resposta(self._inc).remover_persistencia(entrada, modo="guiada")
         if acao.resultado == "falhou":
             self._notify(acao.detalhe)
+        else:
+            self._detected_pers = [e for e in self._detected_pers if e != entrada]
         self._render_current()
         return acao
+
+    def _salvar_ou_avisar(self, acao: Acao) -> bool:
+        """Grava o incidente; se não der (disco cheio, arquivo travado), anota na ação em vez de levantar."""
+        try:
+            self._store.salvar(self._inc)
+        except IncidentError as e:
+            acao.detalhe += f" Aviso: {e}"
+            return False
+        return True
 
     def undo_action_step(self, indice: int) -> Acao:
         assert self._inc is not None
@@ -538,7 +560,7 @@ class IncidentPanel(QWidget):
             if orig.desfeita or orig.resultado != "concluida" or not orig.alvo.get("quarantine_id"):
                 nova.resultado = "falhou"
                 nova.detalhe = "Esta ação já foi desfeita." if orig.desfeita else "Esta ação não pode ser desfeita."
-                self._store.salvar(self._inc)
+                self._salvar_ou_avisar(nova)
                 self._notify(nova.detalhe)
                 self._render_current()
                 return nova
@@ -546,14 +568,15 @@ class IncidentPanel(QWidget):
                 dest = self._quarantine.restore(str(orig.alvo["quarantine_id"]))
             except QuarantineError as e:
                 nova.resultado, nova.detalhe = "falhou", str(e)
-                self._store.salvar(self._inc)
+                self._salvar_ou_avisar(nova)
                 self._notify(str(e))
                 self._render_current()
                 return nova
             orig.desfeita = True
             nova.resultado = "concluida"
             nova.detalhe = f"Arquivo restaurado em {_visivel(str(dest))}."
-            self._store.salvar(self._inc)
+            if not self._salvar_ou_avisar(nova):
+                self._notify(nova.detalhe)
             self._on_quarantine_changed()
             self._render_current()
             return nova
@@ -623,9 +646,6 @@ class IncidentPanel(QWidget):
             f"{len(inc.achados)} achado(s) · Aberto em {inc.criado.replace('T', ' ')}"
         )
 
-        resp = self._resposta(inc)
-        self._detected_procs = resp.detectar_processos()
-        self._detected_pers = resp.detectar_persistencia()
         tem_guard = bool(self.guard_available())
 
         self._render_conter(inc, tem_guard)
@@ -635,25 +655,17 @@ class IncidentPanel(QWidget):
 
     def _render_conter(self, inc: Incidente, tem_guard: bool) -> None:
         _limpar_layout(self._lay_conter)
-        sha_padrao = next(
-            (str(a["sha256"]) for a in inc.achados if isinstance(a.get("sha256"), str) and len(a["sha256"]) == 64),
-            "",
-        )
 
         # 1. Processos suspeitos em execução
         if self._detected_procs:
+            resp = self._resposta(inc)
             for proc in self._detected_procs:
-                sha_proc = sha_padrao
-                if proc.exe:
-                    from mandacaru_win.incident import sha256_arquivo
-
-                    sha_disco = sha256_arquivo(Path(proc.exe))
-                    if sha_disco:
-                        sha_proc = sha_disco
+                # O SHA-256 vem do achado; o do disco só vale quando nenhum achado fala deste executável.
+                sha_proc, motivo = resp.sha_para_encerrar(proc)
                 btn_kill = style_button(QPushButton("Encerrar processo"), "danger", compact=True)
-                if not sha_proc or not proc.exe:
+                if sha_proc is None:
                     btn_kill.setEnabled(False)
-                    btn_kill.setToolTip("Não foi possível confirmar o caminho/SHA-256 deste processo.")
+                    btn_kill.setToolTip(motivo or "Não foi possível confirmar este processo.")
                 else:
                     btn_kill.clicked.connect(
                         lambda _=False, pid=proc.pid, ex=proc.exe, sh=sha_proc: self.kill_process_step(pid, ex, sh)
@@ -663,7 +675,8 @@ class IncidentPanel(QWidget):
                     f"Encerrar processo ativo (PID {proc.pid})",
                     _criar_selo("pending", "Pendente"),
                     descricao=_visivel(Path(proc.exe).name if proc.exe else f"PID {proc.pid}"),
-                    detalhes=[f"PID: {proc.pid}", f"Executável: {proc.exe or 'desconhecido'}", f"SHA-256: {sha_proc}"],
+                    detalhes=[f"PID: {proc.pid}", f"Executável: {proc.exe or 'desconhecido'}",
+                              f"SHA-256: {sha_proc}" if sha_proc else f"Não confirmado: {motivo}"],
                     botoes=[btn_kill],
                 )
         else:
