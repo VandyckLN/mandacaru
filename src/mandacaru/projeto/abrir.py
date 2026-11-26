@@ -21,10 +21,17 @@ _BAIXADOR = re.compile(
     r"|\bcertutil\s+-urlcache|Net\.WebClient|DownloadString|DownloadFile",
     re.IGNORECASE,
 )
+_CAMINHO = r"(?:/[\w.-]{1,100}){0,10}/"  # /bin/, /usr/bin/
+# sudo -E, env A=1, /usr/bin/env ... entre o pipe e o interpretador
+_PREFIXO = (rf"(?:{_CAMINHO})?(?:sudo|env|exec|command|nohup|doas)"
+            r"(?:\s+(?:-{1,2}[\w=-]{1,30}|\w{1,30}=\S{0,200})){0,10}\s+")
+_INTERPRETADOR = r"(?:sh|bash|zsh|dash|ksh|python[\d.]{0,5}|node|perl|ruby|pwsh|powershell|iex)\b"
 _EXECUTOR = re.compile(
-    r"\|\s*(?:sudo\s+)?(?:sh|bash|zsh|dash|python3?|node|pwsh|powershell|iex)\b"
+    rf"\|\s*(?:{_PREFIXO}){{0,3}}(?:{_CAMINHO})?{_INTERPRETADOR}"
     r"|\b(?:iex|Invoke-Expression)\b"
-    r"|(?:&&|;)\s*(?:(?:sh|bash)\b|chmod\s+\+x|\./)",
+    r"|(?:&&|;)\s*(?:(?:sh|bash)\b|chmod\s+\+x|\./)"
+    # bash -c "$(curl ...)", sh <(curl ...), source <(curl ...)
+    r"|\b(?:sh|bash|zsh|dash|ksh|source)\s+(?:-[a-zA-Z]{1,10}\s+){0,5}(?:<\(|[\"']?\$\(|[\"']?`)",
     re.IGNORECASE,
 )
 _B64_SHELL = re.compile(
@@ -54,6 +61,32 @@ def baixa_e_executa(cmd: str) -> bool:
     if _B64_PS.search(cmd) and _B64_PS_EXEC.search(cmd):
         return True
     return bool(_B64_NODE.search(cmd) and _B64_NODE_EXEC.search(cmd))
+
+
+def _logicas(texto: str):
+    """Linhas logicas de um script (junta continuacoes com barra invertida)."""
+    acc: list[str] = []
+    for linha in texto.splitlines():
+        if linha.endswith("\\"):
+            acc.append(linha[:-1])
+            continue
+        acc.append(linha)
+        yield "".join(acc)
+        acc = []
+    if acc:
+        yield "".join(acc)
+
+
+def linha_perigosa(texto: str) -> str | None:
+    """Primeira linha (logica) de um arquivo de script que baixa e executa, ou None.
+
+    Um arquivo e avaliado linha a linha: um hook grande nao vira suspeito so pelo tamanho, e um
+    `curl` numa linha nao se junta a um `| python` em outra.
+    """
+    for linha in _logicas(texto):
+        if baixa_e_executa(linha):
+            return linha
+    return None
 
 
 def _comando_texto(cmd: object, args: object) -> str:
@@ -97,13 +130,29 @@ def _nome_versao(ecossistema: str, arg: str) -> tuple[str, str]:
     return nome, versao if _VERSAO_EXATA.fullmatch(versao) else ""
 
 
+def _programa(comando: str) -> str:
+    """`C:\\...\\npx.cmd` -> `npx`."""
+    nome = re.split(r"[/\\]", comando)[-1].lower()
+    for ext in (".cmd", ".exe", ".bat", ".ps1"):
+        if nome.endswith(ext):
+            return nome[: -len(ext)]
+    return nome
+
+
+def _sem_cmd_c(comando: object, args: object) -> tuple[object, object]:
+    """`cmd /c npx ...` (Windows) -> `npx ...`."""
+    if (isinstance(comando, str) and _programa(comando) == "cmd" and isinstance(args, list) and len(args) >= 2
+            and isinstance(args[0], str) and args[0].lower() == "/c"):
+        return args[1], args[2:]
+    return comando, args
+
+
 def pacotes_mcp(texto_json: object) -> list[tuple[str, str, str]]:
     """(ecossistema, nome, versao) dos servidores `npx` (npm) e `uvx` (PyPI)."""
     achados: list[tuple[str, str, str]] = []
     for _, srv in _servidores(texto_json):
-        comando = srv.get("command")
-        eco = {"npx": "npm", "uvx": "PyPI"}.get(comando) if isinstance(comando, str) else None
-        args = srv.get("args")
+        comando, args = _sem_cmd_c(srv.get("command"), srv.get("args"))
+        eco = {"npx": "npm", "uvx": "PyPI"}.get(_programa(comando)) if isinstance(comando, str) else None
         if eco is None or not isinstance(args, list):
             continue
         pacote = next((a for a in args if isinstance(a, str) and a and not a.startswith("-")), None)
@@ -199,6 +248,9 @@ def _settings_vscode(rel: str, ln: Linhas, dados: object) -> list[Achado]:
 
 # --- Claude ----------------------------------------------------------------
 
+_BASH_AMPLO = frozenset({"Bash", "Bash(*)", "Bash(*:*)", "Bash(sh:*)", "Bash(bash:*)", "Bash(curl:*)",
+                         "Bash(wget:*)"})
+
 def _claude(rel: str, ln: Linhas, dados: object) -> list[Achado]:
     if not isinstance(dados, dict):
         return []
@@ -222,12 +274,31 @@ def _claude(rel: str, ln: Linhas, dados: object) -> list[Achado]:
                         Severity.HIGH if grave else Severity.MEDIUM, rel,
                         f"hook '{evento}' do agente executa um comando do projeto", ln, cmd,
                         str(evento)))
+    # Rodam sozinhos, sem pedir: a linha de status a cada resposta e o apiKeyHelper ao autenticar.
+    status = dados.get("statusLine")
+    automaticos = [("statusLine", status.get("command") if isinstance(status, dict) else None),
+                   ("apiKeyHelper", dados.get("apiKeyHelper"))]
+    for chave, cmd in automaticos:
+        if not isinstance(cmd, str) or not cmd.strip():
+            continue
+        grave = baixa_e_executa(cmd) or bool(_CREDENCIAIS.search(cmd))
+        saida.append(_achado(
+            "projeto.abrir.hook_agente", Severity.HIGH if grave else Severity.MEDIUM, rel,
+            f"'{chave}' do agente executa um comando do projeto automaticamente", ln, cmd, chave))
     perm = dados.get("permissions")
     allow = perm.get("allow") if isinstance(perm, dict) else None
-    if isinstance(allow, list) and any(a in ("Bash", "Bash(*)") for a in allow if isinstance(a, str)):
+    amplas = [a for a in allow if isinstance(a, str) and a.replace(" ", "") in _BASH_AMPLO] \
+        if isinstance(allow, list) else []
+    if amplas:
         saida.append(_achado(
             "projeto.abrir.permissao_ampla", Severity.MEDIUM, rel,
-            "o projeto libera qualquer comando Bash para o agente", ln, "Bash", "allow"))
+            "o projeto libera para o agente comandos Bash amplos (shell, download ou qualquer comando)",
+            ln, amplas[0], "allow"))
+    if isinstance(perm, dict) and perm.get("defaultMode") == "bypassPermissions":
+        saida.append(_achado(
+            "projeto.abrir.permissao_ampla", Severity.MEDIUM, rel,
+            "o projeto desliga os pedidos de permissão do agente (bypassPermissions)", ln,
+            "bypassPermissions", "defaultMode"))
     if dados.get("enableAllProjectMcpServers") is True:
         saida.append(_achado(
             "projeto.abrir.permissao_ampla", Severity.MEDIUM, rel,
@@ -329,11 +400,11 @@ def verificar_git(raiz: Path) -> list[Achado]:
         except OSError:
             continue
         conteudo = ler_texto(alvo) or ""
-        sev = Severity.HIGH if baixa_e_executa(conteudo) else Severity.MEDIUM
+        perigosa = linha_perigosa(conteudo)
         saida.append(Achado(
-            "projeto.abrir.git_hook", sev, f".git/hooks/{nome}",
+            "projeto.abrir.git_hook", Severity.HIGH if perigosa else Severity.MEDIUM, f".git/hooks/{nome}",
             "hook do git presente: roda em comandos como commit, checkout e push",
-            None, conteudo[:300].strip(), MITRE))
+            None, (perigosa or conteudo[:300]).strip(), MITRE))
     config = ler_texto(Path(raiz) / ".git" / "config")
     if config:
         linhas = Linhas(config)

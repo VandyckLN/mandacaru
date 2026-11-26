@@ -17,7 +17,7 @@ except ModuleNotFoundError:  # Python 3.10
 from ..detectors.static import script_heuristics
 from ..events import Severity
 from . import jsonc
-from .abrir import baixa_e_executa
+from .abrir import baixa_e_executa, linha_perigosa
 from .achado import Achado, ArquivoIlegivel
 from .percurso import Linhas, ler_texto
 
@@ -31,6 +31,10 @@ _NODE_E = re.compile(r"\bnode\s{1,20}(?:-{1,2}[\w-]{1,30}\s{1,20}){0,5}?(?:-e|--
 _NODE_E_B64 = re.compile(r"base64|atob|Buffer\.from")
 _NODE_ARQ = re.compile(
     r"\bnode\s{1,20}(?:-{1,2}[\w-]{1,30}\s{1,20}){0,5}[\"']?([^\s\"';&|<>]{1,300}\.(?:[mc]?js))\b")
+
+_SH_ARQ = re.compile(
+    r"(?:\b(?:ba|z|da|k)?sh\s{1,20}(?:-{1,2}[\w-]{1,30}\s{1,20}){0,5}[\"']?|(?<![\w./-])(?=\./))"
+    r"([^\s\"';&|<>]{1,300})")
 
 _PY_REDE = {"urllib", "requests", "socket", "httpx"}
 _PY_CHAMADA_CMD = {"os.system", "os.popen"}
@@ -78,20 +82,34 @@ def _sem_links(raiz: str, alvo: str) -> bool:
     return True
 
 
-def _script_node_suspeito(raiz: Path, rel: str, cmd: str) -> bool:
+def _ler_do_projeto(raiz: Path, rel: str, caminho: str) -> str | None:
+    """Arquivo citado num script do package.json: só dentro da raiz, sem links em nenhum componente."""
+    if "\x00" in caminho:
+        return None
     base = os.path.abspath(raiz)
     pasta = os.path.join(base, *rel.split("/")[:-1])
+    alvo = os.path.normpath(os.path.join(pasta, caminho))
+    try:
+        if os.path.commonpath([base, alvo]) != base or alvo == base or not _sem_links(base, alvo):
+            return None
+    except ValueError:
+        return None
+    return ler_texto(Path(alvo))
+
+
+def _script_node_suspeito(raiz: Path, rel: str, cmd: str) -> bool:
     for m in islice(_NODE_ARQ.finditer(cmd), 5):
-        if "\x00" in m.group(1):
-            continue
-        alvo = os.path.normpath(os.path.join(pasta, m.group(1)))
-        try:
-            if os.path.commonpath([base, alvo]) != base or alvo == base or not _sem_links(base, alvo):
-                continue
-        except ValueError:
-            continue
-        conteudo = ler_texto(Path(alvo))
+        conteudo = _ler_do_projeto(raiz, rel, m.group(1))
         if conteudo and script_heuristics(Path("alvo.js"), conteudo.encode("utf-8", "replace")):
+            return True
+    return False
+
+
+def _script_shell_suspeito(raiz: Path, rel: str, cmd: str) -> bool:
+    """`bash x.sh`, `sh x.sh`, `./x.sh`: lê o script e procura, linha a linha, baixa-e-executa."""
+    for m in islice(_SH_ARQ.finditer(cmd), 5):
+        conteudo = _ler_do_projeto(raiz, rel, m.group(1))
+        if conteudo and linha_perigosa(conteudo) is not None:
             return True
     return False
 
@@ -115,6 +133,7 @@ def _npm(raiz: Path, rel: str, texto: str) -> list[Achado]:
             baixa_e_executa(cmd)
             or bool(_NODE_E.search(avaliado) and _NODE_E_B64.search(avaliado))
             or _script_node_suspeito(raiz, rel, avaliado)
+            or _script_shell_suspeito(raiz, rel, avaliado)
         )
         saida.append(Achado(
             "projeto.instalar.script_npm",

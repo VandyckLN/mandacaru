@@ -14,6 +14,8 @@ EXT_CODIGO = frozenset(SCRIPT_EXT) | {
 }
 
 _TAGS = re.compile("[\U000e0000-\U000e007f]+")
+# Seletores de variação: um só (U+FE0F) faz parte de emoji; três ou mais seguidos escondem dados.
+_SELETORES = re.compile("[\ufe00-\ufe0f\U000e0100-\U000e01ef]{3,}")
 _LARGURA_ZERO = re.compile("[\u200b\u200c\u200d\u2060\ufeff]{3,}")
 _BIDI = re.compile("[\u202a-\u202e\u2066-\u2069]")
 _BANDEIRA = "\U0001f3f4"
@@ -31,6 +33,10 @@ def trechos_tags(texto: str) -> list[int]:
         for m in _TAGS.finditer(texto)
         if len(m.group()) >= 12 or texto[m.start() - 1 : m.start()] != _BANDEIRA
     ]
+
+
+def trechos_seletores(texto: str) -> list[int]:
+    return [m.start() for m in _SELETORES.finditer(texto)]
 
 
 def trechos_largura_zero(texto: str) -> list[int]:

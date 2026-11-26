@@ -8,14 +8,17 @@ from pathlib import Path, PurePosixPath
 from ..events import Severity
 from .achado import LIMITE_TRECHO, Achado, Limitador
 from .percurso import Linhas
-from .unicode import trechos_largura_zero, trechos_tags
+from .unicode import trechos_largura_zero, trechos_seletores, trechos_tags
 
 NOMES_AGENTE = frozenset({
-    "agents.md", "claude.md", "gemini.md",
+    "agents.md", "claude.md", "claude.local.md", "gemini.md",
     ".cursorrules", ".windsurfrules", ".clinerules",
 })
+# Pastas cujo conteudo o agente le como instrucao (todas recursivas, exceto prompts do Copilot).
+_PASTAS_AGENTE = ("/.cursor/rules/", "/.github/instructions/", "/.clinerules/", "/.claude/commands/",
+                  "/.claude/agents/", "/.windsurf/rules/")
 # Lidos sempre pelo orquestrador, mesmo depois do limite de arquivos (pasta -> recursiva?).
-PASTAS_AGENTE = {".cursor/rules": True, ".github/instructions": True}
+PASTAS_AGENTE = {**{p.strip("/"): True for p in _PASTAS_AGENTE}, ".github/prompts": False}
 ARQUIVOS_AGENTE = (".github/copilot-instructions.md",)
 
 FRASES: tuple[str, ...] = (
@@ -70,10 +73,9 @@ def eh_arquivo_agente(rel: str) -> bool:
         return True
     caminho = "/" + "/".join(p.lower() for p in partes)
     return (
-        "/.cursor/rules/" in caminho
-        or caminho == "/.github/copilot-instructions.md"
+        any(p in caminho for p in _PASTAS_AGENTE)
         or caminho.endswith("/.github/copilot-instructions.md")
-        or "/.github/instructions/" in caminho
+        or ("/.github/prompts/" in caminho and caminho.endswith(".prompt.md"))
     )
 
 
@@ -144,12 +146,16 @@ def verificar(raiz: Path, rel: str, texto: str) -> list[Achado]:
         if lim.cabe(rel, regra):
             lim.add(Achado(regra, sev, rel, explicacao, linha, _trecho(texto, pos), mitre))
 
+    # Unicode Tags e seletores de variação em sequência não têm uso legítimo em texto: qualquer arquivo.
+    # Largura zero aparece em textos comuns; só conta onde o agente lê.
+    sev = Severity.HIGH if agente else Severity.MEDIUM
+    ocultos = trechos_tags(texto) + trechos_seletores(texto)
     if agente or lido:
-        sev = Severity.HIGH if agente else Severity.MEDIUM
-        for pos in sorted(trechos_tags(texto) + trechos_largura_zero(texto)):
-            add("projeto.agente.unicode_oculto", sev, pos,
-                "caracteres Unicode invisíveis em arquivo lido por agentes de IA: "
-                "podem esconder instruções que o humano não vê", ("T1027", "T1204"))
+        ocultos += trechos_largura_zero(texto)
+    for pos in sorted(ocultos):
+        add("projeto.agente.unicode_oculto", sev, pos,
+            "caracteres Unicode invisíveis que podem esconder instruções para agentes de IA "
+            "que o humano não vê", ("T1027", "T1204"))
 
     norm, mapa = _normalizar(texto)
     for frase in FRASES:
