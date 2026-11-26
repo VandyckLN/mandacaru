@@ -23,7 +23,6 @@ import json
 import logging
 import ntpath
 import os
-import re
 import sys
 import threading
 import uuid
@@ -47,18 +46,19 @@ from mandacaru_win.guard_protocol import (
 )
 from mandacaru_win.incident import sha256_arquivo
 from mandacaru_win.incident_persist import (
+    CHAVE_RUN_HKLM,
+    CHAVE_RUNONCE_HKLM,
     LIMITE_INICIALIZAR,
     _embaralhar,
     _nome_seguro,
     _nome_tarefa_valido,
+    programa_de_comando,
 )
 from mandacaru_win.incident_proc import Processos, encerrar_arvore
 from mandacaru_win.quarantine import _xor
 from mandacaru_win.store import _atomic_write_json
 
 NOME_SERVICO = "MandacaruGuard"
-CHAVE_RUN_HKLM = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
-CHAVE_RUNONCE_HKLM = CHAVE_RUN_HKLM + "Once"
 _CHAVES_HKLM = {"hklm_run": CHAVE_RUN_HKLM, "hklm_runonce": CHAVE_RUNONCE_HKLM}
 _CHAVE_SERVICOS = "SYSTEM\\CurrentControlSet\\Services\\"
 _INICIO = {2: "auto", 3: "demand", 4: "disabled"}
@@ -408,22 +408,6 @@ class AcoesGuard:
             return resposta_erro(f"Não foi possível remover a tarefa: {exibivel(saida.strip(), 300)}")
         return resposta_ok(id=bid)
 
-    def _programa_do_servico(self, imagem: str) -> str:
-        """Executável de um ImagePath ("…\\svc.exe" -k x, %SystemRoot%\\…, \\SystemRoot\\…, System32\\…)."""
-        s = imagem.strip()
-        if s.startswith('"'):
-            prog = s[1:].split('"', 1)[0]
-        else:
-            m = re.match(r"(.+?\.(?:exe|sys|dll))(?=\s|$)", s, re.IGNORECASE)
-            prog = m.group(1) if m else s.split(" ", 1)[0]
-        raiz = self._amb.system_root
-        prog = re.sub(r"(?i)^\\\?\?\\", "", prog)
-        prog = re.sub(r"(?i)%(systemroot|windir)%", lambda _m: raiz, prog)
-        prog = re.sub(r"(?i)^\\systemroot\\", lambda _m: raiz + "\\", prog)
-        if not re.match(r"[A-Za-z]:[\\/]", prog):
-            prog = ntpath.join(raiz, prog.lstrip("\\"))
-        return prog
-
     def _remover_servico(self, nome: str) -> dict:
         vals = {n: v for n, v, _t in self._registro.valores(_CHAVE_SERVICOS + nome)}
         imagem, tipo_svc, inicio = vals.get("ImagePath"), vals.get("Type"), vals.get("Start")
@@ -431,7 +415,7 @@ class AcoesGuard:
             return resposta_erro("Serviço não encontrado.")
         if tipo_svc & 0x3:
             return resposta_erro("Drivers não são alterados pelo serviço.")
-        if proibido(self._programa_do_servico(imagem), self._amb):
+        if proibido(programa_de_comando(imagem, self._amb.system_root), self._amb):
             return resposta_erro("Serviço do Windows: o serviço não o desativa.")
         if inicio not in _INICIO:
             return resposta_erro("Tipo de início do serviço não suportado.")
