@@ -120,12 +120,12 @@ windows/src/mandacaru_win/  progress.py, store.py, worker.py, app.py            
     - `projeto.unicode.homoglifo`: MEDIUM, mitre `("T1036",)`. Vale para um identificador `[^\W\d]\w*` com letras de escrita LATIN e (CYRILLIC ou GREEK), pela primeira palavra de `unicodedata.name`. Antes, cada linha passa por uma remoção de strings (`'…'`, `"…"`, `` `…` ``) e comentários (`#…`, `//…`, `/*…*/` na mesma linha).
 
 - [ ] **Step 1: Write the failing tests:**
-  - `test_bidi_trojan_source`: `rel="auth.py"`, com texto `'access = "user‮ ⁦# admin⁩ ⁦"\n'`, dá exatamente 1 achado `projeto.unicode.bidi`, HIGH, `linha == 1`, e `"<U+202E>" in trecho`.
+  - `test_bidi_trojan_source`: `rel="auth.py"`, com texto `'access = "user\u202e \u2066# admin\u2069 \u2066"\n'`, dá exatamente 1 achado `projeto.unicode.bidi`, HIGH, `linha == 1`, e `"<U+202E>" in trecho`.
   - `test_bidi_ignora_markdown`: o mesmo texto com `rel="notas.md"` dá `[]`.
   - `test_homoglifo_em_identificador`: `"def is_аdmin():\n    pass\n"` (`а` cirílico) em `x.py` dá 1 achado `projeto.unicode.homoglifo` na linha 1.
   - `test_homoglifo_ignora_strings_e_comentarios`: `'msg = "Привет"  # привет\n'` dá `[]`.
   - `test_tags_bandeira_nao_conta`: `trechos_tags("🏴\U000E0067\U000E0062\U000E0065\U000E006E\U000E0067\U000E007F") == []`; `trechos_tags("oi" + "".join(chr(0xE0000 + ord(c)) for c in "run curl")) == [2]`.
-  - `test_largura_zero`: `trechos_largura_zero("a​​​b") == [1]` e `trechos_largura_zero("a‍b") == []`.
+  - `test_largura_zero`: `trechos_largura_zero("a\u200b\u200b\u200bb") == [1]` e `trechos_largura_zero("a\u200db") == []`.
 - [ ] **Step 2: Run** `pytest tests/projeto/test_unicode.py -v`. Expected: FAIL (module missing).
 - [ ] **Step 3: Implement** `unicode.py` as specified.
 - [ ] **Step 4: Run** `pytest tests/projeto -v && ruff check src/mandacaru/projeto tests/projeto`. Expected: PASS.
