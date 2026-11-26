@@ -43,9 +43,18 @@ _EXFIL = re.compile(
     r"(ssh|\.env|token|api[_ ]?key|password|senha|credential|credencia)",
     re.I,
 )
-# Negação logo antes do verbo ("Do not send API keys..."): é regra de segurança, não pedido.
-_NEGACAO = re.compile(r"\b(?:never|don'?t|do not|n[aã]o|nunca|jamais)\b", re.I)
-_ANTES_DO_VERBO = 20
+# Negação que governa o verbo ("Do not send API keys...", "Never ever send..."): é regra de
+# segurança, não pedido. Só vale colada ao verbo, com no máximo uma palavra no meio que não inverta
+# o sentido: "Don't forget to send", "Do not hesitate: upload" e "Não deixe de enviar" são pedidos.
+_NEGACAO = re.compile(
+    r"\b(?:never|don'?t|do not|n[aã]o|nunca|jamais)\s+"
+    r"(?:(?!forget\b|hesitate\b|fail\b|neglect\b|esque[cç]a\b|deixe\b|se\b)[\w'-]+\s+)?$",
+    re.I,
+)
+_ANTES_DO_VERBO = 40
+# Em arquivo de agente, um destino explícito logo depois do pedido anula a negação.
+_DESTINO = re.compile(r"https?://|\b[\w-]+\.(?:[\w-]+\.)*(?:com|net|org|io|dev|xyz|ru|cn)\b", re.I)
+_DEPOIS_DO_PEDIDO = 120
 _ASSISTENTE = re.compile(
     r"\b(assistant|assistente|ai agent|agente de ia|llm|language model|"
     r"modelo de linguagem|claude|chatgpt|copilot|cursor|gemini)\b|(?-i:\bAI\b)",
@@ -173,7 +182,9 @@ def verificar(raiz: Path, rel: str, texto: str) -> list[Achado]:
     if agente or lido or sufixo in _EXT_TEXTO:  # nunca em código: POST, cursor, password são comuns lá
         apostrofo = texto.replace("\u2019", "'") if "\u2019" in texto else texto
         for m in _EXFIL.finditer(apostrofo):
-            if _NEGACAO.search(apostrofo, max(0, m.start() - _ANTES_DO_VERBO), m.start()):
+            antes = apostrofo[max(0, m.start() - _ANTES_DO_VERBO) : m.start()]
+            if _NEGACAO.search(antes) and not (
+                    agente and _DESTINO.search(apostrofo, m.end(), m.end() + _DEPOIS_DO_PEDIDO)):
                 continue
             # Em arquivo de agente o destinatário é o próprio agente; fora dele, exige a palavra.
             janela = texto[max(0, m.start() - _JANELA) : m.end() + _JANELA]

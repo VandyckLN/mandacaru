@@ -65,11 +65,16 @@ def baixa_e_executa(cmd: str) -> bool:
 
 
 def _logicas(texto: str):
-    """Linhas logicas de um script (junta continuacoes com barra invertida)."""
+    """Linhas logicas de um script: junta continuacoes com barra invertida e linhas que terminam
+    em `|`, `&&` ou `||` (o shell continua o comando na linha seguinte)."""
     acc: list[str] = []
-    for linha in texto.splitlines():
+    for linha in texto.split("\n"):
+        linha = linha.removesuffix("\r")
         if linha.endswith("\\"):
             acc.append(linha[:-1])
+            continue
+        if linha.rstrip().endswith(("|", "&&")):
+            acc.append(linha + " ")
             continue
         acc.append(linha)
         yield "".join(acc)
