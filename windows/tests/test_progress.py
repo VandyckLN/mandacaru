@@ -86,6 +86,19 @@ def test_done_shred_count_and_download_texts():
     assert pg.download_text(5 * MB, 0) == "5 MB"
 
 
+def test_project_texts():
+    assert pg.projeto_text(312, 900) == "Verificando projeto · 312 de 900 arquivos · 35%"
+    assert pg.projeto_text(1, 1) == "Verificando projeto · 1 de 1 arquivo · 100%"
+    assert pg.consulta_text(1) == "Consultando bibliotecas no OSV.dev · 1 pacote"
+    assert pg.consulta_text(240) == "Consultando bibliotecas no OSV.dev · 240 pacotes"
+    assert pg.consulta_text(1500) == "Consultando bibliotecas no OSV.dev · 1.500 pacotes"
+    assert pg.projeto_done_text(900, 1, True) == "Projeto verificado · 900 arquivos · 1 achado"
+    assert pg.projeto_done_text(900, 3, True) == "Projeto verificado · 900 arquivos · 3 achados"
+    assert pg.projeto_done_text(1, 0, True) == "Projeto verificado · 1 arquivo · 0 achados"
+    assert pg.projeto_done_text(312, 0, False) == "Interrompida · 312 arquivos verificados"
+    assert pg.projeto_done_text(1, 0, False) == "Interrompida · 1 arquivo verificado"
+
+
 # ---------- widget ----------
 def test_bar_shows_caption_and_falls_back_to_percent(app):
     bar = keep(MandacaruProgressBar())

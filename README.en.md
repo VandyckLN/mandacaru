@@ -154,6 +154,27 @@ cymru = true
 
 `config.toml` is installed as `0640`, because it may hold API keys. A non-root user running without `--config` (for example `mandacaru scan` or `quarentena listar`) gets a warning and continues with the default configuration; an unreadable `--config` or an invalid config is still an error.
 
+## Check a project (developers)
+
+Before opening a downloaded repository in your editor or running `npm install`, see what it does on its own:
+
+```bash
+mandacaru dev ./project            # online: queries OSV.dev and CISA KEV
+mandacaru dev ./project --sem-rede # files only, nothing leaves the machine
+mandacaru --json findings.jsonl dev ./project
+```
+
+- **Instructions for AI agents**: `AGENTS.md`, `CLAUDE.md`, `.cursorrules` and friends containing prompt-injection phrases, requests to send secrets out, hidden HTML comments or invisible Unicode.
+- **Runs when the folder is opened**: VS Code `folderOpen` tasks, MCP servers, Claude Code hooks and broad permissions, devcontainers and Git hooks.
+- **Runs when dependencies are installed**: npm `postinstall`/`preinstall`, `setup.py` and local build backends.
+- **Deceptive Unicode in code**: bidirectional characters and homoglyphs in source files (Trojan Source).
+- **GitHub Actions**: unsafe `pull_request_target`, expression injection and steps that download and run remote code.
+- **Libraries**: versions pinned in lockfiles (npm, pnpm, yarn, Poetry, uv, Pipenv, `requirements*.txt`) and MCP server packages, checked against OSV.dev and CISA KEV.
+
+What leaves the machine: only the ecosystem, name and version of each library, sent to OSV.dev (the KEV catalog is downloaded whole). No paths, file contents or user names. With `--sem-rede` ("no network") nothing is sent and no cache is written; `--cache-dir` changes the cache folder.
+
+Exit code: `0` when there is no `HIGH` or `CRITICAL` finding (medium findings and the "Para conhecimento" ones do not block), `2` when there is, and `1` for a usage error such as a missing folder.
+
 ## Vulnerabilities (CVEs)
 
 > Full guide, with diagrams and FAQ (in Portuguese): [docs/novidades-0.5.md](docs/novidades-0.5.md).

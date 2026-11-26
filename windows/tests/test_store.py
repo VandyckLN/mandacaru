@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from mandacaru_win.scan import ScanSummary
-from mandacaru_win.store import ExcludeList, History, TrustList
+from mandacaru_win.store import ExcludeList, History, IgnoradosProjeto, TrustList
 
 
 def test_trust_add_remove_persists(tmp_path):
@@ -152,3 +152,48 @@ def test_corrupt_excludes_starts_empty_and_keeps_backup(tmp_path):
     p.write_text("{quebrado")
     assert ExcludeList(p).paths() == []
     assert (tmp_path / "excludes.json.corrompido").read_text() == "{quebrado"
+
+
+def test_ignorados_projeto_persiste_por_regra_e_sha(tmp_path):
+    p = tmp_path / "ignorados_projeto.json"
+    ig = IgnoradosProjeto(p)
+    ig.adicionar("r", "abc", Path("C:/proj/AGENTS.md"))
+    ig.adicionar("r", "abc", Path("C:/proj/AGENTS.md"))  # repetido não duplica
+    outra = IgnoradosProjeto(p)
+    assert outra.contem("r", "abc") is True
+    assert outra.contem("r", "outro") is False
+    assert outra.contem("s", "abc") is False
+    assert len(outra.entries()) == 1
+    assert outra.entries()[0]["caminho"] == str(Path("C:/proj/AGENTS.md"))
+
+
+def test_ignorados_projeto_corrompido_gera_backup_e_comeca_vazio(tmp_path):
+    p = tmp_path / "ignorados_projeto.json"
+    p.write_text("{quebrado")
+    ig = IgnoradosProjeto(p)
+    assert ig.entries() == [] and ig.contem("r", "abc") is False
+    assert (tmp_path / "ignorados_projeto.json.corrompido").read_text() == "{quebrado"
+
+
+def test_ignorados_projeto_pula_entradas_com_tipo_errado(tmp_path):
+    p = tmp_path / "ignorados_projeto.json"
+    p.write_text(json.dumps([{"regra": "r", "sha256": "abc"}, {"regra": ["x"], "sha256": "abc"},
+                             {"regra": "r", "sha256": {"a": 1}}, 3, "x"]))
+    ig = IgnoradosProjeto(p)
+    assert len(ig.entries()) == 1 and ig.contem("r", "abc")
+
+
+def test_ignorados_projeto_por_chave_de_dependencia(tmp_path):
+    p = tmp_path / "ignorados_projeto.json"
+    ig = IgnoradosProjeto(p)
+    chave = ("npm", "lodash", "4.17.15", "GHSA-1")
+    ig.adicionar_chave("projeto.dep.vulneravel", chave, Path("C:/proj/package-lock.json"))
+    ig.adicionar_chave("projeto.dep.vulneravel", chave, Path("C:/proj/package-lock.json"))
+    outra = IgnoradosProjeto(p)
+    assert len(outra.entries()) == 1
+    assert outra.contem_chave("projeto.dep.vulneravel", chave) is True
+    assert outra.contem_chave("projeto.dep.vulneravel", (*chave, "GHSA-2")) is False
+    assert outra.contem_chave("projeto.dep.malicioso", chave) is False
+    p.write_text(json.dumps([{"regra": "r", "chave": ["a", 1]}, {"regra": "r", "chave": "abc"},
+                             {"regra": "r", "chave": ["a", "b"]}]))
+    assert IgnoradosProjeto(p).entries() == [{"regra": "r", "chave": ["a", "b"]}]

@@ -46,6 +46,8 @@ class OsvClient:
         self.http = http
         self.workers = max(1, workers)
         self.errors: list[str] = []  # detalhes que nao vieram nem da rede nem do cache antigo
+        # ids devolvidos pelo querybatch para cada pacote, mesmo sem o detalhe (ex.: MAL-... sem rede)
+        self.batch_ids: dict[InstalledPackage, list[str]] = {}
         self.cache_db.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -111,13 +113,14 @@ class OsvClient:
         findings: dict[InstalledPackage, list[dict]] = {}
         ids_to_fetch: set[str] = set()
         pkg_to_ids: dict[InstalledPackage, list[str]] = {}
+        self.batch_ids = pkg_to_ids
 
         for i in range(0, len(packages), batch_size):
             chunk = packages[i : i + batch_size]
             payload = {
                 "queries": [
                     {
-                        "version": pkg.version,
+                        **({"version": pkg.version} if pkg.version != "" else {}),
                         "package": {"name": pkg.source_name, "ecosystem": pkg.ecosystem},
                     }
                     for pkg in chunk
@@ -130,7 +133,7 @@ class OsvClient:
                 vulns = entry.get("vulns") or []
                 if not vulns:
                     continue
-                v_ids = [v["id"] for v in vulns if isinstance(v, dict) and "id" in v]
+                v_ids = [v["id"] for v in vulns if isinstance(v, dict) and isinstance(v.get("id"), str)]
                 if v_ids:
                     pkg_to_ids[pkg] = v_ids
                     ids_to_fetch.update(v_ids)

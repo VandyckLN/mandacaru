@@ -75,6 +75,13 @@ def test_control_depende_de_adduser():
     assert "adduser" in (ROOT / "debian" / "control").read_text().split("Package: mandacaru", 1)[1]
 
 
+def test_yaml_e_dependencia():
+    control = (ROOT / "debian" / "control").read_text()
+    assert "python3-yaml" in control.split("Package: mandacaru", 1)[1]
+    assert "python3-yaml" in control.split("Package: mandacaru", 1)[0]
+    assert '"PyYAML>=6"' in (ROOT / "pyproject.toml").read_text().split("dependencies = [", 1)[1].split("]", 1)[0]
+
+
 def test_icone_e_png_64_indexado_e_leve():
     png = (ROOT / "packaging" / "icons" / "64x64" / "mandacaru.png").read_bytes()
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
