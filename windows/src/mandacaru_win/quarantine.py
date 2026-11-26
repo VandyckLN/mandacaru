@@ -1,6 +1,7 @@
 """Quarentena: guarda o arquivo embaralhado e restaura só se o hash conferir."""
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -12,12 +13,13 @@ from datetime import datetime
 from pathlib import Path
 
 from mandacaru_win.scan import Finding
-from mandacaru_win.shred import ShredError, shred_file
+from mandacaru_win.shred import ShredError, _is_link, shred_file
 
 KEY = b"mandacaru-quarentena"
 CHUNK = 1024 * 1024
 _ID_RE = re.compile(r"[0-9a-f]{32}")
 _GONE = "O arquivo não existe mais; varra de novo."
+_LINK_ERR = "Links simbólicos e junções não podem ser movidos para a quarentena."
 
 
 class QuarantineError(Exception):
@@ -99,6 +101,8 @@ class Quarantine:
 
     def add(self, finding: Finding) -> str:
         original = Path(finding.path)
+        if _is_link(original):
+            raise QuarantineError(_LINK_ERR)
         qid = uuid.uuid4().hex
         binp, jsonp = self._paths(qid)
         meta = {
@@ -118,7 +122,11 @@ class Quarantine:
             stage = "ler o arquivo"
             h = hashlib.sha256()
             off = 0
-            with open(original, "rb") as src:
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+            fd = os.open(original, flags)
+            with os.fdopen(fd, "rb") as src:
+                if not stat.S_ISREG(os.fstat(src.fileno()).st_mode):
+                    raise QuarantineError(_LINK_ERR)
                 stage = "gravar na quarentena"
                 with open(binp, "wb") as dst:
                     while True:
@@ -146,11 +154,20 @@ class Quarantine:
             raise QuarantineError(_GONE) from e
         except (OSError, MemoryError) as e:
             self._cleanup(binp, jsonp)
+            if isinstance(e, OSError) and (
+                e.errno in (getattr(errno, "ELOOP", -1), getattr(errno, "EMLINK", -1)) or _is_link(original)
+            ):
+                raise QuarantineError(_LINK_ERR) from e
             if stage == "ler o arquivo":
                 raise QuarantineError(f"Não foi possível ler o arquivo: {e}") from e
             raise QuarantineError(f"Não foi possível gravar na quarentena: {e}") from e
         try:
+            if _is_link(original):
+                raise QuarantineError(_LINK_ERR)
             self._remove_original(original)
+        except QuarantineError:
+            self._cleanup(binp, jsonp)
+            raise
         except FileNotFoundError as e:
             self._cleanup(binp, jsonp)
             raise QuarantineError(_GONE) from e
@@ -166,16 +183,21 @@ class Quarantine:
         try:
             os.remove(original)
             return
-        except PermissionError:
+        except PermissionError as e:
+            if _is_link(original):
+                raise QuarantineError(_LINK_ERR) from e
             # Somente-leitura no Windows: tira o atributo, tenta de novo e, se
             # ainda falhar, devolve o modo original (o arquivo nunca se perde).
-            mode = stat.S_IMODE(os.stat(original).st_mode)
+            mode = stat.S_IMODE(os.lstat(original).st_mode)
             os.chmod(original, mode | stat.S_IWRITE)
+            if _is_link(original):
+                raise QuarantineError(_LINK_ERR) from e
             try:
                 os.remove(original)
             except OSError:
                 try:
-                    os.chmod(original, mode)
+                    if not _is_link(original):
+                        os.chmod(original, mode)
                 except OSError:
                     pass
                 raise
@@ -235,7 +257,7 @@ class Quarantine:
 
         orig = Path(meta["caminho_original"])
         dest, n = orig, 1
-        while dest.exists():
+        while dest.exists() or _is_link(dest):
             suf = " (restaurado)" if n == 1 else f" (restaurado {n})"
             dest = orig.with_name(orig.stem + suf + orig.suffix)
             n += 1
@@ -248,7 +270,7 @@ class Quarantine:
                     created = True
                     break
                 except FileExistsError:  # corrida: outro processo criou o nome
-                    suf = f" (restaurado {n})"
+                    suf = " (restaurado)" if n == 1 else f" (restaurado {n})"
                     dest = orig.with_name(orig.stem + suf + orig.suffix)
                     n += 1
             with out, open(binp, "rb") as src:
