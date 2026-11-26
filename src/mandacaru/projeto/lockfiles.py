@@ -134,9 +134,14 @@ def _package_lock(rel: str, texto: str):
     return c.resultado()
 
 
+def _nos_yaml(texto: str) -> int:
+    """Lockfile grande tem muitos nos legitimos; o teto acompanha o tamanho (cada no ocupa caracteres)."""
+    return max(yamlseguro.MAX_NOS, len(texto))
+
+
 def _pnpm(rel: str, texto: str):
     c = _Coletor("npm", rel)
-    dados = yamlseguro.carregar(texto, rel)
+    dados = yamlseguro.carregar(texto, rel, max_nos=_nos_yaml(texto))
     pacotes = dados.get("packages") if isinstance(dados, dict) else None
     if not isinstance(pacotes, dict):
         return c.resultado()
@@ -196,7 +201,7 @@ def _yarn_v1(rel: str, texto: str):
 
 def _yarn_berry(rel: str, texto: str):
     c = _Coletor("npm", rel)
-    dados = yamlseguro.carregar(texto, rel)
+    dados = yamlseguro.carregar(texto, rel, max_nos=_nos_yaml(texto))
     if not isinstance(dados, dict):
         return c.resultado()
     for chave, ent in dados.items():

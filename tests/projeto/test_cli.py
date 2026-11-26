@@ -52,3 +52,14 @@ def test_cache_nao_e_criado_sem_rede(projeto, tmp_path):
     cache = tmp_path / "cache"
     assert main(["dev", str(raiz), "--sem-rede", "--cache-dir", str(cache)]) == 0
     assert not cache.exists()
+
+
+def test_python_m_mandacaru(projeto):
+    import os
+    import subprocess
+    import sys
+    raiz = projeto({"README.md": "# oi\n", "package.json": "{}"})
+    r = subprocess.run([sys.executable, "-m", "mandacaru", "dev", str(raiz), "--sem-rede"], capture_output=True,
+                       text=True, encoding="utf-8", env={**os.environ, "PYTHONIOENCODING": "utf-8"}, timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert "Nada suspeito encontrado." in r.stdout

@@ -11,7 +11,7 @@ from ..events import Severity
 from ..vuln import KevCache, OsvClient
 from . import abrir, agentes, ci, instalar, jsonc, lockfiles
 from . import unicode as unicode_
-from .achado import Achado, exibivel, limitar
+from .achado import Achado, ArquivoIlegivel, exibivel, limitar
 from .dependencias import ResultadoDeps, verificar_dependencias
 from .lockfiles import Dependencia
 from .percurso import MAX_ARQUIVOS, MAX_BYTES, ler_texto, ler_texto_grande, listar, listar_prioritarios
@@ -59,6 +59,7 @@ class RelatorioProjeto:
     deps: ResultadoDeps = field(default_factory=lambda: ResultadoDeps([], 0, 0, None))
     limite: int = MAX_ARQUIVOS
     lockfiles_nao_lidos: list[tuple[str, str]] = field(default_factory=list)  # (rel, motivo)
+    erros_internos: list[str] = field(default_factory=list)  # falha inesperada (não é sintaxe do arquivo)
 
     def avisos(self) -> list[str]:
         """O que ficou de fora da verificação, para o rodapé do CLI e a barra de status do app."""
@@ -67,6 +68,11 @@ class RelatorioProjeto:
             saida.append(f"Verificação incompleta: cortada em {_milhar(self.limite)} arquivos.")
         for rel, motivo in self.lockfiles_nao_lidos:
             saida.append(f"lockfile não lido: {exibivel(rel, None)} ({motivo})")
+        n = len(self.erros_internos)
+        if n == 1:
+            saida.append("1 arquivo não pôde ser analisado por erro interno")
+        elif n > 1:
+            saida.append(f"{_milhar(n)} arquivos não puderam ser analisados por erro interno")
         k = self.deps.detalhes_faltando
         if k == 1:
             saida.append("Aviso: 1 aviso do OSV.dev não pôde ser baixado.")
@@ -96,7 +102,8 @@ def _subir_mcp_malicioso(achados: list[Achado], mcp_deps: list[Dependencia]) -> 
         if not any(m.caminho == dep.origem and m.explicacao.startswith(f"{dep.nome} ") for m in maliciosos):
             continue
         for i, a in enumerate(achados):
-            if a.regra == "projeto.abrir.mcp" and a.caminho == dep.origem and dep.nome in a.trecho:
+            if a.regra == "projeto.abrir.mcp" and a.caminho == dep.origem and a.chave[:2] == (
+                    dep.ecossistema, dep.nome):
                 sobem.add(i)
     return [replace(a, severidade=Severity.HIGH) if i in sobem and a.severidade < Severity.HIGH else a
             for i, a in enumerate(achados)]
@@ -124,6 +131,7 @@ def verificar_projeto(
 
     achados: list[Achado] = []
     ilegiveis: set[str] = set()
+    internos: set[str] = set()
     nao_lidos: list[tuple[str, str]] = []
     deps: list[Dependencia] = []
     mcp_deps: list[Dependencia] = []
@@ -136,6 +144,9 @@ def verificar_projeto(
         if deve_parar():
             parou = True
             break
+        def falhou(exc: Exception, rel: str = rel) -> None:
+            (ilegiveis if isinstance(exc, ArquivoIlegivel) else internos).add(rel)
+
         texto_lock: str | None = None
         if lockfiles.eh_lockfile(rel):
             # Lockfile tem limite próprio (64 MB): cortado não parseia e as dependências sumiriam.
@@ -147,21 +158,22 @@ def verificar_projeto(
                     d, s = lockfiles.ler_lockfile(rel, texto_lock)
                     deps += d
                     sem_versao += s
-                except Exception:  # noqa: BLE001
-                    ilegiveis.add(rel)
-                    nao_lidos.append((rel, "formato inválido"))
+                except Exception as exc:  # noqa: BLE001
+                    falhou(exc)
+                    nao_lidos.append((rel, "formato inválido" if isinstance(exc, ArquivoIlegivel)
+                                      else "erro interno"))
         texto = ler_texto(raiz / rel) if texto_lock is None else texto_lock[:MAX_BYTES]
         if texto is not None:
             arquivos += 1
             for familia in _FAMILIAS:
                 try:
                     achados += familia.verificar(raiz, rel, texto)
-                except Exception:  # noqa: BLE001 - ArquivoIlegivel ou falha inesperada: conta e segue
-                    ilegiveis.add(rel)
+                except Exception as exc:  # noqa: BLE001 - ArquivoIlegivel ou falha inesperada: conta e segue
+                    falhou(exc)
             try:
                 sem_versao += lockfiles.dependencias_sem_lockfile(rel, texto, pastas[posixpath.dirname(rel)])
-            except Exception:  # noqa: BLE001
-                ilegiveis.add(rel)
+            except Exception as exc:  # noqa: BLE001
+                falhou(exc)
             if _eh_mcp(rel):
                 mcp_deps += _pacotes_mcp(rel, texto)
         if ao_progresso is not None:
@@ -169,8 +181,8 @@ def verificar_projeto(
 
     try:
         achados += abrir.verificar_git(raiz)
-    except Exception:  # noqa: BLE001
-        ilegiveis.add(".git")
+    except Exception:  # noqa: BLE001 - verificar_git não levanta ArquivoIlegivel
+        internos.add(".git")
     achados = limitar(achados)  # no máximo 20 por (arquivo, regra) em todas as famílias
 
     if parou or deve_parar():
@@ -185,5 +197,5 @@ def verificar_projeto(
     return RelatorioProjeto(
         raiz=raiz, achados=achados, arquivos=arquivos, cortado=cortado,
         completo=not parou, arquivos_ilegiveis=sorted(ilegiveis), deps=resultado, limite=limite,
-        lockfiles_nao_lidos=nao_lidos,
+        lockfiles_nao_lidos=nao_lidos, erros_internos=sorted(internos),
     )

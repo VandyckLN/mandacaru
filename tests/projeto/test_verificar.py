@@ -176,8 +176,21 @@ def test_excecao_inesperada_nao_derruba(projeto, monkeypatch):
     monkeypatch.setattr(ci, "verificar", quebra)
     raiz = projeto({"a.txt": "x", "AGENTS.md": INJECAO})
     rel = verificar_projeto(raiz, osv=None, kev=None)
-    assert "a.txt" in rel.arquivos_ilegiveis
+    # erro interno é contado à parte, não como arquivo ilegível (antes: arquivos_ilegiveis)
+    assert "a.txt" in rel.erros_internos and rel.arquivos_ilegiveis == []
     assert any(a.regra == "projeto.agente.injecao" for a in rel.achados)
+    from mandacaru.projeto.cli import formatar
+    assert "2 arquivos não puderam ser analisados por erro interno" in formatar(rel)
+
+
+def test_mcp_malicioso_sobe_mesmo_com_trecho_cortado(projeto, tmp_path):
+    srv = {"command": "npx", "args": ["-y", "--" + "x" * 150, "evil-mcp@1.0.2"]}
+    raiz = projeto({".mcp.json": json.dumps({"mcpServers": {"x": srv}})})
+    cache = tmp_path / "c"
+    cache.mkdir()
+    rel = verificar_projeto(raiz, osv=_osv(cache, {"evil-mcp": [{"id": "MAL-2024-1"}]}), kev=_kev(cache))
+    [mcp] = [a for a in rel.achados if a.regra == "projeto.abrir.mcp"]
+    assert "evil-mcp" not in mcp.trecho and mcp.severidade == Severity.HIGH
 
 
 def test_progresso_e_binario_pulado(projeto):

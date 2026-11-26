@@ -26,16 +26,48 @@ def _rodar(projeto, texto, rel=REL):
 
 
 def test_yaml_bomba_de_alias():
-    linhas = ['a: &a ["x","x"]']
+    # "billion laughs" de verdade: 9 níveis x 9 aliases (81 aliases, abaixo do teto de 100) = 9**9 nós
+    # expandidos; o teto de nós (contando o que cada alias expande) recusa rápido.
+    linhas = ['a: &a ["lol","lol","lol","lol","lol","lol","lol","lol","lol"]']
     ant = "a"
     for i in range(1, 9):
         nome = chr(ord("a") + i)
-        linhas.append(f"{nome}: &{nome} [*{ant},*{ant}]")
+        linhas.append(f"{nome}: &{nome} [" + ",".join([f"*{ant}"] * 9) + "]")
         ant = nome
     t0 = time.monotonic()
     with pytest.raises(ArquivoIlegivel):
         yamlseguro.carregar("\n".join(linhas))
     assert time.monotonic() - t0 < 1
+
+
+def test_yaml_aliases_rasos_sao_aceitos_e_tetos():
+    # A antiga "bomba" de 8 níveis x 2 aliases expande para ~1 000 nós: inofensiva, agora é lida.
+    linhas = ['a: &a ["x","x"]']
+    for i in range(1, 9):
+        linhas.append(f"{chr(97 + i)}: &{chr(97 + i)} [*{chr(96 + i)},*{chr(96 + i)}]")
+    assert len(yamlseguro.carregar("\n".join(linhas))["i"]) == 2
+    with pytest.raises(ArquivoIlegivel):  # mais de 100 aliases
+        yamlseguro.carregar("a: &a 1\nb: [" + ",".join(["*a"] * 101) + "]")
+    with pytest.raises(ArquivoIlegivel):  # mais de 100 000 nós
+        yamlseguro.carregar("[" + ",".join(["1"] * 100_001) + "]")
+    assert len(yamlseguro.carregar("[" + ",".join(["1"] * 100_001) + "]", max_nos=200_000)) == 100_001
+
+
+def test_workflow_com_ancora_e_lido(projeto):
+    texto = """on: pull_request_target
+x-checkout: &co
+  uses: actions/checkout@v4
+  with:
+    ref: ${{ github.event.pull_request.head.sha }}
+jobs:
+  a:
+    runs-on: x
+    steps:
+      - *co
+      - run: echo ok
+"""
+    assert [(a.regra, a.severidade) for a in _rodar(projeto, texto)] == [
+        ("projeto.ci.pull_request_target", Severity.HIGH)]
 
 
 def test_yaml_aninhamento_absurdo():

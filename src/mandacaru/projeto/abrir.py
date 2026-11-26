@@ -5,6 +5,7 @@ import json
 import os
 import re
 import stat
+from dataclasses import replace
 from pathlib import Path
 
 from ..events import Severity
@@ -151,14 +152,19 @@ def pacotes_mcp(texto_json: object) -> list[tuple[str, str, str]]:
     """(ecossistema, nome, versao) dos servidores `npx` (npm) e `uvx` (PyPI)."""
     achados: list[tuple[str, str, str]] = []
     for _, srv in _servidores(texto_json):
-        comando, args = _sem_cmd_c(srv.get("command"), srv.get("args"))
-        eco = {"npx": "npm", "uvx": "PyPI"}.get(_programa(comando)) if isinstance(comando, str) else None
-        if eco is None or not isinstance(args, list):
-            continue
-        pacote = next((a for a in args if isinstance(a, str) and a and not a.startswith("-")), None)
+        pacote = _pacote_do_servidor(srv)
         if pacote is not None:
-            achados.append((eco, *_nome_versao(eco, pacote)))
+            achados.append(pacote)
     return achados
+
+
+def _pacote_do_servidor(srv: dict) -> tuple[str, str, str] | None:
+    comando, args = _sem_cmd_c(srv.get("command"), srv.get("args"))
+    eco = {"npx": "npm", "uvx": "PyPI"}.get(_programa(comando)) if isinstance(comando, str) else None
+    if eco is None or not isinstance(args, list):
+        return None
+    pacote = next((a for a in args if isinstance(a, str) and a and not a.startswith("-")), None)
+    return None if pacote is None else (eco, *_nome_versao(eco, pacote))
 
 
 def _mcp(rel: str, ln: Linhas, dados: object) -> list[Achado]:
@@ -168,10 +174,12 @@ def _mcp(rel: str, ln: Linhas, dados: object) -> list[Achado]:
         if not linha_cmd:
             continue
         sev = Severity.HIGH if baixa_e_executa(linha_cmd) else Severity.LOW
-        saida.append(_achado(
+        achado = _achado(
             "projeto.abrir.mcp", sev, rel,
             f"servidor MCP '{nome}' declarado: o agente o inicia ao abrir o projeto",
-            ln, str(srv.get("command") or ""), nome, trecho=linha_cmd))
+            ln, str(srv.get("command") or ""), nome, trecho=linha_cmd)
+        pacote = _pacote_do_servidor(srv)  # (ecossistema, nome, versão): liga ao achado de dependência
+        saida.append(replace(achado, chave=pacote) if pacote else achado)
     return saida
 
 

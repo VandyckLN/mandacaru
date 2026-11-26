@@ -1,6 +1,4 @@
 """Verificar projeto na janela: arrastar pasta de projeto e botão "Verificar projeto…"."""
-import time
-
 import pytest
 
 pytest.importorskip("PySide6")
@@ -220,23 +218,33 @@ def test_parar_no_meio(app, tmp_path, scanner):
     d = tmp_path / "grande"
     d.mkdir()
     (d / "package.json").write_text("{}")
-    for i in range(3000):
-        (d / f"f{i}.js").write_text("console.log(1)\n")
+    for i in range(300):
+        (d / f"f{i:03}.js").write_text("console.log(1)\n")
     win = make_win(tmp_path, scanner)
-    box = []
-    win.project_finished.connect(box.append)
-    win.start_project_check(d)
-    limite = time.monotonic() + 15
-    while not win.progress.caption().startswith("Verificando projeto") and time.monotonic() < limite:
-        QCoreApplication.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 5)
-    win.stop_scan()                                           # logo após o primeiro progress
-    while not box and time.monotonic() < limite:
-        QCoreApplication.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 5)
-    assert box and box[0].completo is False and box[0].arquivos < 3001
+    chamadas = []
+
+    def para_depois_de_50():                                  # determinístico: para após ~50 arquivos
+        chamadas.append(1)
+        return len(chamadas) > 60
+
+    win.projeto_thread_factory = lambda raiz, cache_dir, excluir: ProjetoThread(
+        raiz, cache_dir, excluir, osv=None, kev=None, deve_parar=para_depois_de_50)
+    rel = verificar(win, d)
+    assert rel is not None and rel.completo is False and 0 < rel.arquivos < 301
     assert win.progress.caption().startswith("Interrompida")
     assert win._proj_thread is None and win._pending_projeto == []
     assert win.btn_folder.isEnabled() and win.btn_project.isEnabled() and not win.btn_stop.isEnabled()
-    assert verificar(win, d) is not None                     # aceita nova verificação
+    win.projeto_thread_factory = sem_rede
+    assert verificar(win, d).completo is True                # aceita nova verificação
+
+
+def test_botao_parar_avisa_a_thread(app, tmp_path, scanner):
+    win = make_win(tmp_path, scanner)
+    t = ProjetoThread(tmp_path, tmp_path / "cache", lambda p: False, osv=None, kev=None)
+    win._proj_thread = t
+    win.stop_scan()
+    assert t._stop is True
+    win._proj_thread = None
 
 
 def test_thread_sem_injecao_cria_clientes_no_cache(app, tmp_path, monkeypatch):

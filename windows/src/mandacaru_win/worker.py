@@ -116,8 +116,9 @@ class ProjetoThread(QThread):
     failed = Signal(str)
 
     def __init__(self, raiz: Path, cache_dir: Path, excluir: Callable[[Path], bool],
-                 osv=_CRIAR, kev=_CRIAR):
+                 osv=_CRIAR, kev=_CRIAR, deve_parar: Callable[[], bool] = lambda: False):
         super().__init__()
+        self._deve_parar = deve_parar  # além do botão Parar (testes injetam uma parada determinística)
         self._raiz = Path(raiz)
         self._cache_dir = Path(cache_dir)
         self._excluir = excluir
@@ -147,7 +148,7 @@ class ProjetoThread(QThread):
                 self._raiz, osv=osv, kev=kev, excluir=self._excluir,
                 ao_progresso=self._emit_progress,
                 ao_consultar=lambda n: self.consultando.emit(n),
-                deve_parar=lambda: self._stop,
+                deve_parar=lambda: self._stop or self._deve_parar(),
             )
             for a in relatorio.achados:
                 if a.caminho not in self.hashes:
