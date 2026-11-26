@@ -65,3 +65,30 @@ def download_text(got: int, total: int) -> str:
     if total > 0:
         return f"{pct(got, total)}% · {fmt_int(got // mb)} de {fmt_int(-(-total // mb))} MB"
     return f"{fmt_int(got // mb)} MB"
+
+
+def _pct_arredondado(done: int, total: int) -> int:
+    """Como pct, mas arredondado (312 de 900 -> 35); só chega a 100 no fim."""
+    if total <= 0:
+        return 0
+    p = min(100, max(0, round(done * 100 / total)))
+    return min(p, 99) if done < total else p
+
+
+def projeto_text(done: int, total: int) -> str:
+    """"Verificando projeto · 312 de 900 arquivos · 35%"."""
+    return (f"Verificando projeto · {fmt_int(done)} de {fmt_int(total)} {_files(total)} · "
+            f"{_pct_arredondado(done, total)}%")
+
+
+def consulta_text(n: int) -> str:
+    """"Consultando bibliotecas no OSV.dev · 240 pacotes"."""
+    return f"Consultando bibliotecas no OSV.dev · {fmt_int(n)} {'pacote' if n == 1 else 'pacotes'}"
+
+
+def projeto_done_text(arquivos: int, achados: int, completo: bool) -> str:
+    """"Projeto verificado · 900 arquivos · 3 achados" ou "Interrompida · 312 arquivos verificados"."""
+    if completo:
+        return (f"Projeto verificado · {fmt_int(arquivos)} {_files(arquivos)} · "
+                f"{fmt_int(achados)} {'achado' if achados == 1 else 'achados'}")
+    return f"Interrompida · {fmt_int(arquivos)} {_files(arquivos)} {'verificado' if arquivos == 1 else 'verificados'}"

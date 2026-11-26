@@ -23,6 +23,25 @@ confiáveis e pastas ignoradas).
   - **Quarentena:** isola o arquivo embaralhado na aba **Quarentena**, onde é
     possível **Analisar**, **Restaurar** (com checagem de hash) ou **Apagar**
     definitivamente (com sobrescrita aleatória).
+- **Verificar projeto (desenvolvedores):** antes de abrir um repositório
+  baixado no editor ou de rodar `npm install`, clique em **Verificar projeto…**
+  e escolha a pasta. Arrastar para a janela uma pasta com cara de projeto (com
+  `.git`, `package.json`, `pyproject.toml`, `AGENTS.md`, lockfiles e afins) roda
+  a varredura antivírus e, em seguida, a verificação do projeto. São cinco
+  famílias: instruções para agentes de IA (`AGENTS.md`, `CLAUDE.md`,
+  `.cursorrules` com prompt injection ou Unicode invisível), o que executa ao
+  abrir a pasta (tarefas do VS Code, servidores MCP, hooks do Claude Code e do
+  Git, devcontainer), o que executa ao instalar dependências (`postinstall`,
+  `setup.py`), código com Unicode enganoso (Trojan Source) e GitHub Actions
+  inseguras. As bibliotecas fixadas nos lockfiles também são cruzadas com o
+  OSV.dev e a CISA KEV. Aparece uma linha por arquivo, com **Abrir local**,
+  **Copiar detalhe** e **Ignorar sempre**. **Ignorar sempre** vale só para
+  aquele conteúdo: se o arquivo mudar, o achado volta. Os achados de severidade
+  baixa ficam recolhidos em **Para conhecimento**. Só sai da máquina o
+  ecossistema, o nome e a versão de cada biblioteca, enviados ao OSV.dev; o
+  catálogo KEV é baixado inteiro. Nenhum caminho, conteúdo de arquivo ou nome
+  de usuário sai da máquina, e as pastas ignoradas na aba **Confiáveis** ficam
+  de fora também aqui.
 - **Menu de contexto no Explorer (botão direito):**
   - **Varrer com Mandacaru** (`--scan`): aparece em arquivos, pastas e no fundo
     de pastas; se o Mandacaru já estiver aberto, encaminha a varredura para a

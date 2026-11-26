@@ -1,4 +1,4 @@
-"""Dados do usuário: lista de confiança e histórico de varreduras."""
+"""Dados do usuário: lista de confiança, achados de projeto ignorados e histórico de varreduras."""
 from __future__ import annotations
 
 import dataclasses
@@ -154,6 +154,52 @@ class ExcludeList:
         key = self._key(path)
         entries = [e for e in self._entries if self._key(e["caminho"]) != key]
         self._save(entries)
+        self._entries = entries
+
+
+class IgnoradosProjeto:
+    """Achados de "Verificar projeto" ignorados pelo usuário: par (regra, SHA-256 do arquivo).
+
+    Mudou o arquivo, mudou o SHA-256: o achado volta a aparecer.
+    """
+
+    def __init__(self, path: Path):
+        self._path = Path(path)
+        self._entries: list[dict] = self._load()
+
+    def _load(self) -> list[dict]:
+        if not self._path.exists():
+            return []
+        try:
+            raw = self._path.read_bytes()
+        except FileNotFoundError:
+            return []
+        try:
+            data = json.loads(raw.decode("utf-8"))
+            if not isinstance(data, list):
+                raise ValueError("formato inesperado")
+            return [e for e in data if isinstance(e, dict) and isinstance(e.get("regra"), str)
+                    and isinstance(e.get("sha256"), str)]
+        except ValueError:  # inclui UnicodeDecodeError e JSONDecodeError
+            _backup_corrupt(self._path)
+            return []
+
+    def contem(self, regra: str, sha256: str) -> bool:
+        return any(e["regra"] == regra and e["sha256"] == sha256 for e in self._entries)
+
+    def entries(self) -> list[dict]:
+        return list(self._entries)
+
+    def adicionar(self, regra: str, sha256: str, caminho: Path) -> None:
+        if self.contem(regra, sha256):
+            return
+        entries = [*self._entries, {
+            "regra": regra,
+            "sha256": sha256,
+            "caminho": str(caminho),
+            "data": datetime.now().isoformat(timespec="seconds"),
+        }]
+        _atomic_write_json(self._path, entries)
         self._entries = entries
 
 

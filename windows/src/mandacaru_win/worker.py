@@ -1,6 +1,9 @@
 """Varredura e atualizações em segundo plano (nunca na thread da interface)."""
 from __future__ import annotations
 
+import hashlib
+import os
+import stat
 import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
@@ -9,6 +12,8 @@ from PySide6.QtCore import QThread, Signal
 
 from mandacaru.analysis import AnalysisResult, analyze
 from mandacaru.config import Config
+from mandacaru.projeto import verificar_projeto
+from mandacaru.vuln import KevCache, OsvClient
 from mandacaru_win.scan import scan_paths
 from mandacaru_win.shred import shred_path
 
@@ -72,6 +77,85 @@ class ScanThread(QThread):
             self.failed.emit(f"{type(e).__name__}: {e}")
             return
         self.done.emit(summary)
+
+
+_CRIAR = object()  # osv/kev não injetados: o thread cria os clientes com cache em disco
+
+
+def sha256_sem_seguir(caminho: Path) -> str | None:
+    """SHA-256 de um arquivo regular sem seguir link; None se não der para ler."""
+    try:
+        if not hasattr(os, "O_NOFOLLOW") and Path(caminho).is_symlink():
+            return None
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+        fd = os.open(caminho, flags)
+    except OSError:
+        return None
+    try:
+        with os.fdopen(fd, "rb") as fh:
+            if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+                return None
+            h = hashlib.sha256()
+            while chunk := fh.read(1024 * 1024):
+                h.update(chunk)
+            return h.hexdigest()
+    except OSError:
+        return None
+
+
+class ProjetoThread(QThread):
+    """Verificar projeto fora da thread da interface.
+
+    Depois de `done`, `hashes` tem o SHA-256 de cada arquivo com achado (caminho relativo -> sha ou None),
+    calculado aqui para não travar a janela em projetos grandes.
+    """
+
+    progress = Signal(int, int)
+    consultando = Signal(int)
+    done = Signal(object)    # RelatorioProjeto
+    failed = Signal(str)
+
+    def __init__(self, raiz: Path, cache_dir: Path, excluir: Callable[[Path], bool],
+                 osv=_CRIAR, kev=_CRIAR):
+        super().__init__()
+        self._raiz = Path(raiz)
+        self._cache_dir = Path(cache_dir)
+        self._excluir = excluir
+        self._osv = osv
+        self._kev = kev
+        self._stop = False
+        self._last_progress = 0.0
+        self.hashes: dict[str, str | None] = {}
+
+    def stop(self) -> None:
+        self._stop = True
+
+    def _emit_progress(self, i: int, n: int) -> None:
+        # No máximo ~20 sinais por segundo (o último sempre passa), como ScanThread.
+        now = time.monotonic()
+        if i == n or now - self._last_progress >= 0.05:
+            self._last_progress = now
+            self.progress.emit(i, n)
+
+    def run(self) -> None:
+        self._last_progress = 0.0
+        try:
+            # Clientes criados aqui: as conexões SQLite do cache ficam na thread que as usa.
+            osv = OsvClient(cache_db=self._cache_dir / "osv.db") if self._osv is _CRIAR else self._osv
+            kev = KevCache(cache_db=self._cache_dir / "kev.db") if self._kev is _CRIAR else self._kev
+            relatorio = verificar_projeto(
+                self._raiz, osv=osv, kev=kev, excluir=self._excluir,
+                ao_progresso=self._emit_progress,
+                ao_consultar=lambda n: self.consultando.emit(n),
+                deve_parar=lambda: self._stop,
+            )
+            for a in relatorio.achados:
+                if a.caminho not in self.hashes:
+                    self.hashes[a.caminho] = sha256_sem_seguir(self._raiz / a.caminho)
+        except Exception as e:  # noqa: BLE001 - qualquer falha deve liberar a janela
+            self.failed.emit(f"{type(e).__name__}: {e}")
+            return
+        self.done.emit(relatorio)
 
 
 class HashAnalysisThread(QThread):
