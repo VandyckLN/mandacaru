@@ -9,17 +9,23 @@ from __future__ import annotations
 
 import base64
 import binascii
+import codecs
+import csv
 import hashlib
+import io
 import ntpath
 import os
 import re
 import stat
+import subprocess
 import sys
+import tempfile
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from mandacaru.projeto.achado import exibivel
 from mandacaru_win.incident import IncidentError, sha256_arquivo
 
 CHAVE_RUN = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -36,6 +42,32 @@ _ADULTERADO = "O backup desta ação está inválido ou foi alterado; nada foi r
 _GRANDE = "Arquivo grande demais para guardar no incidente; use a Quarentena."
 
 Executor = Callable[[list[str], float], tuple[int, str]]
+AGENDADOR = "Agendador de Tarefas"
+# Colunas de `schtasks /Query /FO CSV /V /NH`: a posição não muda com o idioma do Windows.
+_COL_NOME, _COL_EXECUTAR, _COL_COMO = 1, 8, 14
+_TIMEOUT = 60.0
+
+
+def _run_oem(args: list[str], timeout: float) -> tuple[int, str]:
+    """Executa sem shell e sem janela; a saída do schtasks vem na página de código OEM do console."""
+    p = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout, check=False,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    try:
+        enc = codecs.lookup("oem").name
+    except LookupError:
+        enc = "utf-8"
+    saida = p.stdout if p.returncode == 0 else p.stdout + p.stderr
+    return p.returncode, saida.decode(enc, errors="replace")
+
+
+def _schtasks() -> str:
+    raiz = os.environ.get("SystemRoot") or r"C:\Windows"
+    return ntpath.join(raiz, "System32", "schtasks.exe")
+
+
+def _nome_tarefa_valido(nome: object) -> bool:
+    return (isinstance(nome, str) and nome.startswith("\\") and 1 < len(nome) <= 260
+            and not any(c == '"' or ord(c) < 32 for c in nome))
 
 
 @dataclass(frozen=True)
@@ -106,6 +138,8 @@ class Persistencia:
         if pasta_inicializar is None and os.environ.get("APPDATA"):
             pasta_inicializar = (Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu"
                                  / "Programs" / "Startup")
+        if run is None and sys.platform == "win32":
+            run = _run_oem
         self._registro = registro
         self._pasta = Path(pasta_inicializar) if pasta_inicializar is not None else None
         self._run = run
@@ -115,7 +149,32 @@ class Persistencia:
     def detectar(self, alvos: Iterable[str], hashes: Iterable[str] = frozenset()) -> list[Entrada]:
         alvos = [a for a in alvos if a]
         hashes = set(hashes)
-        return [*self._detectar_registro(alvos), *self._detectar_inicializar(alvos, hashes)]
+        return [*self._detectar_registro(alvos), *self._detectar_inicializar(alvos, hashes),
+                *self._detectar_tarefas(alvos)]
+
+    def _detectar_tarefas(self, alvos: list[str]) -> list[Entrada]:
+        if self._run is None or not alvos:
+            return []
+        try:
+            rc, saida = self._run([_schtasks(), "/Query", "/FO", "CSV", "/V", "/NH"], _TIMEOUT)
+        except (OSError, subprocess.SubprocessError):
+            return []
+        if rc != 0:
+            return []
+        vistas: set[str] = set()
+        achadas = []
+        for linha in csv.reader(io.StringIO(saida)):
+            if len(linha) <= _COL_COMO:
+                continue
+            nome, comando, como = linha[_COL_NOME], linha[_COL_EXECUTAR], linha[_COL_COMO]
+            if nome in vistas or not any(menciona(comando, a) for a in alvos):
+                continue
+            vistas.add(nome)  # uma linha por gatilho: a mesma tarefa aparece repetida
+            do_usuario = bool(self._usuario) and (
+                como.rsplit("\\", 1)[-1].casefold() == self._usuario.casefold())
+            achadas.append(Entrada("schtask_user" if do_usuario else "schtask_sistema", AGENDADOR, nome,
+                                   comando, exige_servico=not do_usuario))
+        return achadas
 
     def _detectar_registro(self, alvos: list[str]) -> list[Entrada]:
         if self._registro is None:
@@ -166,6 +225,13 @@ class Persistencia:
                 raise IncidentError(_MUDOU)
             return {"tipo": e.tipo, "pasta": e.local, "nome": e.nome, "sha256": e.sha256,
                     "conteudo": base64.b64encode(_embaralhar(dados)).decode("ascii")}
+        if e.tipo == "schtask_user":
+            if not _nome_tarefa_valido(e.nome):
+                raise IncidentError(_MUDOU)
+            xml = self._xml_tarefa(e.nome)
+            if xml is None:
+                raise IncidentError(_MUDOU)
+            return {"tipo": e.tipo, "nome": e.nome, "xml": xml}
         raise IncidentError(f"Tipo de persistência desconhecido: {e.tipo}")
 
     def remover(self, backup: dict) -> None:
@@ -188,6 +254,12 @@ class Persistencia:
                 _remover_arquivo(f)
             except OSError as e:
                 raise IncidentError(f"Não foi possível remover o arquivo: {e}") from e
+            return
+        if tipo == "schtask_user":
+            nome = self._validar_tarefa(backup)
+            if self._xml_tarefa(nome) != backup["xml"]:
+                raise IncidentError(_MUDOU)
+            self._schtasks_ok(["/Delete", "/TN", nome, "/F"], "remover a tarefa")
             return
         raise IncidentError(_ADULTERADO)
 
@@ -223,9 +295,52 @@ class Persistencia:
             except OSError as e:
                 raise IncidentError(f"Não foi possível restaurar o arquivo: {e}") from e
             return
+        if tipo == "schtask_user":
+            nome = self._validar_tarefa(backup)
+            atual = self._xml_tarefa(nome)
+            if atual is not None:
+                if atual == backup["xml"]:
+                    return
+                raise IncidentError(_EXISTE)
+            fd, caminho = tempfile.mkstemp(suffix=".xml")
+            try:
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(backup["xml"].encode("utf-16"))  # o XML do schtasks declara UTF-16
+                # Sem /F: se outra tarefa com esse nome surgir no meio do caminho, o schtasks recusa.
+                self._schtasks_ok(["/Create", "/TN", nome, "/XML", caminho], "restaurar a tarefa")
+            finally:
+                try:
+                    os.remove(caminho)
+                except OSError:
+                    pass
+            return
         raise IncidentError(_ADULTERADO)
 
     # ---------- auxiliares ----------
+    def _executar(self, args: list[str]) -> tuple[int, str]:
+        if self._run is None:
+            raise IncidentError("O Agendador de Tarefas não está disponível.")
+        try:
+            return self._run([_schtasks(), *args], _TIMEOUT)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise IncidentError(f"Não foi possível executar o schtasks: {e}") from e
+
+    def _xml_tarefa(self, nome: str) -> str | None:
+        """XML completo da tarefa, ou None se ela não existe (ou não pode ser lida)."""
+        rc, saida = self._executar(["/Query", "/TN", nome, "/XML"])
+        return saida if rc == 0 else None
+
+    def _schtasks_ok(self, args: list[str], acao: str) -> None:
+        rc, saida = self._executar(args)
+        if rc != 0:
+            raise IncidentError(f"Não foi possível {acao}: {exibivel(saida.strip(), 300)}")
+
+    @staticmethod
+    def _validar_tarefa(b: dict) -> str:
+        if not _nome_tarefa_valido(b.get("nome")) or not isinstance(b.get("xml"), str) or not b["xml"].strip():
+            raise IncidentError(_ADULTERADO)
+        return b["nome"]
+
     def _valor_registro(self, chave: str, nome: str) -> tuple[str, int] | None:
         if self._registro is None:
             raise IncidentError("O registro do Windows não está disponível.")

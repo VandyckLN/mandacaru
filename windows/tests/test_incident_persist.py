@@ -2,6 +2,7 @@
 import hashlib
 import json
 import sys
+from pathlib import Path
 
 import pytest
 from mandacaru_win.incident import IncidentError
@@ -236,3 +237,154 @@ def test_registro_windows_real():
                 winreg.DeleteKey(winreg.HKEY_CURRENT_USER, k)
             except OSError:
                 pass
+
+
+# ---------- tarefas agendadas (schtasks) ----------
+XML = ('<?xml version="1.0" encoding="UTF-16"?>\n<Task><Actions><Exec><Command>' + EXE
+       + "</Command></Exec></Actions></Task>")
+
+
+def _linha(nome, comando, como):
+    cols = [""] * 28
+    cols[0], cols[1], cols[8], cols[14] = "PC-ANA", nome, comando, como
+    return ",".join('"' + c.replace('"', '""') + '"' for c in cols)
+
+
+class Schtasks:
+    """Executor falso: responde como o schtasks.exe e grava cada chamada."""
+
+    def __init__(self, tarefas):
+        self.tarefas = dict(tarefas)        # nome -> xml
+        self.csv = ""
+        self.chamadas: list[list[str]] = []
+        self.falhar: set[str] = set()
+        self.xml_criado = None
+
+    def __call__(self, args, timeout):
+        self.chamadas.append(list(args))
+        op = args[1]
+        if op in self.falhar:
+            return 1, "ERRO: Acesso negado."
+        if op == "/Query" and "/FO" in args:
+            return 0, self.csv
+        nome = args[args.index("/TN") + 1]
+        if op == "/Query":
+            return (0, self.tarefas[nome]) if nome in self.tarefas else (1, "ERRO: tarefa não existe.")
+        if op == "/Delete":
+            self.tarefas.pop(nome)
+            return 0, "ÊXITO"
+        if op == "/Create":
+            if nome in self.tarefas:
+                return 1, "ERRO: já existe."
+            self.xml_criado = Path(args[args.index("/XML") + 1]).read_bytes().decode("utf-16")
+            self.tarefas[nome] = self.xml_criado
+            return 0, "ÊXITO"
+        raise AssertionError(args)
+
+
+def _pers_tarefas(tmp_path, st):
+    return Persistencia(registro=RegistroFalso(), pasta_inicializar=tmp_path / "nao-existe", run=st,
+                        usuario="ana")
+
+
+def _st():
+    st = Schtasks({r"\Atualizar": XML, r"\Sistema\Coletor": XML})
+    st.csv = "\n".join([
+        _linha(r"\Atualizar", f'"{EXE}" /silencioso', r"PC-ANA\ana"),
+        _linha(r"\Atualizar", f'"{EXE}" /silencioso', r"PC-ANA\ana"),      # segundo gatilho da mesma tarefa
+        _linha(r"\Sistema\Coletor", EXE, "SYSTEM"),
+        _linha(r"\Microsoft\Windows\Defrag", r"%windir%\system32\defrag.exe -c", "SYSTEM"),
+    ])
+    return st
+
+
+def test_detecta_tarefa_do_usuario_e_do_sistema(tmp_path):
+    achadas = _pers_tarefas(tmp_path, _st()).detectar([EXE])
+    assert [(e.tipo, e.nome, e.exige_servico) for e in achadas] == [
+        ("schtask_user", r"\Atualizar", False), ("schtask_sistema", r"\Sistema\Coletor", True)]
+    assert achadas[0].comando == f'"{EXE}" /silencioso'
+
+
+def test_tarefas_repetidas_por_gatilho_viram_uma(tmp_path):
+    achadas = _pers_tarefas(tmp_path, _st()).detectar([EXE])
+    assert [e.nome for e in achadas].count(r"\Atualizar") == 1
+
+
+def test_schtasks_falhando_nao_derruba_detectar(tmp_path):
+    st = _st()
+    st.falhar = {"/Query"}
+    assert _pers_tarefas(tmp_path, st).detectar([EXE]) == []
+
+
+def test_remover_tarefa_guarda_xml_antes_de_apagar(tmp_path):
+    st = _st()
+    p = _pers_tarefas(tmp_path, st)
+    [e, _] = p.detectar([EXE])
+    b = p.backup(e)
+    assert b == {"tipo": "schtask_user", "nome": r"\Atualizar", "xml": XML}
+    assert not any(c[1] == "/Delete" for c in st.chamadas)
+    p.remover(b)
+    ops = [c[1:] for c in st.chamadas if "/TN" in c]
+    assert ops[-1] == ["/Delete", "/TN", r"\Atualizar", "/F"]
+    assert ops[-2] == ["/Query", "/TN", r"\Atualizar", "/XML"]    # confere de novo logo antes de apagar
+    assert r"\Atualizar" not in st.tarefas
+
+
+def test_remover_tarefa_que_mudou_recusa(tmp_path):
+    st = _st()
+    p = _pers_tarefas(tmp_path, st)
+    [e, _] = p.detectar([EXE])
+    b = p.backup(e)
+    st.tarefas[r"\Atualizar"] = XML.replace("svc.exe", "outro.exe")
+    with pytest.raises(IncidentError, match="mudou"):
+        p.remover(b)
+    assert r"\Atualizar" in st.tarefas
+
+
+def test_remover_tarefa_do_sistema_recusa(tmp_path):
+    st = _st()
+    p = _pers_tarefas(tmp_path, st)
+    [_, e] = p.detectar([EXE])
+    with pytest.raises(IncidentError, match="Proteção avançada"):
+        p.backup(e)
+    assert not any(c[1] == "/Delete" for c in st.chamadas)
+
+
+def test_restaurar_tarefa_cria_sem_sobrescrever(tmp_path, monkeypatch):
+    import tempfile
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    st = _st()
+    p = _pers_tarefas(tmp_path, st)
+    [e, _] = p.detectar([EXE])
+    b = p.backup(e)
+    p.remover(b)
+    p.restaurar(json.loads(json.dumps(b)))
+    [criar] = [c for c in st.chamadas if c[1] == "/Create"]
+    assert "/XML" in criar and "/F" not in criar
+    assert st.xml_criado == XML and st.tarefas[r"\Atualizar"] == XML
+    assert not list(tmp_path.glob("*.xml"))                       # arquivo temporário apagado
+    p.restaurar(b)                                                # já existe igual: sucesso
+    st.tarefas[r"\Atualizar"] = XML.replace("svc.exe", "outro.exe")
+    with pytest.raises(IncidentError, match="Já existe outra entrada com esse nome"):
+        p.restaurar(b)
+
+
+@pytest.mark.parametrize("nome", ["Atualizar", '\\a" /F /TN "\\b', "\\a\nb", "\\" + "a" * 260, "", None])
+def test_nome_de_tarefa_invalido(tmp_path, nome):
+    st = _st()
+    p = _pers_tarefas(tmp_path, st)
+    with pytest.raises(IncidentError):
+        p.restaurar({"tipo": "schtask_user", "nome": nome, "xml": XML})
+    with pytest.raises(IncidentError):
+        p.remover({"tipo": "schtask_user", "nome": nome, "xml": XML})
+    assert not any(c[1] in ("/Create", "/Delete") for c in st.chamadas)
+
+
+def test_schtasks_falha_vira_erro(tmp_path):
+    st = _st()
+    p = _pers_tarefas(tmp_path, st)
+    [e, _] = p.detectar([EXE])
+    b = p.backup(e)
+    st.falhar = {"/Delete"}
+    with pytest.raises(IncidentError, match="Acesso negado"):
+        p.remover(b)
