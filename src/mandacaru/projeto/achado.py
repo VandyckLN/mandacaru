@@ -26,3 +26,7 @@ class Achado:
             evidence={"path": str(raiz / self.caminho), "linha": self.linha, "trecho": self.trecho},
             mitre=list(self.mitre),
         )
+
+
+class ArquivoIlegivel(Exception):
+    """Arquivo-alvo com sintaxe invalida; o orquestrador conta e segue."""
