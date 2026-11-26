@@ -211,3 +211,11 @@ def test_osv_expoe_ids_do_lote(tmp_path):
     pkg = InstalledPackage("evil", "evil", "1.0.0", "npm")
     osv.query_packages([pkg])
     assert osv.batch_ids == {pkg: ["MAL-1"]}
+
+
+def test_achado_de_dependencia_tem_chave_estavel(tmp_path):
+    osv = _osv(tmp_path, {"lodash": [_lodash_vuln()], "evil": [{"id": "MAL-2"}, {"id": "MAL-1"}]})
+    r = verificar_dependencias([_dep(), _dep("evil", "1.0.0")], 0, osv, _kev(tmp_path))
+    chaves = {a.regra: a.chave for a in r.achados}
+    assert chaves == {"projeto.dep.vulneravel": ("npm", "lodash", "4.17.15", "GHSA-x"),
+                      "projeto.dep.malicioso": ("npm", "evil", "1.0.0", "MAL-1", "MAL-2")}

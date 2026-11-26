@@ -110,6 +110,11 @@ def _onde(a: Achado) -> str:
     return a.caminho if a.linha is None else f"{a.caminho}:{a.linha}"
 
 
+def _por_chave(a: Achado) -> bool:
+    """Dependência: ignorada por (regra, ecossistema, nome, versão, ids), não pelo SHA do lockfile."""
+    return a.regra.startswith("projeto.dep.") and bool(a.chave)
+
+
 _PARA_CONHECIMENTO = -1  # ordem da linha "Para conhecimento": sempre depois de qualquer severidade
 
 
@@ -836,8 +841,7 @@ class MainWindow(QMainWindow):
         groups: dict[str, list[Achado]] = {}
         low: list[Achado] = []
         for a in rel.achados:
-            sha = hashes.get(a.caminho)
-            if sha is not None and self._ignorados is not None and self._ignorados.contem(a.regra, sha):
+            if self._ignorado(a, hashes.get(a.caminho)):
                 continue
             if a.severidade >= Severity.MEDIUM:
                 groups.setdefault(a.caminho, []).append(a)
@@ -848,6 +852,13 @@ class MainWindow(QMainWindow):
         if low:
             self._add_low_rows(raiz, low)
         return sum(len(v) for v in groups.values())
+
+    def _ignorado(self, a: Achado, sha: str | None) -> bool:
+        if self._ignorados is None:
+            return False
+        if _por_chave(a):
+            return self._ignorados.contem_chave(a.regra, a.chave)
+        return sha is not None and self._ignorados.contem(a.regra, sha)
 
     @staticmethod
     def _achado_item(onde: str, a: Achado) -> QTreeWidgetItem:
@@ -873,7 +884,7 @@ class MainWindow(QMainWindow):
         self._proj_rows[path] = (achados, sha)
         if self._ignorados is None:
             no_ignore = self._ignorados_error or ""
-        elif sha is None:
+        elif sha is None and not all(_por_chave(a) for a in achados):
             no_ignore = "Não foi possível ler o arquivo para identificar o conteúdo."
         else:
             no_ignore = None
@@ -922,12 +933,15 @@ class MainWindow(QMainWindow):
         if self._ignorados is None:
             self.notify(self._ignorados_error or "Lista de achados ignorados indisponível.")
             return
-        if sha is None:
+        if sha is None and not all(_por_chave(a) for a in achados):
             self.notify("Não foi possível ler o arquivo para identificar o conteúdo.")
             return
         try:
             for a in achados:
-                self._ignorados.adicionar(a.regra, sha, path)
+                if _por_chave(a):
+                    self._ignorados.adicionar_chave(a.regra, a.chave, path)
+                else:
+                    self._ignorados.adicionar(a.regra, sha, path)
         except OSError as e:
             self.notify(f"Não foi possível salvar a lista de achados ignorados: {e}")
             return

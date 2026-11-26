@@ -181,3 +181,19 @@ def test_ignorados_projeto_pula_entradas_com_tipo_errado(tmp_path):
                              {"regra": "r", "sha256": {"a": 1}}, 3, "x"]))
     ig = IgnoradosProjeto(p)
     assert len(ig.entries()) == 1 and ig.contem("r", "abc")
+
+
+def test_ignorados_projeto_por_chave_de_dependencia(tmp_path):
+    p = tmp_path / "ignorados_projeto.json"
+    ig = IgnoradosProjeto(p)
+    chave = ("npm", "lodash", "4.17.15", "GHSA-1")
+    ig.adicionar_chave("projeto.dep.vulneravel", chave, Path("C:/proj/package-lock.json"))
+    ig.adicionar_chave("projeto.dep.vulneravel", chave, Path("C:/proj/package-lock.json"))
+    outra = IgnoradosProjeto(p)
+    assert len(outra.entries()) == 1
+    assert outra.contem_chave("projeto.dep.vulneravel", chave) is True
+    assert outra.contem_chave("projeto.dep.vulneravel", (*chave, "GHSA-2")) is False
+    assert outra.contem_chave("projeto.dep.malicioso", chave) is False
+    p.write_text(json.dumps([{"regra": "r", "chave": ["a", 1]}, {"regra": "r", "chave": "abc"},
+                             {"regra": "r", "chave": ["a", "b"]}]))
+    assert IgnoradosProjeto(p).entries() == [{"regra": "r", "chave": ["a", "b"]}]

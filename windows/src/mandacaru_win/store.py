@@ -158,9 +158,11 @@ class ExcludeList:
 
 
 class IgnoradosProjeto:
-    """Achados de "Verificar projeto" ignorados pelo usuário: par (regra, SHA-256 do arquivo).
+    """Achados de "Verificar projeto" ignorados pelo usuário.
 
-    Mudou o arquivo, mudou o SHA-256: o achado volta a aparecer.
+    Arquivos: par (regra, SHA-256 do arquivo) — mudou o arquivo, o achado volta a aparecer.
+    Dependências: par (regra, chave) com chave = (ecossistema, nome, versão, *ids) — mudar outra linha
+    do lockfile não traz de volta, mas um aviso novo para o mesmo pacote traz.
     """
 
     def __init__(self, path: Path):
@@ -179,13 +181,27 @@ class IgnoradosProjeto:
             if not isinstance(data, list):
                 raise ValueError("formato inesperado")
             return [e for e in data if isinstance(e, dict) and isinstance(e.get("regra"), str)
-                    and isinstance(e.get("sha256"), str)]
+                    and (isinstance(e.get("sha256"), str) or _lista_str(e.get("chave")))]
         except ValueError:  # inclui UnicodeDecodeError e JSONDecodeError
             _backup_corrupt(self._path)
             return []
 
     def contem(self, regra: str, sha256: str) -> bool:
-        return any(e["regra"] == regra and e["sha256"] == sha256 for e in self._entries)
+        return any(e["regra"] == regra and e.get("sha256") == sha256 for e in self._entries)
+
+    def contem_chave(self, regra: str, chave: tuple[str, ...]) -> bool:
+        return any(e["regra"] == regra and e.get("chave") == list(chave) for e in self._entries)
+
+    def adicionar_chave(self, regra: str, chave: tuple[str, ...], caminho: Path) -> None:
+        if self.contem_chave(regra, chave):
+            return
+        self._gravar({"regra": regra, "chave": list(chave), "caminho": str(caminho),
+                      "data": datetime.now().isoformat(timespec="seconds")})
+
+    def _gravar(self, entrada: dict) -> None:
+        entries = [*self._entries, entrada]
+        _atomic_write_json(self._path, entries)
+        self._entries = entries
 
     def entries(self) -> list[dict]:
         return list(self._entries)
@@ -193,14 +209,12 @@ class IgnoradosProjeto:
     def adicionar(self, regra: str, sha256: str, caminho: Path) -> None:
         if self.contem(regra, sha256):
             return
-        entries = [*self._entries, {
-            "regra": regra,
-            "sha256": sha256,
-            "caminho": str(caminho),
-            "data": datetime.now().isoformat(timespec="seconds"),
-        }]
-        _atomic_write_json(self._path, entries)
-        self._entries = entries
+        self._gravar({"regra": regra, "sha256": sha256, "caminho": str(caminho),
+                      "data": datetime.now().isoformat(timespec="seconds")})
+
+
+def _lista_str(v: object) -> bool:
+    return isinstance(v, list) and all(isinstance(x, str) for x in v)
 
 
 def _num(v: object) -> bool:

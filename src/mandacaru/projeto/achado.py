@@ -51,6 +51,9 @@ class Achado:
     linha: int | None = None
     trecho: str = ""
     mitre: tuple[str, ...] = ()
+    # Identidade estável do objeto do achado, independente do arquivo e do texto. Dependências:
+    # (ecossistema, nome, versão, *ids ordenados) — base do "Ignorar sempre"; aviso novo muda a chave.
+    chave: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         # Mesmo formato em todas as famílias: uma linha, invisíveis à mostra, no máximo 120 caracteres.

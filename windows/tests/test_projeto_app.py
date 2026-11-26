@@ -338,3 +338,31 @@ def test_avisos_faltando_aparecem_na_barra(app, tmp_path, scanner):
     win = make_win(tmp_path, scanner)
     win._on_proj_done(RelatorioProjeto(tmp_path, [], 3, False, True, deps=ResultadoDeps([], 4, 0, None, 3)))
     assert "3 avisos do OSV.dev não puderam ser baixados" in win.statusBar().currentMessage()
+
+
+def _rel_dep(raiz, ids, explicacao="lodash 4.17.15"):
+    from mandacaru.events import Severity
+    from mandacaru.projeto import RelatorioProjeto
+    from mandacaru.projeto.achado import Achado
+    a = Achado("projeto.dep.vulneravel", Severity.HIGH, "package-lock.json", f"{explicacao}: {', '.join(ids)}",
+               chave=("npm", "lodash", "4.17.15", *ids))
+    return RelatorioProjeto(raiz, [a], 1, False, True)
+
+
+def test_ignorar_dependencia_volta_com_aviso_novo(app, tmp_path, scanner):
+    d = tmp_path / "proj"
+    d.mkdir()
+    (d / "package-lock.json").write_text("{}")
+    lock = d / "package-lock.json"
+    win = make_win(tmp_path, scanner)
+    win._on_proj_done(_rel_dep(d, ["GHSA-1"]))
+    botoes(win, win._proj_items[lock])["Ignorar sempre"].click()
+    assert lock not in win._proj_items
+    [e] = IgnoradosProjeto(tmp_path / "dados" / "ignorados_projeto.json").entries()
+    assert e["regra"] == "projeto.dep.vulneravel" and e["chave"] == ["npm", "lodash", "4.17.15", "GHSA-1"]
+    win._clear_results()
+    lock.write_text('{"outra": "linha"}')                      # outro conteúdo do lockfile: continua ignorado
+    win._on_proj_done(_rel_dep(d, ["GHSA-1"]))
+    assert lock not in win._proj_items
+    win._on_proj_done(_rel_dep(d, ["GHSA-1", "GHSA-2"]))     # aviso novo: a linha volta
+    assert lock in win._proj_items

@@ -148,7 +148,7 @@ def verificar_dependencias(
             achados.append(Achado(
                 "projeto.dep.malicioso", Severity.CRITICAL, caminho,
                 f"{nome} {versao}: pacote catalogado como malicioso ({_lista_ids(mal)}); não instale." + extra,
-                mitre=_MITRE))
+                mitre=_MITRE, chave=(eco, nome, versao, *sorted(mal))))
             continue
         if versao == "":
             continue
@@ -172,6 +172,8 @@ def verificar_dependencias(
         fix = versao_corrigida(vulns, eco, nome)
         if fix:
             texto += f" · corrigida na versão {fix}"
-        achados.append(Achado("projeto.dep.vulneravel", severidade, caminho, texto + extra, mitre=_MITRE))
+        todos = {str(v["id"]) for v in vulns if isinstance(v.get("id"), str)} | set(ids_lote)
+        achados.append(Achado("projeto.dep.vulneravel", severidade, caminho, texto + extra, mitre=_MITRE,
+                              chave=(eco, nome, versao, *sorted(todos))))
 
     return ResultadoDeps(achados, len(pacotes), sem_versao, None, len(getattr(osv, "errors", []) or []))
