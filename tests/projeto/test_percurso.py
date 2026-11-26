@@ -87,3 +87,22 @@ def test_fifo_nao_trava(projeto):
     os.mkfifo(raiz / "AGENTS.md")
     assert listar(raiz) == (["ok.md"], False)
     assert ler_texto(raiz / "AGENTS.md") is None
+
+
+def test_prioritarios_sem_links_e_com_teto(projeto, tmp_path_factory):
+    from mandacaru.projeto.percurso import listar_prioritarios
+    fora = tmp_path_factory.mktemp("fora")
+    (fora / "tasks.json").write_text("{}")
+    raiz = projeto({"package.json": "{}", "x.txt": "x", ".github/workflows/a.yml": "x",
+                    ".github/workflows/sub/b.yml": "x", **{f".cursor/rules/{i}.mdc": "x" for i in range(5)}})
+    try:
+        os.symlink(fora, raiz / ".vscode")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink indisponivel")
+    rels, cortado = listar_prioritarios(
+        raiz, [".vscode/tasks.json"], {".github/workflows": False, ".cursor/rules": True},
+        lambda n: n == "package.json", max_por_pasta=3)
+    assert ".vscode/tasks.json" not in rels
+    assert "package.json" in rels and "x.txt" not in rels
+    assert ".github/workflows/a.yml" in rels and ".github/workflows/sub/b.yml" not in rels
+    assert len([r for r in rels if r.startswith(".cursor/rules/")]) == 3 and cortado is True

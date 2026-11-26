@@ -14,7 +14,7 @@ from . import unicode as unicode_
 from .achado import Achado
 from .dependencias import ResultadoDeps, verificar_dependencias
 from .lockfiles import Dependencia
-from .percurso import MAX_ARQUIVOS, ler_texto, listar
+from .percurso import MAX_ARQUIVOS, ler_texto, listar, listar_prioritarios
 
 MARCAS_PROJETO = (
     ".git", "package.json", "pyproject.toml", "setup.py", ".vscode", ".devcontainer", ".mcp.json",
@@ -23,6 +23,18 @@ MARCAS_PROJETO = (
 _MCP_REL = (".mcp.json", ".cursor/mcp.json", ".vscode/mcp.json")
 _FAMILIAS = (agentes, unicode_, abrir, instalar, ci)
 _INTERROMPIDO = "verificação interrompida"
+# Alvos de caminho fixo: sempre lidos, fora do limite de arquivos (uma pasta inchada não os esconde).
+_FIXOS = (*abrir.ALVOS, *agentes.ARQUIVOS_AGENTE)
+_PASTAS_FIXAS = {".github/workflows": False, **agentes.PASTAS_AGENTE}
+_NA_RAIZ = frozenset({"package.json", "setup.py", "pyproject.toml"})
+
+
+def _fixo_na_raiz(nome: str) -> bool:
+    return nome in _NA_RAIZ or nome.lower() in agentes.NOMES_AGENTE or lockfiles.eh_lockfile(nome)
+
+
+def _milhar(n: int) -> str:
+    return f"{n:,}".replace(",", ".")
 
 
 def parece_projeto(pasta: Path) -> bool:
@@ -45,6 +57,14 @@ class RelatorioProjeto:
     completo: bool
     arquivos_ilegiveis: list[str] = field(default_factory=list)
     deps: ResultadoDeps = field(default_factory=lambda: ResultadoDeps([], 0, 0, None))
+    limite: int = MAX_ARQUIVOS
+
+    def avisos(self) -> list[str]:
+        """O que ficou de fora da verificação, para o rodapé do CLI e a barra de status do app."""
+        saida = []
+        if self.cortado and self.completo:
+            saida.append(f"Verificação incompleta: cortada em {_milhar(self.limite)} arquivos.")
+        return saida
 
 
 def _eh_mcp(rel: str) -> bool:
@@ -86,7 +106,10 @@ def verificar_projeto(
     deve_parar: Callable[[], bool] = lambda: False,
 ) -> RelatorioProjeto:
     raiz = Path(raiz)
-    rels, cortado = listar(raiz, excluir, limite, deve_parar)
+    fixos, fixos_cortado = listar_prioritarios(raiz, _FIXOS, _PASTAS_FIXAS, _fixo_na_raiz, excluir)
+    outros, cortado = listar(raiz, excluir, limite, deve_parar)
+    rels = sorted(set(fixos).union(outros))
+    cortado = cortado or fixos_cortado
     pastas: dict[str, set[str]] = {}
     for rel in rels:
         pastas.setdefault(posixpath.dirname(rel), set()).add(posixpath.basename(rel))
@@ -141,5 +164,5 @@ def verificar_projeto(
     achados.sort(key=lambda a: (-int(a.severidade), a.caminho, a.linha or 0))
     return RelatorioProjeto(
         raiz=raiz, achados=achados, arquivos=arquivos, cortado=cortado,
-        completo=not parou, arquivos_ilegiveis=sorted(ilegiveis), deps=resultado,
+        completo=not parou, arquivos_ilegiveis=sorted(ilegiveis), deps=resultado, limite=limite,
     )

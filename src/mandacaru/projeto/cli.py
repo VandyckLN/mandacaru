@@ -9,7 +9,7 @@ from ..config import ConfigError, load_config
 from ..events import Severity
 from . import RelatorioProjeto, verificar_projeto
 from .achado import Achado, exibivel
-from .percurso import MAX_ARQUIVOS, excluir_por_globs
+from .percurso import excluir_por_globs
 
 _SECOES = (
     (("agente", "texto"), "Instruções para agentes de IA"),
@@ -49,7 +49,8 @@ def formatar(rel: RelatorioProjeto) -> str:
     linhas = [f"Mandacaru · verificação de projeto: {exibivel(str(rel.raiz), None)}", ""]
     relevantes = [a for a in rel.achados if a.severidade > Severity.LOW]
     baixos = [a for a in rel.achados if a.severidade <= Severity.LOW]
-    if not rel.achados:
+    avisos = rel.avisos()
+    if not rel.achados and not rel.cortado:
         linhas += ["Nada suspeito encontrado.", ""]
     for familias, titulo in _SECOES:
         grupo = [a for a in relevantes if a.regra.split(".")[1:2] and a.regra.split(".")[1] in familias]
@@ -70,10 +71,9 @@ def formatar(rel: RelatorioProjeto) -> str:
         rodape.append(f"{rel.deps.verificadas} bibliotecas verificadas")
     if rel.deps.sem_versao > 0:
         rodape.append(f"{rel.deps.sem_versao} sem versão fixa não verificadas")
-    if rel.cortado:
-        rodape.append(f"cortado em {MAX_ARQUIVOS:,}".replace(",", ".") + " arquivos")
     if rel.arquivos_ilegiveis:
         rodape.append(f"{len(rel.arquivos_ilegiveis)} arquivos ilegíveis")
+    linhas += avisos
     linhas.append(" · ".join(rodape))
     contagem = {s: sum(1 for a in rel.achados if a.severidade == s) for s in Severity}
     linhas.append(

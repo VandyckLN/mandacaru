@@ -12,6 +12,7 @@ PULAR: frozenset[str] = frozenset({
 })
 MAX_BYTES = 2 * 1024 * 1024
 MAX_ARQUIVOS = 20_000
+MAX_POR_PASTA_PRIORITARIA = 1_000
 _SONDA_BINARIO = 8 * 1024
 
 
@@ -49,6 +50,83 @@ def listar(
         if cortado:
             break
     return sorted(rels), cortado
+
+
+def _pasta_real(raiz: Path, rel: str) -> bool:
+    """Cada componente de `rel` (a partir de `raiz`) e pasta de verdade, nunca link."""
+    atual = Path(raiz)
+    for parte in rel.split("/"):
+        if parte in ("", ".", ".."):
+            return False
+        atual = atual / parte
+        try:
+            if not stat.S_ISDIR(os.lstat(atual).st_mode):
+                return False
+        except OSError:
+            return False
+    return True
+
+
+def _regular(caminho: Path, excluir: Callable[[Path], bool]) -> bool:
+    try:
+        return stat.S_ISREG(os.lstat(caminho).st_mode) and not excluir(caminho)
+    except OSError:
+        return False
+
+
+def listar_prioritarios(
+    raiz: Path,
+    arquivos: Iterable[str],
+    pastas: dict[str, bool],
+    nome_na_raiz: Callable[[str], bool],
+    excluir: Callable[[Path], bool] = lambda p: False,
+    max_por_pasta: int = MAX_POR_PASTA_PRIORITARIA,
+) -> tuple[list[str], bool]:
+    """Alvos de caminho fixo, lidos fora do limite de MAX_ARQUIVOS (sem seguir links).
+
+    `arquivos`: caminhos exatos; `pastas`: pasta -> recursiva?; `nome_na_raiz`: arquivos do
+    primeiro nivel. Cada pasta (e a raiz) contribui com no maximo `max_por_pasta` arquivos;
+    passar disso marca `cortado`.
+    """
+    raiz = Path(raiz)
+    achados: set[str] = set()
+    cortado = False
+    for rel in arquivos:
+        pai = rel.rpartition("/")[0]
+        if (not pai or _pasta_real(raiz, pai)) and _regular(raiz / rel, excluir):
+            achados.add(rel)
+    n = 0
+    try:
+        with os.scandir(raiz) as it:
+            for e in it:
+                if nome_na_raiz(e.name) and _regular(raiz / e.name, excluir):
+                    if n >= max_por_pasta:
+                        cortado = True
+                        break
+                    n += 1
+                    achados.add(e.name)
+    except OSError:
+        pass
+    for pasta, recursiva in pastas.items():
+        if not _pasta_real(raiz, pasta) or excluir(raiz / pasta):
+            continue
+        n = 0
+        cheia = False
+        for dirpath, dirnames, filenames in os.walk(raiz / pasta, followlinks=False):
+            atual = Path(dirpath)
+            dirnames[:] = sorted(d for d in dirnames if recursiva and not excluir(atual / d))
+            for nome in sorted(filenames):
+                if not _regular(atual / nome, excluir):
+                    continue
+                if n >= max_por_pasta:
+                    cheia = True
+                    break
+                n += 1
+                achados.add((atual / nome).relative_to(raiz).as_posix())
+            if cheia:
+                cortado = True
+                break
+    return sorted(achados), cortado
 
 
 def ler_texto(caminho: Path) -> str | None:

@@ -275,6 +275,9 @@ _POR_REL = {
 }
 
 
+ALVOS = tuple(_POR_REL)
+
+
 def verificar(raiz: Path, rel: str, texto: str) -> list[Achado]:
     tratador = _POR_REL.get(rel)
     if tratador is None:

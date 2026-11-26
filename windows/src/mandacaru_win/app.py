@@ -805,9 +805,7 @@ class MainWindow(QMainWindow):
                 self.progress.setRange(0, 1)
                 self.progress.setValue(0)
         self.progress.set_caption(projeto_done_text(rel.arquivos, shown, rel.completo))
-        status = [rel.deps.erro] if rel.deps.erro else []
-        if rel.cortado and rel.completo:
-            status.append("limite de arquivos atingido: parte do projeto não foi verificada")
+        status = ([rel.deps.erro] if rel.deps.erro else []) + rel.avisos()
         self.statusBar().showMessage(
             " · ".join(status) or ("Projeto verificado" if rel.completo else "Interrompida"))
         self.lbl_file.setText("Arraste uma pasta ou arquivo para cá, ou escolha acima.")

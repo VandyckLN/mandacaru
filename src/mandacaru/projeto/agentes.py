@@ -10,10 +10,13 @@ from .achado import LIMITE_TRECHO, Achado
 from .percurso import linha_de
 from .unicode import trechos_largura_zero, trechos_tags
 
-_NOMES_AGENTE = frozenset({
+NOMES_AGENTE = frozenset({
     "agents.md", "claude.md", "gemini.md",
     ".cursorrules", ".windsurfrules", ".clinerules",
 })
+# Lidos sempre pelo orquestrador, mesmo depois do limite de arquivos (pasta -> recursiva?).
+PASTAS_AGENTE = {".cursor/rules": True, ".github/instructions": True}
+ARQUIVOS_AGENTE = (".github/copilot-instructions.md",)
 
 FRASES: tuple[str, ...] = (
     "ignore all previous instructions",
@@ -58,7 +61,7 @@ def eh_arquivo_agente(rel: str) -> bool:
     partes = _segmentos(rel)
     if not partes:
         return False
-    if partes[-1].lower() in _NOMES_AGENTE:
+    if partes[-1].lower() in NOMES_AGENTE:
         return True
     caminho = "/" + "/".join(p.lower() for p in partes)
     return (

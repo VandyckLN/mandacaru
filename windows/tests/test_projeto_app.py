@@ -323,3 +323,10 @@ def test_nome_da_pasta_e_falha_aparecem_sem_invisiveis(app, tmp_path, scanner):
     assert rotulos and "\u202e" not in rotulos[0] and "proj<U+202E>x" in rotulos[0]
     win._on_proj_failed("OSError: " + "\u202e" + "a\nb")
     assert win.msgs[-1].endswith("OSError: <U+202E>a<U+000A>b")
+
+
+def test_corte_aparece_na_barra(app, tmp_path, scanner):
+    from mandacaru.projeto import RelatorioProjeto
+    win = make_win(tmp_path, scanner)
+    win._on_proj_done(RelatorioProjeto(tmp_path, [], 10, True, True, limite=10))
+    assert "Verificação incompleta: cortada em 10 arquivos." in win.statusBar().currentMessage()
