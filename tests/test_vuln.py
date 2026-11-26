@@ -412,3 +412,19 @@ def test_kev_cache_migra_banco_antigo_sem_quebrar_get_cves(tmp_path: Path) -> No
     assert calls == []
     assert len(kev.entries()) == 3 and len(calls) == 1  # esquema antigo forca o refresh
     assert kev.entries(offline_only=True) and len(calls) == 1
+
+
+def test_query_sem_versao_omite_campo(tmp_path: Path) -> None:
+    bodies: list[dict] = []
+
+    def fake_http(req, timeout):
+        bodies.append(json.loads(req.data.decode()))
+        return 200, json.dumps({"results": [{}, {}]}).encode()
+
+    sem = InstalledPackage("evil", "evil", "", "npm")
+    com = InstalledPackage("lodash", "lodash", "4.17.15", "npm")
+    OsvClient(cache_db=tmp_path / "osv.db", http=fake_http).query_packages([sem, com])
+    q_sem, q_com = bodies[0]["queries"]
+    assert "version" not in q_sem
+    assert q_sem["package"] == {"name": "evil", "ecosystem": "npm"}
+    assert q_com["version"] == "4.17.15"

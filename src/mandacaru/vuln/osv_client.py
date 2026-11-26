@@ -117,7 +117,7 @@ class OsvClient:
             payload = {
                 "queries": [
                     {
-                        "version": pkg.version,
+                        **({"version": pkg.version} if pkg.version != "" else {}),
                         "package": {"name": pkg.source_name, "ecosystem": pkg.ecosystem},
                     }
                     for pkg in chunk
