@@ -1,3 +1,15 @@
+mandacaru (0.8.3) unstable; urgency=high
+
+  * Correcao (Windows): Destruir nao sobrescreve arquivos com hard link
+    (apenas desvincula o nome dentro da pasta alvo).
+  * Novo subcomando mandacaru dev <pasta> e verificacao de projetos no app
+    Windows (armadilhas para agentes de IA, abertura de pasta, hooks, CI e
+    bibliotecas vulneraveis/maliciosas via OSV.dev e CISA KEV).
+  * App Windows: monitoramento agendado em segundo plano (cron em lotes leves)
+    e icone na bandeja do sistema.
+
+ -- Vandyck Diniz <noreply@users.noreply.github.com>  Thu, 26 Nov 2026 11:45:00 -0300
+
 mandacaru (0.8.2) unstable; urgency=medium
 
   * App Windows: barras de progresso com a frase completa (arquivos, porcentagem
