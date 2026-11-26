@@ -24,6 +24,7 @@ import logging
 import ntpath
 import os
 import re
+import sys
 import threading
 import uuid
 from collections.abc import Callable, Iterator
@@ -538,3 +539,423 @@ class Despachante:
         log.info("cliente=%d acao=%s ok=%s params=%s erro=%s", cliente_pid, acao, resp.get("ok"),
                  exibivel(json.dumps(params, ensure_ascii=False), 300), resp.get("erro", ""))
         return codificar(resp)
+
+
+# ---------- configuração e cliente autorizado ----------
+def pasta_protegida(pasta: str | os.PathLike, amb: Ambiente) -> bool:
+    """O serviço só roda de uma pasta sob Arquivos de Programas (só administradores escrevem lá).
+
+    Um serviço SYSTEM rodando de uma pasta do usuário seria escalação de privilégio trivial: bastaria
+    trocar o executável.
+    """
+    return any(_sob(os.fspath(pasta), pf) for pf in amb.program_files)
+
+
+def carregar_config(pasta: str | os.PathLike) -> list[str]:
+    """Executáveis autorizados a falar com o serviço, de `guard.json` (gravado pelo instalador elevado)."""
+    try:
+        d = json.loads((Path(pasta) / "guard.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        log.warning("guard.json ausente ou inválido (%s): nenhum cliente autorizado", e)
+        return []
+    clientes = d.get("clientes") if isinstance(d, dict) else None
+    return [c for c in clientes if caminho_valido(c)] if isinstance(clientes, list) else []
+
+
+def verificador_de_clientes(permitidos: list[str], *,
+                            exe_do_pid: Callable[[int], str | None] | None = None) -> Callable[[int], bool]:
+    """Função que diz se o processo do outro lado do pipe roda um dos executáveis autorizados."""
+    exe_fn = exe_do_pid if exe_do_pid is not None else globals().get("exe_do_pid")
+    autorizados = {_n(p) for p in permitidos}
+
+    def verificar(pid: int) -> bool:
+        exe = exe_fn(pid) if exe_fn else None
+        return bool(exe) and _n(exe) in autorizados
+    return verificar
+
+
+def main(argv: list[str]) -> int:
+    """`servico`: roda sob o SCM. `remover-regras`: apaga as regras Mandacaru-* (desinstalação)."""
+    if argv == ["servico"] and sys.platform == "win32":
+        executar_servico()
+        return 0
+    if argv == ["remover-regras"] and sys.platform == "win32":
+        pasta = Path(sys.executable).resolve().parent
+        resp = _montar_acoes(pasta).remover_todas_regras()
+        print(resp.get("erro") or "Regras Mandacaru-* removidas.")
+        return 0 if resp["ok"] else 1
+    print("uso: guard_service (servico | remover-regras)", file=sys.stderr)
+    return 2
+
+
+if sys.platform == "win32":
+    import ctypes
+    import logging.handlers
+    import msvcrt
+    import winreg
+    from ctypes import wintypes
+
+    from mandacaru_win.guard_protocol import MAX_MENSAGEM
+    from mandacaru_win.incident_persist import _run_oem
+    from mandacaru_win.incident_proc import ProcessosWindows
+
+    NOME_PIPE = r"\\.\pipe\MandacaruGuard"
+    # SYSTEM e Administradores: tudo. Usuários interativos: ler e escrever, SEM FILE_CREATE_PIPE_INSTANCE
+    # (0x4), então nenhum usuário consegue abrir uma instância "servidor" com este nome.
+    SDDL_PIPE = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x12019b;;;IU)"
+
+    _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    _INVALIDO = wintypes.HANDLE(-1).value
+    _GENERIC_READ, _GENERIC_WRITE, _DELETE = 0x80000000, 0x40000000, 0x00010000
+    _SHARE_TODOS = 0x1 | 0x2 | 0x4
+    _OPEN_EXISTING, _CREATE_NEW = 3, 1
+    _FLAG_REPARSE, _ATTR_NORMAL = 0x00200000, 0x80
+    _ATTR_DIRETORIO, _ATTR_REPARSE = 0x10, 0x400
+    _FILE_DISPOSITION_INFO = 4
+    _ERROS_NAO_EXISTE = (2, 3)
+    _ERROS_EXISTE = (80, 183)
+    _ERROS_ACESSO = (5, 32)
+    _PIPE_ACCESS_DUPLEX, _FIRST_INSTANCE = 0x3, 0x00080000
+    _PIPE_REJECT_REMOTE = 0x8
+    _PIPE_CONNECTED = 535
+
+    class _SECURITY_ATTRIBUTES(ctypes.Structure):
+        _fields_ = [("nLength", wintypes.DWORD), ("lpSecurityDescriptor", wintypes.LPVOID),
+                    ("bInheritHandle", wintypes.BOOL)]
+
+    class _DISPOSICAO(ctypes.Structure):
+        _fields_ = [("DeleteFile", wintypes.BOOLEAN)]
+
+    def _sig(f, args, res):
+        f.argtypes, f.restype = args, res
+
+    _sig(_k32.CreateFileW, [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD,
+                            wintypes.DWORD, wintypes.HANDLE], wintypes.HANDLE)
+    _sig(_k32.GetFinalPathNameByHandleW, [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD],
+         wintypes.DWORD)
+    _sig(_k32.SetFileInformationByHandle, [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD],
+         wintypes.BOOL)
+    _sig(_k32.CloseHandle, [wintypes.HANDLE], wintypes.BOOL)
+    _sig(_k32.CreateNamedPipeW, [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+                                 wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+                                 ctypes.POINTER(_SECURITY_ATTRIBUTES)], wintypes.HANDLE)
+    _sig(_k32.ConnectNamedPipe, [wintypes.HANDLE, wintypes.LPVOID], wintypes.BOOL)
+    _sig(_k32.DisconnectNamedPipe, [wintypes.HANDLE], wintypes.BOOL)
+    _sig(_k32.FlushFileBuffers, [wintypes.HANDLE], wintypes.BOOL)
+    _sig(_k32.GetNamedPipeClientProcessId, [wintypes.HANDLE, ctypes.POINTER(wintypes.ULONG)], wintypes.BOOL)
+    _sig(_k32.ReadFile, [wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+                         wintypes.LPVOID], wintypes.BOOL)
+    _sig(_k32.WriteFile, [wintypes.HANDLE, wintypes.LPCVOID, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+                          wintypes.LPVOID], wintypes.BOOL)
+    _sig(_k32.OpenProcess, [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], wintypes.HANDLE)
+    _sig(_k32.QueryFullProcessImageNameW, [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                           ctypes.POINTER(wintypes.DWORD)], wintypes.BOOL)
+    _sig(_adv.ConvertStringSecurityDescriptorToSecurityDescriptorW,
+         [wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(wintypes.LPVOID), ctypes.POINTER(wintypes.ULONG)],
+         wintypes.BOOL)
+
+    def _erro_win(n: int | None = None) -> OSError:
+        n = ctypes.get_last_error() if n is None else n
+        if n in _ERROS_NAO_EXISTE:
+            return FileNotFoundError(n, ctypes.FormatError(n).strip())
+        if n in _ERROS_EXISTE:
+            return FileExistsError(n, ctypes.FormatError(n).strip())
+        return OSError(n, ctypes.FormatError(n).strip())
+
+    def _caminho_final(h) -> str:
+        buf = ctypes.create_unicode_buffer(32768)
+        n = _k32.GetFinalPathNameByHandleW(h, buf, len(buf), 0)
+        if not n:
+            raise _erro_win()
+        s = buf.value
+        return s[4:] if s.startswith("\\\\?\\") and not s.startswith("\\\\?\\UNC\\") else s
+
+    class _Aberto:
+        """Arquivo aberto por handle: o caminho final, a leitura e o apagar falam do MESMO arquivo."""
+
+        def __init__(self, h, pode_apagar: bool):
+            """Toma posse do handle: em qualquer falha aqui dentro, ele é fechado UMA vez, aqui."""
+            self._h = h
+            self._pode_apagar = pode_apagar
+            try:
+                self.caminho_final = _caminho_final(h)
+                fd = msvcrt.open_osfhandle(h, os.O_RDWR | os.O_BINARY)
+            except Exception:
+                _k32.CloseHandle(h)
+                raise
+            try:
+                self._arq = os.fdopen(fd, "r+b", buffering=0)
+            except Exception:
+                os.close(fd)  # o fd é dono do handle
+                raise
+            try:
+                attrs = os.fstat(self._arq.fileno()).st_file_attributes
+            except Exception:
+                self._arq.close()
+                raise
+            if attrs & (_ATTR_DIRETORIO | _ATTR_REPARSE):
+                self._arq.close()
+                raise OSError(_LINK)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self._arq.close()
+
+        def ler(self):
+            self._arq.seek(0)
+            while bloco := self._arq.read(1024 * 1024):
+                yield bloco
+
+        def escrever(self, dados: bytes) -> None:
+            vista = memoryview(dados)
+            while vista:
+                n = self._arq.write(vista)
+                vista = vista[n:]
+            os.fsync(self._arq.fileno())
+
+        def apagar(self) -> None:
+            if not self._pode_apagar:
+                raise PermissionError("arquivo aberto sem permissão de apagar")
+            info = _DISPOSICAO(True)
+            if not _k32.SetFileInformationByHandle(self._h, _FILE_DISPOSITION_INFO, ctypes.byref(info),
+                                                   ctypes.sizeof(info)):
+                raise _erro_win()
+
+    class ArquivosWindows:
+        """Abre sem seguir link (FILE_FLAG_OPEN_REPARSE_POINT); o caminho final mostra junções do caminho."""
+
+        @staticmethod
+        def _criar(caminho: str, acesso: int, compart: int, disposicao: int):
+            h = _k32.CreateFileW(caminho, acesso, compart, None, disposicao, _ATTR_NORMAL | _FLAG_REPARSE, None)
+            if h == _INVALIDO or not h:
+                raise _erro_win()
+            return h
+
+        def abrir(self, caminho: str) -> _Aberto:
+            try:
+                h, apagar = self._criar(caminho, _GENERIC_READ | _DELETE, _SHARE_TODOS, _OPEN_EXISTING), True
+            except OSError as e:
+                if e.errno not in _ERROS_ACESSO:  # executável em uso: abre só para ler (firewall)
+                    raise
+                h, apagar = self._criar(caminho, _GENERIC_READ, _SHARE_TODOS, _OPEN_EXISTING), False
+            return _Aberto(h, apagar)  # _Aberto fecha o handle se falhar
+
+        def criar_novo(self, caminho: str) -> _Aberto:
+            h = self._criar(caminho, _GENERIC_READ | _GENERIC_WRITE | _DELETE, 0, _CREATE_NEW)
+            return _Aberto(h, True)
+
+    class RegistroHKLM:
+        """HKEY_LOCAL_MACHINE, sempre na visão de 64 bits."""
+
+        _VISAO = winreg.KEY_WOW64_64KEY
+
+        def valores(self, chave: str) -> list[tuple[str, object, int]]:
+            try:
+                k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, chave, 0, winreg.KEY_READ | self._VISAO)
+            except FileNotFoundError:
+                return []
+            saida, i = [], 0
+            with k:
+                while True:
+                    try:
+                        saida.append(winreg.EnumValue(k, i))
+                    except OSError:
+                        break
+                    i += 1
+            return saida
+
+        def apagar(self, chave: str, nome: str) -> None:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, chave, 0, winreg.KEY_SET_VALUE | self._VISAO) as k:
+                winreg.DeleteValue(k, nome)
+
+        def gravar(self, chave: str, nome: str, valor: str, tipo_reg: int) -> None:
+            with winreg.CreateKeyEx(winreg.HKEY_LOCAL_MACHINE, chave, 0,
+                                    winreg.KEY_SET_VALUE | self._VISAO) as k:
+                winreg.SetValueEx(k, nome, 0, tipo_reg, valor)
+
+    def exe_do_pid(pid: int) -> str | None:
+        h = _k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return None
+        try:
+            buf = ctypes.create_unicode_buffer(32768)
+            n = wintypes.DWORD(len(buf))
+            return buf.value if _k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n)) else None
+        finally:
+            _k32.CloseHandle(h)
+
+    class ServidorPipe:
+        """Uma instância do pipe por conexão, cada uma numa thread (no máximo `max_conexoes`)."""
+
+        def __init__(self, nome: str, despachante: Despachante, verificar_cliente: Callable[[int], bool], *,
+                     max_conexoes: int = 4, prazo: float = 10.0):
+            self._nome = nome
+            self._desp = despachante
+            self._verificar = verificar_cliente
+            self._vagas = threading.Semaphore(max_conexoes)
+            self._prazo = prazo
+            self._parar = threading.Event()
+            psd = wintypes.LPVOID()
+            if not _adv.ConvertStringSecurityDescriptorToSecurityDescriptorW(SDDL_PIPE, 1, ctypes.byref(psd),
+                                                                             None):
+                raise _erro_win()
+            self._sa = _SECURITY_ATTRIBUTES(ctypes.sizeof(_SECURITY_ATTRIBUTES), psd, False)
+
+        def _instancia(self, primeira: bool):
+            modo = _PIPE_ACCESS_DUPLEX | (_FIRST_INSTANCE if primeira else 0)
+            h = _k32.CreateNamedPipeW(self._nome, modo, _PIPE_REJECT_REMOTE, 255, MAX_MENSAGEM, MAX_MENSAGEM, 0,
+                                      ctypes.byref(self._sa))
+            if h == _INVALIDO or not h:
+                raise _erro_win()  # primeira instância: outro processo já tem o nome (sequestro)
+            return h
+
+        def servir(self) -> None:
+            primeira = True
+            while not self._parar.is_set():
+                h = self._instancia(primeira)
+                primeira = False
+                if not _k32.ConnectNamedPipe(h, None) and ctypes.get_last_error() != _PIPE_CONNECTED:
+                    _k32.CloseHandle(h)
+                    continue
+                if self._parar.is_set():
+                    _k32.CloseHandle(h)
+                    break
+                if not self._vagas.acquire(blocking=False):
+                    _k32.DisconnectNamedPipe(h)
+                    _k32.CloseHandle(h)
+                    continue
+                threading.Thread(target=self._atender, args=(h,), daemon=True).start()
+
+        def parar(self) -> None:
+            self._parar.set()
+            try:  # acorda o ConnectNamedPipe que está esperando
+                with open(self._nome, "r+b", buffering=0):
+                    pass
+            except OSError:
+                pass
+
+        def _ler_linha(self, h) -> bytes | None:
+            buf = ctypes.create_string_buffer(4096)
+            lido = wintypes.DWORD()
+            dados = b""
+            while not dados.endswith(b"\n"):
+                if not _k32.ReadFile(h, buf, len(buf), ctypes.byref(lido), None) or lido.value == 0:
+                    return None
+                dados += buf.raw[:lido.value]
+                if len(dados) > MAX_MENSAGEM:
+                    return dados  # o despachante recusa por tamanho
+            return dados
+
+        def _escrever(self, h, dados: bytes) -> None:
+            escrito = wintypes.DWORD()
+            _k32.WriteFile(h, dados, len(dados), ctypes.byref(escrito), None)
+            _k32.FlushFileBuffers(h)
+
+        def _atender(self, h) -> None:
+            # Cliente parado no meio da conversa não prende a vaga para sempre.
+            relogio = threading.Timer(self._prazo, _k32.DisconnectNamedPipe, args=(h,))
+            relogio.start()
+            try:
+                pid = wintypes.ULONG()
+                ok_pid = _k32.GetNamedPipeClientProcessId(h, ctypes.byref(pid))
+                if not ok_pid or not self._verificar(pid.value):
+                    log.warning("cliente recusado: pid=%s", pid.value if ok_pid else "?")
+                    self._escrever(h, codificar(resposta_erro("Cliente não autorizado.")))
+                    return
+                linha = self._ler_linha(h)
+                if linha is not None:
+                    self._escrever(h, self._desp.tratar(linha, pid.value))
+            finally:
+                relogio.cancel()
+                _k32.DisconnectNamedPipe(h)
+                _k32.CloseHandle(h)
+                self._vagas.release()
+
+    def _montar_acoes(pasta: Path) -> AcoesGuard:
+        amb = Ambiente.atual(str(pasta))
+        return AcoesGuard(
+            amb, processos=ProcessosWindows(), arquivos=ArquivosWindows(), registro=RegistroHKLM(),
+            run=_run_oem, pasta_dados=pasta / "dados",
+            pasta_inicializar_global=ntpath.join(amb.program_data, "Microsoft", "Windows", "Start Menu",
+                                                 "Programs", "StartUp"))
+
+    # ----- anfitrião do SCM (Gerenciador de Controle de Serviços) -----
+    _SERVICE_WIN32_OWN_PROCESS = 0x10
+    _PARADO, _INICIANDO, _PARANDO, _RODANDO = 1, 2, 3, 4
+    _ACEITA_STOP_SHUTDOWN = 0x1 | 0x4
+    _CTRL_STOP, _CTRL_INTERROGATE, _CTRL_SHUTDOWN = 1, 4, 5
+
+    class _SERVICE_STATUS(ctypes.Structure):
+        _fields_ = [("dwServiceType", wintypes.DWORD), ("dwCurrentState", wintypes.DWORD),
+                    ("dwControlsAccepted", wintypes.DWORD), ("dwWin32ExitCode", wintypes.DWORD),
+                    ("dwServiceSpecificExitCode", wintypes.DWORD), ("dwCheckPoint", wintypes.DWORD),
+                    ("dwWaitHint", wintypes.DWORD)]
+
+    _MAIN = ctypes.WINFUNCTYPE(None, wintypes.DWORD, ctypes.POINTER(wintypes.LPWSTR))
+    _HANDLER = ctypes.WINFUNCTYPE(wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                  wintypes.LPVOID)
+
+    class _SERVICE_TABLE_ENTRYW(ctypes.Structure):
+        _fields_ = [("lpServiceName", wintypes.LPWSTR), ("lpServiceProc", _MAIN)]
+
+    _sig(_adv.StartServiceCtrlDispatcherW, [ctypes.POINTER(_SERVICE_TABLE_ENTRYW)], wintypes.BOOL)
+    _sig(_adv.RegisterServiceCtrlHandlerExW, [wintypes.LPCWSTR, _HANDLER, wintypes.LPVOID], wintypes.HANDLE)
+    _sig(_adv.SetServiceStatus, [wintypes.HANDLE, ctypes.POINTER(_SERVICE_STATUS)], wintypes.BOOL)
+
+    _estado: dict = {}  # referências vivas dos callbacks (o GC não pode levá-los)
+
+    def _status(estado: int, saida: int = 0) -> None:
+        st = _SERVICE_STATUS(_SERVICE_WIN32_OWN_PROCESS, estado,
+                             _ACEITA_STOP_SHUTDOWN if estado == _RODANDO else 0, saida, 0, 0, 5000)
+        _adv.SetServiceStatus(_estado["handle"], ctypes.byref(st))
+
+    def _controle(ctrl, _tipo, _dados, _ctx):
+        if ctrl in (_CTRL_STOP, _CTRL_SHUTDOWN):
+            _status(_PARANDO)
+            srv = _estado.get("servidor")
+            if srv is not None:
+                srv.parar()
+            return 0
+        return 0 if ctrl == _CTRL_INTERROGATE else 120  # ERROR_CALL_NOT_IMPLEMENTED
+
+    def _servico_main(_argc, _argv):
+        _estado["handler"] = _HANDLER(_controle)
+        _estado["handle"] = _adv.RegisterServiceCtrlHandlerExW(NOME_SERVICO, _estado["handler"], None)
+        _status(_INICIANDO)
+        pasta = Path(sys.executable).resolve().parent
+        try:
+            arq_log = logging.handlers.RotatingFileHandler(pasta / "guard.log", maxBytes=1_000_000,
+                                                           backupCount=3, encoding="utf-8")
+            arq_log.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+            log.addHandler(arq_log)
+            log.setLevel(logging.INFO)
+            amb = Ambiente.atual(str(pasta))
+            if not pasta_protegida(pasta, amb):
+                log.error("recusado: a pasta %s não fica sob Arquivos de Programas", pasta)
+                _status(_PARADO, 1)
+                return
+            srv = ServidorPipe(NOME_PIPE, Despachante(_montar_acoes(pasta)),
+                               verificador_de_clientes(carregar_config(pasta)))
+            _estado["servidor"] = srv
+            _status(_RODANDO)
+            log.info("MandacaruGuard %s iniciado", __version__)
+            srv.servir()
+        except Exception:  # noqa: BLE001
+            log.exception("falha no serviço")
+            _status(_PARADO, 1)
+            return
+        _status(_PARADO)
+
+    def executar_servico() -> None:
+        _estado["main"] = _MAIN(_servico_main)
+        tabela = (_SERVICE_TABLE_ENTRYW * 2)(_SERVICE_TABLE_ENTRYW(NOME_SERVICO, _estado["main"]),
+                                            _SERVICE_TABLE_ENTRYW(None, _MAIN()))
+        if not _adv.StartServiceCtrlDispatcherW(tabela):
+            raise _erro_win()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

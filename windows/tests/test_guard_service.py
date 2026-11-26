@@ -442,6 +442,167 @@ def test_despachante_erro_interno_vira_resposta(tmp_path):
     assert r == {"ok": False, "erro": "Erro interno do serviço."}
 
 
+# ---------- configuração e cliente autorizado ----------
+def test_pasta_protegida():
+    from mandacaru_win.guard_service import pasta_protegida
+    assert pasta_protegida(r"C:\Program Files\Mandacaru Guard", AMB) is True
+    assert pasta_protegida(r"c:\program files (x86)\Mandacaru Guard", AMB) is True
+    assert pasta_protegida(r"C:\Users\ana\AppData\Local\Programs\Mandacaru", AMB) is False
+    assert pasta_protegida(r"C:\Program FilesX\Guard", AMB) is False
+
+
+def test_carregar_config(tmp_path):
+    from mandacaru_win.guard_service import carregar_config
+    assert carregar_config(tmp_path) == []                                   # sem guard.json: ninguém
+    (tmp_path / "guard.json").write_text("{quebrado", encoding="utf-8")
+    assert carregar_config(tmp_path) == []
+    (tmp_path / "guard.json").write_text(json.dumps({"clientes": [
+        r"C:\Users\ana\AppData\Local\Programs\Mandacaru\Mandacaru.exe", "relativo.exe", 3]}), encoding="utf-8")
+    assert carregar_config(tmp_path) == [r"C:\Users\ana\AppData\Local\Programs\Mandacaru\Mandacaru.exe"]
+
+
+def test_verificador_de_clientes():
+    from mandacaru_win.guard_service import verificador_de_clientes
+    app = r"C:\Users\ana\AppData\Local\Programs\Mandacaru\Mandacaru.exe"
+    exes = {10: app.upper(), 20: r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", 30: None}
+    ok = verificador_de_clientes([app], exe_do_pid=exes.get)
+    assert ok(10) is True and ok(20) is False and ok(30) is False and ok(99) is False
+    assert verificador_de_clientes([], exe_do_pid=exes.get)(10) is False
+
+
+def test_main_sem_argumento_valido():
+    from mandacaru_win.guard_service import main
+    assert main([]) == 2 and main(["apagar-tudo"]) == 2
+
+
+# ---------- Windows real ----------
+windows = pytest.mark.skipif(sys.platform != "win32", reason="só no Windows")
+
+
+@windows
+def test_arquivos_windows_caminho_final_e_apagar_por_handle(tmp_path):
+    import os
+
+    from mandacaru_win.guard_service import ArquivosWindows
+    base = os.path.realpath(tmp_path)                       # nomes longos (sem RUNNER~1)
+    f = os.path.join(base, "a.bin")
+    with open(f, "wb") as fh:
+        fh.write(CONTEUDO)
+    arq = ArquivosWindows()
+    with arq.abrir(f) as h:
+        assert h.caminho_final.lower() == f.lower()
+        assert b"".join(h.ler()) == CONTEUDO
+        h.apagar()
+    assert not os.path.exists(f)
+    with pytest.raises(FileNotFoundError):
+        arq.abrir(f)
+    with arq.criar_novo(f) as h:
+        h.escrever(b"novo")
+    with open(f, "rb") as fh:
+        assert fh.read() == b"novo"
+    with pytest.raises(FileExistsError):
+        arq.criar_novo(f)
+
+
+@windows
+def test_arquivos_windows_juncao_mostra_o_destino(tmp_path):
+    import _winapi
+    import os
+
+    from mandacaru_win.guard_service import ArquivosWindows
+    base = os.path.realpath(tmp_path)
+    real = os.path.join(base, "real")
+    os.mkdir(real)
+    with open(os.path.join(real, "x.bin"), "wb") as fh:
+        fh.write(b"x")
+    juncao = os.path.join(base, "juncao")
+    _winapi.CreateJunction(real, juncao)
+    with ArquivosWindows().abrir(os.path.join(juncao, "x.bin")) as h:
+        assert h.caminho_final.lower() == os.path.join(real, "x.bin").lower()
+
+
+@windows
+def test_exe_do_pid_windows():
+    import os
+
+    from mandacaru_win.guard_service import exe_do_pid
+    assert os.path.normcase(exe_do_pid(os.getpid())) == os.path.normcase(os.path.realpath(sys.executable))
+    assert exe_do_pid(0) is None
+
+
+def _servidor(tmp_path, verificar):
+    import threading
+    import uuid as _uuid
+
+    from mandacaru_win.guard_service import ServidorPipe
+    a, _arq, _cmd, _p = _acoes(tmp_path)
+    nome = rf"\\.\pipe\MandacaruGuardTeste-{_uuid.uuid4().hex}"
+    srv = ServidorPipe(nome, Despachante(a), verificar)
+    t = threading.Thread(target=srv.servir, daemon=True)
+    t.start()
+    return srv, t, nome
+
+
+def _pedir(nome, linha):
+    import time
+    for _ in range(100):
+        try:
+            with open(nome, "r+b", buffering=0) as p:
+                p.write(linha)
+                resp = b""
+                while not resp.endswith(b"\n"):
+                    bloco = p.read(4096)
+                    if not bloco:
+                        break
+                    resp += bloco
+                return resp
+        except FileNotFoundError:
+            time.sleep(0.05)
+    raise AssertionError("pipe não apareceu")
+
+
+@windows
+def test_pipe_ida_e_volta(tmp_path):
+    import os
+    srv, t, nome = _servidor(tmp_path, lambda pid: pid == os.getpid())
+    try:
+        r = decodificar(_pedir(nome, codificar({"acao": "ping"})))
+        assert r["ok"] is True and r["servico"] == "MandacaruGuard"
+        r = decodificar(_pedir(nome, b'{"acao": "rodar"}\n'))
+        assert r["ok"] is False
+    finally:
+        srv.parar()
+        t.join(10)
+    assert not t.is_alive()
+
+
+@windows
+def test_pipe_recusa_cliente_nao_autorizado(tmp_path):
+    srv, t, nome = _servidor(tmp_path, lambda pid: False)
+    try:
+        r = decodificar(_pedir(nome, codificar({"acao": "ping"})))
+        assert r == {"ok": False, "erro": "Cliente não autorizado."}
+    finally:
+        srv.parar()
+        t.join(10)
+
+
+@windows
+def test_pipe_segundo_servidor_com_mesmo_nome_falha(tmp_path):
+    import os
+
+    from mandacaru_win.guard_service import ServidorPipe
+    srv, t, nome = _servidor(tmp_path, lambda pid: pid == os.getpid())
+    try:
+        _pedir(nome, codificar({"acao": "ping"}))
+        outro = ServidorPipe(nome, Despachante(_acoes(tmp_path)[0]), lambda pid: True)
+        with pytest.raises(OSError):
+            outro.servir()                                  # FILE_FLAG_FIRST_PIPE_INSTANCE
+    finally:
+        srv.parar()
+        t.join(10)
+
+
 def test_modulos_guard_sem_qt():
     import os
     import subprocess
