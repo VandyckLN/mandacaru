@@ -9,8 +9,8 @@ from pathlib import Path
 
 from ..events import Severity
 from . import jsonc
-from .achado import Achado, ArquivoIlegivel
-from .percurso import ler_texto, linha_do_trecho
+from .achado import Achado, ArquivoIlegivel, limitar
+from .percurso import Linhas, ler_texto
 
 MITRE = ("T1204", "T1059")
 _MAX_CMD = 10_000
@@ -63,15 +63,15 @@ def _comando_texto(cmd: object, args: object) -> str:
     return " ".join(partes)
 
 
-def _linha(texto: str, valor: str, chave: str = "") -> int | None:
+def _linha(ln: Linhas, valor: str, chave: str = "") -> int | None:
     for v in (valor, json.dumps(valor)[1:-1]):
-        if v and (n := linha_do_trecho(texto, v)) is not None:
+        if v and (n := ln.do_trecho(v)) is not None:
             return n
-    return linha_do_trecho(texto, f'"{chave}"') if chave else None
+    return ln.do_trecho(f'"{chave}"') if chave else None
 
 
-def _achado(regra, sev, rel, expl, texto, valor, chave="", trecho=None) -> Achado:
-    return Achado(regra, sev, rel, expl, _linha(texto, valor, chave),
+def _achado(regra, sev, rel, expl, ln, valor, chave="", trecho=None) -> Achado:
+    return Achado(regra, sev, rel, expl, _linha(ln, valor, chave),
                   (valor if trecho is None else trecho)[:300], MITRE)
 
 
@@ -112,7 +112,7 @@ def pacotes_mcp(texto_json: object) -> list[tuple[str, str, str]]:
     return achados
 
 
-def _mcp(rel: str, texto: str, dados: object) -> list[Achado]:
+def _mcp(rel: str, ln: Linhas, dados: object) -> list[Achado]:
     saida = []
     for nome, srv in _servidores(dados):
         linha_cmd = _comando_texto(srv.get("command"), srv.get("args"))
@@ -122,13 +122,13 @@ def _mcp(rel: str, texto: str, dados: object) -> list[Achado]:
         saida.append(_achado(
             "projeto.abrir.mcp", sev, rel,
             f"servidor MCP '{nome}' declarado: o agente o inicia ao abrir o projeto",
-            texto, str(srv.get("command") or ""), nome, trecho=linha_cmd))
+            ln, str(srv.get("command") or ""), nome, trecho=linha_cmd))
     return saida
 
 
 # --- VS Code ---------------------------------------------------------------
 
-def _tarefas(rel: str, texto: str, dados: object) -> list[Achado]:
+def _tarefas(rel: str, ln: Linhas, dados: object) -> list[Achado]:
     tarefas = dados.get("tasks") if isinstance(dados, dict) else None
     if not isinstance(tarefas, list):
         return []
@@ -152,7 +152,7 @@ def _tarefas(rel: str, texto: str, dados: object) -> list[Achado]:
             "projeto.abrir.tarefa_automatica",
             Severity.HIGH if perigoso else Severity.MEDIUM, rel,
             "tarefa configurada para rodar sozinha ao abrir a pasta",
-            texto, valor, "folderOpen", trecho=principal))
+            ln, valor, "folderOpen", trecho=principal))
     return saida
 
 
@@ -164,7 +164,7 @@ def _caminho_do_projeto(valor: str) -> bool:
     return "/" in valor or "\\" in valor
 
 
-def _settings_vscode(rel: str, texto: str, dados: object) -> list[Achado]:
+def _settings_vscode(rel: str, ln: Linhas, dados: object) -> list[Achado]:
     if not isinstance(dados, dict):
         return []
     saida = []
@@ -176,19 +176,19 @@ def _settings_vscode(rel: str, texto: str, dados: object) -> list[Achado]:
                 or chave.endswith((".path", "Path"))) and _caminho_do_projeto(valor):
             saida.append(_achado(
                 "projeto.abrir.executavel_do_projeto", Severity.MEDIUM, rel,
-                f"'{chave}' aponta um executável para dentro do projeto", texto, valor, chave))
+                f"'{chave}' aponta um executável para dentro do projeto", ln, valor, chave))
         elif chave.startswith("terminal.integrated.env.") and isinstance(valor, dict):
             for var in valor:
                 if isinstance(var, str) and var.upper() in {"PATH", "NODE_OPTIONS", "PYTHONSTARTUP"}:
                     saida.append(_achado(
                         "projeto.abrir.executavel_do_projeto", Severity.MEDIUM, rel,
-                        f"o terminal do VS Code define {var} para o projeto", texto, str(var), chave))
+                        f"o terminal do VS Code define {var} para o projeto", ln, str(var), chave))
     return saida
 
 
 # --- Claude ----------------------------------------------------------------
 
-def _claude(rel: str, texto: str, dados: object) -> list[Achado]:
+def _claude(rel: str, ln: Linhas, dados: object) -> list[Achado]:
     if not isinstance(dados, dict):
         return []
     saida = []
@@ -209,18 +209,18 @@ def _claude(rel: str, texto: str, dados: object) -> list[Achado]:
                     saida.append(_achado(
                         "projeto.abrir.hook_agente",
                         Severity.HIGH if grave else Severity.MEDIUM, rel,
-                        f"hook '{evento}' do agente executa um comando do projeto", texto, cmd,
+                        f"hook '{evento}' do agente executa um comando do projeto", ln, cmd,
                         str(evento)))
     perm = dados.get("permissions")
     allow = perm.get("allow") if isinstance(perm, dict) else None
     if isinstance(allow, list) and any(a in ("Bash", "Bash(*)") for a in allow if isinstance(a, str)):
         saida.append(_achado(
             "projeto.abrir.permissao_ampla", Severity.MEDIUM, rel,
-            "o projeto libera qualquer comando Bash para o agente", texto, "Bash", "allow"))
+            "o projeto libera qualquer comando Bash para o agente", ln, "Bash", "allow"))
     if dados.get("enableAllProjectMcpServers") is True:
         saida.append(_achado(
             "projeto.abrir.permissao_ampla", Severity.MEDIUM, rel,
-            "o projeto aprova sozinho todos os servidores MCP", texto, "",
+            "o projeto aprova sozinho todos os servidores MCP", ln, "",
             "enableAllProjectMcpServers"))
     return saida
 
@@ -245,7 +245,7 @@ def _achatar(valor: object) -> str:
     return ""
 
 
-def _devcontainer(rel: str, texto: str, dados: object) -> list[Achado]:
+def _devcontainer(rel: str, ln: Linhas, dados: object) -> list[Achado]:
     if not isinstance(dados, dict):
         return []
     saida = []
@@ -257,7 +257,7 @@ def _devcontainer(rel: str, texto: str, dados: object) -> list[Achado]:
         onde = "no computador (host)" if chave == "initializeCommand" else "no container"
         saida.append(_achado(
             "projeto.abrir.devcontainer", sev, rel,
-            f"'{chave}' executa um comando {onde} ao abrir o projeto", texto,
+            f"'{chave}' executa um comando {onde} ao abrir o projeto", ln,
             dados[chave] if isinstance(dados[chave], str) else "", chave, trecho=cmd))
     return saida
 
@@ -286,7 +286,7 @@ def verificar(raiz: Path, rel: str, texto: str) -> list[Achado]:
         dados = jsonc.carregar(texto)
     except ValueError as exc:
         raise ArquivoIlegivel(rel) from exc
-    return tratador(rel, texto, dados)
+    return limitar(tratador(rel, Linhas(texto), dados))
 
 
 # --- git -------------------------------------------------------------------
@@ -325,6 +325,7 @@ def verificar_git(raiz: Path) -> list[Achado]:
             None, conteudo[:300].strip(), MITRE))
     config = ler_texto(Path(raiz) / ".git" / "config")
     if config:
+        linhas = Linhas(config)
         for m in _GIT_CONFIG.finditer(config):
             chave, valor = m.group(1), m.group(2).strip()
             if chave.lower() == "fsmonitor" and valor.lower() in ("true", "false"):
@@ -332,5 +333,5 @@ def verificar_git(raiz: Path) -> list[Achado]:
             saida.append(Achado(
                 "projeto.abrir.git_hook", Severity.MEDIUM, ".git/config",
                 f"'{chave}' em .git/config faz o git executar um programa",
-                linha_do_trecho(config, m.group(0)), m.group(0).strip()[:300], MITRE))
+                linhas.de(m.start()), m.group(0).strip(), MITRE))
     return saida

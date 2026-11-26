@@ -7,7 +7,7 @@ from pathlib import Path
 
 from ..detectors.static import SCRIPT_EXT
 from ..events import Severity
-from .achado import Achado
+from .achado import Achado, Limitador
 
 EXT_CODIGO = frozenset(SCRIPT_EXT) | {
     ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".c", ".cpp", ".h", ".cs", ".kt", ".swift",
@@ -61,22 +61,22 @@ def _mistura_escritas(linha: str) -> str | None:
 def verificar(raiz: Path, rel: str, texto: str) -> list[Achado]:
     if Path(rel).suffix.lower() not in EXT_CODIGO:
         return []
-    achados: list[Achado] = []
-    linhas = [ln.removesuffix("\r") for ln in texto.split("\n")]
-    for i, trecho in enumerate(linhas, start=1):
-        if _BIDI.search(trecho):
-            achados.append(Achado(
+    lim = Limitador()
+    for i, trecho in enumerate(texto.split("\n"), start=1):
+        trecho = trecho.removesuffix("\r")
+        if _BIDI.search(trecho) and lim.cabe(rel, "projeto.unicode.bidi"):
+            lim.add(Achado(
                 "projeto.unicode.bidi", Severity.HIGH, rel,
                 "caracteres de controle bidirecional no código (Trojan Source): "
                 "o texto exibido pode diferir do que é executado",
                 i, trecho, ("T1027",),
             ))
         palavra = _mistura_escritas(trecho)
-        if palavra:
-            achados.append(Achado(
+        if palavra and lim.cabe(rel, "projeto.unicode.homoglifo"):
+            lim.add(Achado(
                 "projeto.unicode.homoglifo", Severity.MEDIUM, rel,
                 f"identificador '{palavra}' mistura letras latinas com cirílicas ou "
                 "gregas parecidas (homoglifo)",
                 i, trecho, ("T1036",),
             ))
-    return achados
+    return lim.resultado()

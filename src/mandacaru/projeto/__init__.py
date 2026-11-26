@@ -11,7 +11,7 @@ from ..events import Severity
 from ..vuln import KevCache, OsvClient
 from . import abrir, agentes, ci, instalar, jsonc, lockfiles
 from . import unicode as unicode_
-from .achado import Achado
+from .achado import Achado, limitar
 from .dependencias import ResultadoDeps, verificar_dependencias
 from .lockfiles import Dependencia
 from .percurso import MAX_ARQUIVOS, ler_texto, listar, listar_prioritarios
@@ -152,6 +152,7 @@ def verificar_projeto(
         achados += abrir.verificar_git(raiz)
     except Exception:  # noqa: BLE001
         ilegiveis.add(".git")
+    achados = limitar(achados)  # no máximo 20 por (arquivo, regra) em todas as famílias
 
     if parou or deve_parar():
         parou = True

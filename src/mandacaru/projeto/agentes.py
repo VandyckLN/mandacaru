@@ -6,8 +6,8 @@ import unicodedata
 from pathlib import Path, PurePosixPath
 
 from ..events import Severity
-from .achado import LIMITE_TRECHO, Achado
-from .percurso import linha_de
+from .achado import LIMITE_TRECHO, Achado, Limitador
+from .percurso import Linhas
 from .unicode import trechos_largura_zero, trechos_tags
 
 NOMES_AGENTE = frozenset({
@@ -127,15 +127,17 @@ def verificar(raiz: Path, rel: str, texto: str) -> list[Achado]:
     agente = eh_arquivo_agente(rel)
     lido = eh_lido_por_agente(rel)
     baixo = rebaixado(rel)
-    achados: list[Achado] = []
+    lim = Limitador()
+    linhas = Linhas(texto)
     vistos: set[tuple[str, int]] = set()
 
     def add(regra: str, sev: Severity, pos: int, explicacao: str, mitre: tuple[str, ...]) -> None:
-        linha = linha_de(texto, pos)
-        if (regra, linha) in vistos:
+        linha = linhas.de(pos)
+        if (regra, linha) in vistos:  # dedup antes de montar o trecho
             return
         vistos.add((regra, linha))
-        achados.append(Achado(regra, sev, rel, explicacao, linha, _trecho(texto, pos), mitre))
+        if lim.cabe(rel, regra):
+            lim.add(Achado(regra, sev, rel, explicacao, linha, _trecho(texto, pos), mitre))
 
     if agente or lido:
         sev = Severity.HIGH if agente else Severity.MEDIUM
@@ -176,5 +178,4 @@ def verificar(raiz: Path, rel: str, texto: str) -> list[Achado]:
                     "(invisível na página renderizada)", ("T1204",))
             pos = fim + 3
 
-    achados.sort(key=lambda a: (a.linha or 0, a.regra))
-    return achados
+    return sorted(lim.resultado(), key=lambda a: (a.linha or 0, a.regra))

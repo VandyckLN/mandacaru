@@ -19,7 +19,7 @@ from ..events import Severity
 from . import jsonc
 from .abrir import baixa_e_executa
 from .achado import Achado, ArquivoIlegivel
-from .percurso import ler_texto, linha_de, linha_do_trecho
+from .percurso import Linhas, ler_texto
 
 MITRE_NPM = ("T1195.002", "T1059")
 MITRE_PY = ("T1195.002",)
@@ -58,11 +58,11 @@ def verificar(raiz: Path, rel: str, texto: str) -> list[Achado]:
 
 # --- npm -------------------------------------------------------------------
 
-def _linha(texto: str, valor: str, chave: str) -> int | None:
+def _linha(ln: Linhas, valor: str, chave: str) -> int | None:
     for v in (valor, json.dumps(valor)[1:-1]):
-        if v and (n := linha_do_trecho(texto, v)) is not None:
+        if v and (n := ln.do_trecho(v)) is not None:
             return n
-    return linha_do_trecho(texto, f'"{chave}"')
+    return ln.do_trecho(f'"{chave}"')
 
 
 def _sem_links(raiz: str, alvo: str) -> bool:
@@ -105,6 +105,7 @@ def _npm(raiz: Path, rel: str, texto: str) -> list[Achado]:
     if not isinstance(scripts, dict):
         return []
     saida = []
+    ln = Linhas(texto)
     for gancho in _GANCHOS:
         cmd = scripts.get(gancho)
         if not isinstance(cmd, str):
@@ -121,7 +122,7 @@ def _npm(raiz: Path, rel: str, texto: str) -> list[Achado]:
             rel,
             f"script '{gancho}' roda automaticamente ao instalar as dependências"
             + (" e baixa ou decodifica código para executar" if perigoso else ""),
-            _linha(texto, cmd, gancho), cmd[:300], MITRE_NPM))
+            _linha(ln, cmd, gancho), cmd, MITRE_NPM))
     return saida
 
 
@@ -182,7 +183,7 @@ def _regex_gatilho(texto: str) -> int | None:
         if _RE_DECODER.search(texto, m.end(), m.end() + 300):
             pos.append(m.start())
             break
-    return linha_de(texto, min(pos)) if pos else None
+    return Linhas(texto).de(min(pos)) if pos else None
 
 
 def _setup_py(rel: str, texto: str) -> list[Achado]:
@@ -214,4 +215,4 @@ def _backend_local(rel: str, texto: str) -> list[Achado]:
     return [Achado(
         "projeto.instalar.backend_local", Severity.LOW, rel,
         "o build usa um backend local (backend-path): código do próprio projeto roda ao instalar",
-        linha_do_trecho(texto, "backend-path"), "backend-path", MITRE_PY)]
+        Linhas(texto).do_trecho("backend-path"), "backend-path", MITRE_PY)]

@@ -4,6 +4,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import stat
+from bisect import bisect_left
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
@@ -148,6 +149,39 @@ def ler_texto(caminho: Path) -> str | None:
     if b"\x00" in dados[:_SONDA_BINARIO]:
         return None
     return dados.decode("utf-8-sig", errors="replace")
+
+
+class Linhas:
+    """Numeracao de linhas de um texto: quebras pre-computadas (uma vez) e busca binaria.
+
+    `do_trecho` faz no maximo MAX_BUSCAS buscas por texto; depois devolve None (sem linha),
+    para que muitos achados num arquivo hostil nao virem tempo quadratico.
+    """
+
+    MAX_BUSCAS = 200
+
+    def __init__(self, texto: str) -> None:
+        self.texto = texto
+        self._quebras: list[int] | None = None
+        self._buscas = 0
+
+    def de(self, pos: int) -> int:
+        """Linha 1-based da posicao `pos`; `\\r\\n` conta como uma quebra."""
+        if self._quebras is None:
+            quebras, i = [], self.texto.find("\n")
+            while i >= 0:
+                quebras.append(i)
+                i = self.texto.find("\n", i + 1)
+            self._quebras = quebras
+        return bisect_left(self._quebras, pos) + 1
+
+    def do_trecho(self, trecho: str) -> int | None:
+        """Linha da primeira ocorrencia de `trecho`, ou None."""
+        if not trecho or self._buscas >= self.MAX_BUSCAS:
+            return None
+        self._buscas += 1
+        pos = self.texto.find(trecho)
+        return None if pos < 0 else self.de(pos)
 
 
 def linha_de(texto: str, pos: int) -> int:
