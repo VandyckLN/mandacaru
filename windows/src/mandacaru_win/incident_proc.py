@@ -14,7 +14,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from mandacaru_win.incident import sha256_arquivo
+from mandacaru_win.incident import sha256_arquivo, sha256_valido
+
+
+class ProcessoMudouError(OSError):
+    """O PID já não pertence à mesma instância de processo inspecionada."""
 
 
 @dataclass(frozen=True)
@@ -22,13 +26,13 @@ class ProcessoInfo:
     pid: int
     ppid: int
     exe: str | None
-    criado: float | None  # segundos desde 1601 (FILETIME); só serve para comparar
+    criado: int | float | None  # ticks de 100 ns desde 1601 (FILETIME); só serve para comparar
 
 
 class Processos(Protocol):
     def listar(self) -> list[ProcessoInfo]: ...
     def info(self, pid: int) -> ProcessoInfo | None: ...
-    def encerrar(self, pid: int, criado: float | None) -> None:
+    def encerrar(self, pid: int, criado: int | float | None) -> None:
         """Encerra o PID só se ele ainda é o processo criado em `criado`; levanta OSError se não der."""
 
 
@@ -45,6 +49,9 @@ def _mesmo_caminho(a: str | None, b: str | os.PathLike) -> bool:
 
 def _descendentes(raiz: ProcessoInfo, todos: list[ProcessoInfo]) -> list[ProcessoInfo]:
     """Filhos, netos… em largura. Um "filho" mais antigo que o pai é órfão de um PID reaproveitado."""
+    atual_raiz = next((p for p in todos if p.pid == raiz.pid), None)
+    if atual_raiz is None or atual_raiz.criado is None or atual_raiz.criado != raiz.criado:
+        return []
     filhos: dict[int, list[ProcessoInfo]] = {}
     for p in todos:
         filhos.setdefault(p.ppid, []).append(p)
@@ -64,24 +71,33 @@ def _descendentes(raiz: ProcessoInfo, todos: list[ProcessoInfo]) -> list[Process
 def encerrar_arvore(processos: Processos, pid: int, exe_esperado: str | os.PathLike, sha256: str, *,
                     hash_fn: Callable[[Path], str | None] = sha256_arquivo,
                     proprio_pid: int | None = None) -> ResultadoEncerrar:
+    if not sha256_valido(sha256):
+        return ResultadoEncerrar(recusa="SHA-256 inválido para confirmar o processo; nada foi encerrado.")
     proprio = os.getpid() if proprio_pid is None else proprio_pid
     if pid <= 4 or pid == proprio:
         return ResultadoEncerrar(recusa="Processo do sistema ou do próprio Mandacaru: não será encerrado.")
-    alvo = processos.info(pid)
+    # Um único snapshot para inspecionar o alvo e a árvore de filhos sem deriva entre duas listagens.
+    todos = processos.listar()
+    alvo = next((p for p in todos if p.pid == pid), None)
     if alvo is None:
         return ResultadoEncerrar(recusa="O processo já terminou.")
     if not _mesmo_caminho(alvo.exe, exe_esperado):
         return ResultadoEncerrar(
             recusa="O número do processo agora pertence a outro programa; nada foi encerrado.")
-    if hash_fn(Path(alvo.exe)) != sha256:
+    atual_sha = hash_fn(Path(alvo.exe))
+    if not isinstance(atual_sha, str) or atual_sha.lower() != sha256.lower():
         return ResultadoEncerrar(recusa="O executável mudou desde a detecção; nada foi encerrado.")
     # O alvo primeiro: assim ele não recria os filhos enquanto eles são encerrados.
     r = ResultadoEncerrar()
-    for p in [alvo, *_descendentes(alvo, processos.listar())]:
+    for p in [alvo, *_descendentes(alvo, todos)]:
         if p.pid <= 4 or p.pid == proprio:
             continue
         try:
             processos.encerrar(p.pid, p.criado)
+        except ProcessoMudouError as e:
+            r.falhas.append((p.pid, str(e)))
+            if p.pid == alvo.pid:
+                break
         except OSError as e:
             r.falhas.append((p.pid, e.strerror or str(e)))
         else:
@@ -128,11 +144,11 @@ if sys.platform == "win32":
         n = ctypes.get_last_error()
         return OSError(n, ctypes.FormatError(n).strip())
 
-    def _criado(h) -> float | None:
+    def _criado(h) -> int | None:
         c, x, k, u = (wintypes.FILETIME() for _ in range(4))
         if not _k32.GetProcessTimes(h, ctypes.byref(c), ctypes.byref(x), ctypes.byref(k), ctypes.byref(u)):
             return None
-        return ((c.dwHighDateTime << 32) | c.dwLowDateTime) / 1e7
+        return (c.dwHighDateTime << 32) | c.dwLowDateTime
 
     def _exe(h) -> str | None:
         buf = ctypes.create_unicode_buffer(32768)
@@ -173,14 +189,14 @@ if sys.platform == "win32":
         def info(self, pid: int) -> ProcessoInfo | None:
             return next((p for p in self.listar() if p.pid == pid), None)
 
-        def encerrar(self, pid: int, criado: float | None) -> None:
+        def encerrar(self, pid: int, criado: int | float | None) -> None:
             # Um único handle: confere a hora de criação e encerra o MESMO processo.
             h = _k32.OpenProcess(_PROCESS_TERMINATE | _PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
             if not h:
                 raise _erro()
             try:
                 if criado is None or _criado(h) != criado:
-                    raise OSError("O processo mudou desde a detecção; não foi encerrado.")
+                    raise ProcessoMudouError("O processo mudou desde a detecção; não foi encerrado.")
                 if not _k32.TerminateProcess(h, 1):
                     raise _erro()
             finally:

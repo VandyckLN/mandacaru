@@ -34,7 +34,8 @@ REG_SZ, REG_EXPAND_SZ = 1, 2
 _CHAVES = {"hkcu_run": CHAVE_RUN, "hkcu_runonce": CHAVE_RUNONCE}
 LIMITE_INICIALIZAR = 1024 * 1024
 _CHAVE_XOR = b"mandacaru-incidente"
-_FRONTEIRA = re.compile(r"[0-9a-z_.\-]")
+_FRONTEIRA = re.compile(r"[\w.\-]")
+_isjunction = getattr(os.path, "isjunction", lambda _: False)
 
 _MUDOU = "A entrada mudou desde a detecção; nada foi removido."
 _EXISTE = "Já existe outra entrada com esse nome; nada foi alterado."
@@ -67,6 +68,7 @@ def _schtasks() -> str:
 
 def _nome_tarefa_valido(nome: object) -> bool:
     return (isinstance(nome, str) and nome.startswith("\\") and 1 < len(nome) <= 260
+            and ".." not in nome.split("\\")
             and not any(c == '"' or ord(c) < 32 for c in nome))
 
 
@@ -122,11 +124,22 @@ def _nome_seguro(nome: object) -> bool:
             and not any(c in nome for c in '\\/:\0') and nome == nome.strip())
 
 
+def _eh_link(caminho: str | os.PathLike) -> bool:
+    p = os.fspath(caminho)
+    return os.path.islink(p) or _isjunction(p)
+
+
 def _remover_arquivo(f: Path) -> None:
+    if _eh_link(f):
+        raise IncidentError(_MUDOU)
     try:
         os.remove(f)
-    except PermissionError:
+    except PermissionError as e:
+        if _eh_link(f):
+            raise IncidentError(_MUDOU) from e
         os.chmod(f, stat.S_IMODE(os.lstat(f).st_mode) | stat.S_IWRITE)  # somente leitura no Windows
+        if _eh_link(f):
+            raise IncidentError(_MUDOU) from e
         os.remove(f)
 
 
@@ -196,9 +209,13 @@ class Persistencia:
         saida = []
         for f in sorted(self._pasta.iterdir()):
             try:
-                if not stat.S_ISREG(os.lstat(f).st_mode):
+                if _eh_link(f) or not stat.S_ISREG(os.lstat(f).st_mode):
                     continue
-                with open(f, "rb") as fh:
+                flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+                fd = os.open(f, flags)
+                with os.fdopen(fd, "rb") as fh:
+                    if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+                        continue
                     inicio = fh.read(LIMITE_INICIALIZAR)
             except OSError:
                 continue
@@ -235,7 +252,7 @@ class Persistencia:
         raise IncidentError(f"Tipo de persistência desconhecido: {e.tipo}")
 
     def remover(self, backup: dict) -> None:
-        tipo = backup.get("tipo")
+        tipo = backup.get("tipo") if isinstance(backup, dict) else None
         if tipo in _CHAVES:
             chave, nome = self._validar_registro(backup)
             atual = self._valor_registro(chave, nome)
@@ -363,15 +380,31 @@ class Persistencia:
         if self._pasta is None or pasta != str(self._pasta) or not _nome_seguro(nome):
             raise IncidentError(_MUDOU)
         f = self._pasta / nome
+        if _eh_link(f):
+            raise IncidentError(_MUDOU)
         try:
-            st = os.lstat(f)
-            if not stat.S_ISREG(st.st_mode):
-                raise IncidentError(_MUDOU)
-            if st.st_size > LIMITE_INICIALIZAR:
-                raise IncidentError(_GRANDE)
-            return f.read_bytes()
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+            fd = os.open(f, flags)
         except FileNotFoundError as e:
             raise IncidentError(_MUDOU) from e
+        except OSError as e:
+            # Em sistemas com O_NOFOLLOW, abrir link simbólico levanta ELOOP/EMLINK.
+            if _eh_link(f):
+                raise IncidentError(_MUDOU) from e
+            raise IncidentError(f"Não foi possível ler o arquivo: {e}") from e
+        try:
+            with os.fdopen(fd, "rb") as fh:
+                st = os.fstat(fh.fileno())
+                if not stat.S_ISREG(st.st_mode):
+                    raise IncidentError(_MUDOU)
+                if st.st_size > LIMITE_INICIALIZAR:
+                    raise IncidentError(_GRANDE)
+                dados = fh.read(LIMITE_INICIALIZAR + 1)
+                if len(dados) > LIMITE_INICIALIZAR:
+                    raise IncidentError(_GRANDE)
+                return dados
+        except IncidentError:
+            raise
         except OSError as e:
             raise IncidentError(f"Não foi possível ler o arquivo: {e}") from e
 

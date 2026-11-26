@@ -73,11 +73,25 @@ def test_listar_mais_novo_primeiro(tmp_path):
     store = IncidentStore(tmp_path)
     a = store.criar(origem="varredura", ameaca="malware", achados=[])
     b = store.criar(origem="varredura", ameaca="malware", achados=[])
-    a.criado, b.criado = "2026-11-25T10:00:00-03:00", "2026-11-26T10:00:00-03:00"
-    store.salvar(a)
-    store.salvar(b)
-    assert [i.id for i in store.listar()] == [b.id, a.id]
+    c = store.criar(origem="varredura", ameaca="malware", achados=[])
+    a.criado = "2026-11-25T10:00:00-03:00"
+    b.criado = "2026-11-26T12:00:00+00:00"   # 12:00 UTC
+    c.criado = "2026-11-26T10:30:00-03:00"   # 13:30 UTC (mais recente que b, apesar do texto "10:30" < "12:00")
+    for item in (a, b, c):
+        store.salvar(item)
+    assert [i.id for i in store.listar()] == [c.id, b.id, a.id]
     assert IncidentStore(tmp_path / "nao-existe").listar() == []
+
+
+def test_versao_booleana_recusada_como_corrompida(tmp_path):
+    store = IncidentStore(tmp_path)
+    inc = store.criar(origem="varredura", ameaca="malware", achados=[])
+    arq = tmp_path / f"{inc.id}.json"
+    d = json.loads(arq.read_text(encoding="utf-8"))
+    d["versao"] = True
+    arq.write_text(json.dumps(d), encoding="utf-8")
+    with pytest.raises(IncidentError, match="corrompido"):
+        store.carregar(inc.id)
 
 
 def test_sha256_arquivo(tmp_path):

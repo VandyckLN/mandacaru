@@ -51,10 +51,6 @@ class Ambiente:
                         os.environ.get("COMPUTERNAME") or platform.node())
 
 
-def _palavra(nome: str) -> re.Pattern[str]:
-    return re.compile(rf"(?i)(?<![0-9a-z_]){re.escape(nome)}(?![0-9a-z_])")
-
-
 def sanitizar(texto: str, amb: Ambiente) -> str:
     perfil = amb.perfil.rstrip("\\/")
     if perfil:
@@ -62,10 +58,12 @@ def sanitizar(texto: str, amb: Ambiente) -> str:
         padrao = r"[\\/]+".join(re.escape(p) for p in partes)
         texto = re.sub(rf"""(?i){padrao}(?![^\\/\s"'<>|])""", lambda _m: PERFIL, texto)
     texto = _OUTRO_PERFIL.sub(lambda _m: PERFIL, texto)
-    # O host primeiro: "PC-FULANO" contém o usuário "fulano".
-    for nome, troca in ((amb.host, "<computador>"), (amb.usuario, "<usuário>")):
-        if len(nome) >= _MIN_NOME:
-            texto = _palavra(nome).sub(troca, texto)
+    # Passagem única com fronteira Unicode (\w): preserva acentos em pt-BR e não reprocessa o marcador trocado.
+    pares = [(n, t) for n, t in ((amb.host, "<computador>"), (amb.usuario, "<usuário>")) if len(n) >= _MIN_NOME]
+    if pares:
+        mapa = {n.casefold(): t for n, t in reversed(pares)}
+        alternativas = "|".join(re.escape(n) for n, _ in sorted(pares, key=lambda x: len(x[0]), reverse=True))
+        texto = re.sub(rf"(?i)(?<!\w)(?:{alternativas})(?!\w)", lambda m: mapa[m.group(0).casefold()], texto)
     return texto
 
 

@@ -8,15 +8,32 @@ from __future__ import annotations
 
 import ntpath
 import os
+import re
 import sys
+from pathlib import Path
 
-from mandacaru_win.incident import Acao, Incidente, IncidentError, IncidentStore, agora
+from mandacaru_win.incident import (
+    Acao,
+    Incidente,
+    IncidentError,
+    IncidentStore,
+    agora,
+    sha256_arquivo,
+    sha256_valido,
+)
 from mandacaru_win.incident_cred import CATALOGO
-from mandacaru_win.incident_persist import Entrada, Persistencia
-from mandacaru_win.incident_proc import Processos, encerrar_arvore
+from mandacaru_win.incident_persist import Entrada, Persistencia, menciona
+from mandacaru_win.incident_proc import ProcessoInfo, Processos, encerrar_arvore
 
 _PADRAO = object()
 _NAO_DESFAZ = "Esta ação não pode ser desfeita."
+_PASTA_AMPLA_RE = re.compile(
+    r"(?i)^[a-z]:\\(?:"
+    r"|windows|program files(?: \(x86\))?|programdata|users"
+    r"|users\\[^\\]+"
+    r"|users\\[^\\]+\\appdata(?:\\(?:local|roaming|locallow)(?:\\temp)?)?"
+    r")$"
+)
 
 
 def _processos_padrao() -> Processos | None:
@@ -29,6 +46,27 @@ def _processos_padrao() -> Processos | None:
 def _absoluto(c: object) -> bool:
     """Só caminhos completos do Windows: "AGENTS.md" casaria com qualquer texto."""
     return isinstance(c, str) and bool(ntpath.splitdrive(c)[0]) and ntpath.isabs(c)
+
+
+def _pastas_protegidas_env() -> set[str]:
+    protegidas: set[str] = set()
+    for var in ("USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP",
+                "WINDIR", "SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData", "PUBLIC"):
+        val = os.environ.get(var)
+        if val and _absoluto(val):
+            protegidas.add(ntpath.normpath(val).rstrip("\\").casefold())
+    return protegidas
+
+
+def _pasta_projeto_segura(pasta: object) -> bool:
+    """Recusa raízes de disco, pastas do sistema e a raiz do perfil do usuário como alvo de prefixo."""
+    if not _absoluto(pasta):
+        return False
+    norm = ntpath.normpath(str(pasta)).rstrip("\\")
+    _drv, resto = ntpath.splitdrive(norm)
+    if resto in ("", "\\") or _PASTA_AMPLA_RE.match(norm):
+        return False
+    return norm.casefold() not in _pastas_protegidas_env()
 
 
 class Resposta:
@@ -59,6 +97,42 @@ class Resposta:
         return acao
 
     # ---------- Conter ----------
+    def _alvos_e_hashes(self) -> tuple[list[str], set[str]]:
+        alvos = [a["caminho"] for a in self.inc.achados if _absoluto(a.get("caminho"))]
+        if _pasta_projeto_segura(self.inc.pasta):
+            alvos.append(self.inc.pasta)
+        hashes = {a["sha256"].lower() for a in self.inc.achados if sha256_valido(a.get("sha256"))}
+        return alvos, hashes
+
+    def detectar_processos(self) -> list[ProcessoInfo]:
+        """Processos ativos ligados aos caminhos, pasta do projeto ou hashes do incidente."""
+        if self._processos is None:
+            return []
+        alvos, hashes = self._alvos_e_hashes()
+        if not alvos and not hashes:
+            return []
+        try:
+            todos = self._processos.listar()
+        except OSError:
+            return []
+        proprio = os.getpid()
+        cache_sha: dict[str, str | None] = {}
+        achados: list[ProcessoInfo] = []
+        for p in todos:
+            if p.pid <= 4 or p.pid == proprio or not p.exe:
+                continue
+            if any(menciona(p.exe, a) for a in alvos):
+                achados.append(p)
+                continue
+            if hashes:
+                chave = ntpath.normcase(p.exe)
+                if chave not in cache_sha:
+                    sha = sha256_arquivo(Path(p.exe))
+                    cache_sha[chave] = sha.lower() if sha else None
+                if cache_sha[chave] in hashes:
+                    achados.append(p)
+        return achados
+
     def encerrar_processo(self, pid: int, exe: str | os.PathLike, sha256: str, *, modo: str = "guiada") -> Acao:
         acao = Acao("encerrar_processo", "conter", modo, "em_andamento", "",
                     {"pid": pid, "exe": os.fspath(exe), "sha256": sha256}, agora())
@@ -81,10 +155,7 @@ class Resposta:
 
     # ---------- Neutralizar ----------
     def detectar_persistencia(self) -> list[Entrada]:
-        alvos = [a["caminho"] for a in self.inc.achados if _absoluto(a.get("caminho"))]
-        if _absoluto(self.inc.pasta):
-            alvos.append(self.inc.pasta)
-        hashes = {a["sha256"] for a in self.inc.achados if isinstance(a.get("sha256"), str)}
+        alvos, hashes = self._alvos_e_hashes()
         return self._pers.detectar(alvos, hashes)
 
     def remover_persistencia(self, e: Entrada, *, modo: str = "guiada") -> Acao:

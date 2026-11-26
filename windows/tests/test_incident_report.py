@@ -32,6 +32,12 @@ def test_sanitiza_perfil_e_outros_usuarios():
     assert sanitizar(r"C:\Users\fulano2\a", AMB) == r"%USERPROFILE%\a"     # outro perfil também some
     assert sanitizar("Usuário fulano em PC-FULANO", AMB) == "Usuário <usuário> em <computador>"
     assert sanitizar("fulanos e ofulano ficam", AMB) == "fulanos e ofulano ficam"
+    amb_acento = Ambiente(perfil=r"C:\Users\rio", usuario="rio", host="PC-CAO")
+    assert sanitizar("Relatório do usuário rio em PC-CAO", amb_acento) == (
+        "Relatório do usuário <usuário> em <computador>"
+    )
+    amb_colisao = Ambiente(perfil=r"C:\Users\computador", usuario="computador", host="MEU-HOST")
+    assert sanitizar("Host MEU-HOST de computador", amb_colisao) == "Host <computador> de <usuário>"
 
 
 def test_usuario_curto_preserva_regra_e_hash(tmp_path):

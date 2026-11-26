@@ -169,6 +169,42 @@ def test_detectar_usa_caminhos_absolutos_e_pasta(tmp_path):
     assert hashes == {SHA}
 
 
+@pytest.mark.parametrize("ampla", [
+    r"C:\\", r"C:\Users", r"C:\Users\ana", r"C:\Users\ana\AppData",
+    r"C:\Users\ana\AppData\Roaming", r"C:\Windows", r"C:\Program Files",
+])
+def test_pasta_ampla_nao_entra_em_alvos(tmp_path, ampla):
+    store = IncidentStore(tmp_path / "incidents")
+    inc = store.criar(origem="projeto", ameaca="projeto", pasta=ampla, achados=[
+        {"regra": "projeto.agente.injecao", "severidade": "HIGH", "caminho": "AGENTS.md"},
+    ])
+    p = PersistenciaEspia()
+    Resposta(store, inc, processos=None, persistencia=p).detectar_persistencia()
+    alvos, _hashes = p.detectar_args
+    assert alvos == []
+
+
+def test_detectar_processos_por_caminho_pasta_e_hash(tmp_path):
+    copia = tmp_path / "copia.exe"
+    copia.write_bytes(b"abc")
+    sha_copia = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    store = IncidentStore(tmp_path / "incidents")
+    inc = store.criar(origem="projeto", ameaca="projeto", pasta=r"C:\Users\ana\proj", achados=[
+        {"regra": "hash.malicioso", "severidade": "CRITICAL", "caminho": EXE, "sha256": sha_copia},
+    ])
+    procs = ProcessosFalsos()
+    procs.vivos = {
+        4: ProcessoInfo(4, 0, EXE, 1.0),
+        os.getpid(): ProcessoInfo(os.getpid(), 1, EXE, 2.0),
+        100: ProcessoInfo(100, 1, EXE, 10.0),
+        101: ProcessoInfo(101, 1, r"C:\Users\ana\proj\node.exe", 11.0),
+        102: ProcessoInfo(102, 1, str(copia), 12.0),
+        200: ProcessoInfo(200, 1, r"C:\Program Files\Editor\editor.exe", 5.0),
+    }
+    achados = Resposta(store, inc, processos=procs, persistencia=PersistenciaEspia()).detectar_processos()
+    assert [p.pid for p in achados] == [100, 101, 102]
+
+
 def test_marcar_credencial_persiste_e_valida(tmp_path):
     store, inc = _inc(tmp_path)
     r = Resposta(store, inc, processos=None, persistencia=PersistenciaEspia())

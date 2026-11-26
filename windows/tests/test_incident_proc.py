@@ -4,7 +4,7 @@ import sys
 
 import pytest
 from mandacaru_win.incident import sha256_arquivo
-from mandacaru_win.incident_proc import ProcessoInfo, encerrar_arvore
+from mandacaru_win.incident_proc import ProcessoInfo, ProcessoMudouError, encerrar_arvore
 
 EXE = r"C:\Users\ana\AppData\Local\Temp\mal.exe"
 SHA = "a" * 64
@@ -15,8 +15,10 @@ class ProcessosFalsos:
         self.vivos = {p.pid: p for p in procs}
         self.falha = set(falha)
         self.encerrados: list[int] = []
+        self.listagens = 0
 
     def listar(self):
+        self.listagens += 1
         return list(self.vivos.values())
 
     def info(self, pid):
@@ -26,7 +28,7 @@ class ProcessosFalsos:
         if pid in self.falha:
             raise OSError("Acesso negado")
         if self.vivos[pid].criado != criado:
-            raise OSError("O processo mudou")
+            raise ProcessoMudouError("O processo mudou")
         self.vivos.pop(pid)
         self.encerrados.append(pid)
 
@@ -118,6 +120,28 @@ def test_falha_no_alvo_vira_falha():
     p.falha = {100}
     r = encerrar_arvore(p, 100, EXE, SHA, hash_fn=_hash(), proprio_pid=999)
     assert r.falhas[0] == (100, "Acesso negado") and r.recusa is None
+    assert p.listagens == 1
+
+
+@pytest.mark.parametrize("ruim", [None, "", "curto", "z" * 64])
+def test_recusa_sha256_invalido_mesmo_com_arquivo_ilegivel(ruim):
+    p = _arvore()
+    r = encerrar_arvore(p, 100, EXE, ruim, hash_fn=lambda _p: None, proprio_pid=999)
+    assert r.recusa is not None and p.encerrados == []
+
+
+def test_pid_reaproveitado_no_abate_nao_mata_filhos():
+    p = _arvore()
+
+    def hash_com_troca_de_pid(_caminho):
+        # Enquanto o hash roda no disco, o PID 100 morre e é reaproveitado por outro processo.
+        p.vivos[100] = ProcessoInfo(100, 1, r"C:\Windows\notepad.exe", 99.0)
+        return SHA
+
+    r = encerrar_arvore(p, 100, EXE, SHA, hash_fn=hash_com_troca_de_pid, proprio_pid=999)
+    assert r.encerrados == []
+    assert r.falhas == [(100, "O processo mudou")]
+    assert {101, 102, 200} <= set(p.vivos)
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="processos reais só no Windows")

@@ -64,6 +64,7 @@ def test_menciona_fronteira_e_variaveis():
     assert menciona(r"node %USERPROFILE%\proj\x.js", PROJ)
     assert menciona(PROJ, PROJ + "\\")
     assert not menciona(r"C:\Users\ana\projeto\x.js", PROJ)
+    assert not menciona(r"C:\Users\ana\projção\x.js", PROJ)
     assert not menciona(EXE + ".bak", EXE)
     assert not menciona("qualquer coisa", "")
 
@@ -369,7 +370,9 @@ def test_restaurar_tarefa_cria_sem_sobrescrever(tmp_path, monkeypatch):
         p.restaurar(b)
 
 
-@pytest.mark.parametrize("nome", ["Atualizar", '\\a" /F /TN "\\b', "\\a\nb", "\\" + "a" * 260, "", None])
+@pytest.mark.parametrize("nome", [
+    "Atualizar", '\\a" /F /TN "\\b', "\\a\nb", "\\" + "a" * 260, r"\..\escape", "", None,
+])
 def test_nome_de_tarefa_invalido(tmp_path, nome):
     st = _st()
     p = _pers_tarefas(tmp_path, st)
@@ -378,6 +381,36 @@ def test_nome_de_tarefa_invalido(tmp_path, nome):
     with pytest.raises(IncidentError):
         p.remover({"tipo": "schtask_user", "nome": nome, "xml": XML})
     assert not any(c[1] in ("/Create", "/Delete") for c in st.chamadas)
+
+
+@pytest.mark.parametrize("invalido", [None, "texto", 123, []])
+def test_remover_backup_nao_dict_levanta_incident_error(tmp_path, invalido):
+    p, _ = _pers(tmp_path)
+    with pytest.raises(IncidentError):
+        p.remover(invalido)
+
+
+def test_symlink_em_inicializar_ignorado_e_recusado_na_troca(tmp_path):
+    import os
+    p, pasta = _pers(tmp_path, RegistroFalso())
+    segredo = tmp_path / "segredo.txt"
+    segredo.write_text(EXE)
+    link = pasta / "atalho.bat"
+    try:
+        os.symlink(segredo, link)
+    except (OSError, NotImplementedError):
+        pytest.skip("sem permissão para criar link simbólico")
+    assert p.detectar([EXE]) == []
+    link.unlink()
+    real = pasta / "real.bat"
+    real.write_text(EXE)
+    [e] = p.detectar([EXE])
+    b = p.backup(e)
+    real.unlink()
+    os.symlink(segredo, real)
+    with pytest.raises(IncidentError, match="mudou"):
+        p.remover(b)
+    assert segredo.exists()
 
 
 def test_schtasks_falha_vira_erro(tmp_path):

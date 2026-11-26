@@ -22,7 +22,9 @@ FASES = ("conter", "neutralizar", "recuperar")
 MODOS = ("automatica", "guiada")
 RESULTADOS = ("em_andamento", "concluida", "parcial", "falhou")
 _ID_RE = re.compile(r"[0-9a-f]{32}")
+_SHA256_RE = re.compile(r"[0-9a-fA-F]{64}")
 _CORROMPIDO = "O registro do incidente está corrompido."
+_isjunction = getattr(os.path, "isjunction", lambda _: False)
 
 
 class IncidentError(Exception):
@@ -33,10 +35,15 @@ def agora() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+def sha256_valido(valor: object) -> bool:
+    """Confere se `valor` é um resumo SHA-256 hexadecimal de 64 caracteres."""
+    return isinstance(valor, str) and bool(_SHA256_RE.fullmatch(valor))
+
+
 def sha256_arquivo(caminho: Path) -> str | None:
-    """SHA-256 de um arquivo regular sem seguir link; None se não der para ler."""
+    """SHA-256 de um arquivo regular sem seguir link nem junção; None se não der para ler."""
     try:
-        if not hasattr(os, "O_NOFOLLOW") and Path(caminho).is_symlink():
+        if _isjunction(caminho) or (not hasattr(os, "O_NOFOLLOW") and os.path.islink(caminho)):
             return None
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
         fd = os.open(caminho, flags)
@@ -105,9 +112,18 @@ def _de_dict(d: object, qid: str) -> Incidente:
     _exigir(isinstance(acoes, list))
     _exigir(isinstance(cred, dict) and all(isinstance(k, str) and isinstance(v, bool) for k, v in cred.items()))
     _exigir(d.get("pasta") is None or isinstance(d.get("pasta"), str))
-    _exigir(isinstance(d.get("versao", 1), int))
+    versao = d.get("versao", 1)
+    _exigir(isinstance(versao, int) and not isinstance(versao, bool))
     return Incidente(qid, d["criado"], d["origem"], d["ameaca"], achados, d.get("pasta"),
-                     [_acao_de_dict(a) for a in acoes], cred, d.get("versao", 1))
+                     [_acao_de_dict(a) for a in acoes], cred, versao)
+
+
+def _ordem_data(iso: str) -> float:
+    try:
+        dt = datetime.fromisoformat(iso)
+        return dt.timestamp() if dt.tzinfo else dt.astimezone().timestamp()
+    except ValueError:
+        return float("-inf")
 
 
 class IncidentStore:
@@ -157,7 +173,7 @@ class IncidentStore:
                 saida.append(self.carregar(p.stem))
             except IncidentError:
                 continue
-        saida.sort(key=lambda i: i.criado, reverse=True)
+        saida.sort(key=lambda i: _ordem_data(i.criado), reverse=True)
         return saida
 
     def registrar(self, inc: Incidente, acao: Acao) -> int:
