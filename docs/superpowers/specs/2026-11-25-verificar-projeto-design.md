@@ -174,7 +174,7 @@ O rebaixamento em `tests/`, `docs/` e `.yar` existe para que projetos de seguran
 
 ## Decisões minhas (o dono pode corrigir)
 
-- **YAML com PyYAML, sempre `yaml.safe_load`.** Entra como dependência: `PyYAML>=6` no `pyproject.toml`, `python3-yaml` no `Depends` do `debian/control`, e o PyInstaller empacota. Um parser caseiro para entrada controlada pelo atacante seria mais arriscado que uma dependência pequena e madura. Para dar a **linha** do achado, o leitor de workflow usa `yaml.compose` (os nós trazem `start_mark.line`) em vez de reler o texto.
+- **YAML com PyYAML, sempre `yaml.safe_load`.** Entra como dependência: `PyYAML>=6` no `pyproject.toml`, `python3-yaml` no `Depends` do `debian/control`, e o PyInstaller empacota. Um parser caseiro para entrada controlada pelo atacante seria mais arriscado que uma dependência pequena e madura. Para dar a **linha** do achado, o leitor de workflow acha a linha pelo texto com `linha_do_trecho`.
 - **Achados LOW** (informativos: "este projeto tem `postinstall`", "declara servidor MCP") aparecem numa seção separada, "Para conhecimento", no fim do relatório, e não contam para o código de saída. No app, ficam recolhidos por padrão.
 - **Caches do OSV e do KEV** ficam na mesma pasta de cache que o app Windows já usa em `updates.py` (`cache_dir/osv.db` e `kev.db`). No Linux, sem root, `~/.cache/mandacaru/`.
 - **Limites:** 2 MB por arquivo e 20 mil arquivos por projeto, para não travar em monorepos gigantes. O relatório avisa quando cortar.
