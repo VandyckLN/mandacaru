@@ -73,7 +73,7 @@ def _sem_links(raiz: str, alvo: str) -> bool:
         try:
             if stat.S_ISLNK(os.lstat(atual).st_mode):
                 return False
-        except OSError:
+        except (OSError, ValueError):
             return False
     return True
 
@@ -82,8 +82,13 @@ def _script_node_suspeito(raiz: Path, rel: str, cmd: str) -> bool:
     base = os.path.abspath(raiz)
     pasta = os.path.join(base, *rel.split("/")[:-1])
     for m in islice(_NODE_ARQ.finditer(cmd), 5):
+        if "\x00" in m.group(1):
+            continue
         alvo = os.path.normpath(os.path.join(pasta, m.group(1)))
-        if os.path.commonpath([base, alvo]) != base or alvo == base or not _sem_links(base, alvo):
+        try:
+            if os.path.commonpath([base, alvo]) != base or alvo == base or not _sem_links(base, alvo):
+                continue
+        except ValueError:
             continue
         conteudo = ler_texto(Path(alvo))
         if conteudo and script_heuristics(Path("alvo.js"), conteudo.encode("utf-8", "replace")):
@@ -106,7 +111,7 @@ def _npm(raiz: Path, rel: str, texto: str) -> list[Achado]:
             continue
         avaliado = cmd[:_MAX_CMD]
         perigoso = (
-            baixa_e_executa(avaliado)
+            baixa_e_executa(cmd)
             or bool(_NODE_E.search(avaliado) and _NODE_E_B64.search(avaliado))
             or _script_node_suspeito(raiz, rel, avaliado)
         )
@@ -187,7 +192,8 @@ def _setup_py(rel: str, texto: str) -> list[Achado]:
         linha = _regex_gatilho(texto)
     if linha is None:
         return []
-    trecho = texto.splitlines()[linha - 1].strip()[:300] if linha <= len(texto.splitlines()) else ""
+    linhas = texto.split("\n")
+    trecho = linhas[linha - 1].strip()[:300] if linha <= len(linhas) else ""
     return [Achado(
         "projeto.instalar.setup_py", Severity.HIGH, rel,
         "setup.py acessa a rede, executa comandos de download ou executa código decodificado ao instalar",

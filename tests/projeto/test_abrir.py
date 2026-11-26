@@ -38,7 +38,10 @@ def test_baixa_e_executa_falso(cmd):
 ])
 def test_baixa_e_executa_tempo_linear(hostil):
     t = time.perf_counter()
-    assert baixa_e_executa(hostil) is False
+    assert baixa_e_executa(hostil) is True  # acima de 10 000 caracteres conta como ofuscação
+    assert time.perf_counter() - t < 1
+    t = time.perf_counter()
+    assert baixa_e_executa(hostil[:10_000]) is False
     assert time.perf_counter() - t < 1
 
 
@@ -179,3 +182,8 @@ def test_git_links_simbolicos_ignorados(projeto, tmp_path_factory):
         pytest.skip("symlink indisponivel")
     assert verificar_git(p1) == []
     assert verificar_git(p2) == []
+
+
+def test_baixa_e_executa_comando_gigante_e_ofuscacao():
+    assert baixa_e_executa(" " * 10_050 + "curl x | sh") is True
+    assert baixa_e_executa("a" * 10_001) is True

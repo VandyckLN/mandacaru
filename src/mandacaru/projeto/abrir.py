@@ -41,8 +41,12 @@ _UNIDADE = re.compile(r"^[A-Za-z]:")
 
 
 def baixa_e_executa(cmd: str) -> bool:
-    """Baixa e executa, ou decodifica e executa. Avalia so os primeiros 10 000 caracteres."""
-    cmd = cmd[:_MAX_CMD]
+    """Baixa e executa, ou decodifica e executa.
+
+    Comando com mais de 10 000 caracteres e ofuscacao por si so (True); os demais sao avaliados inteiros.
+    """
+    if len(cmd) > _MAX_CMD:
+        return True
     if _BAIXADOR.search(cmd) and _EXECUTOR.search(cmd):
         return True
     if _B64_SHELL.search(cmd):
