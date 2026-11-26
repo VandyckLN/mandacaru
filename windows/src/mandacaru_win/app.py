@@ -178,7 +178,7 @@ class MainWindow(QMainWindow):
         self._shred_thread: ShredThread | None = None
         self._proj_thread: ProjetoThread | None = None
         self._proj_items: dict[Path, QTreeWidgetItem] = {}
-        self._proj_rows: dict[Path, tuple[list[Achado], str | None]] = {}  # achados e SHA-256 do arquivo
+        self._proj_rows: dict[Path, tuple[Path, list[Achado], str | None]] = {}  # raiz, achados e SHA-256 do arquivo
         self._proj_low_item: QTreeWidgetItem | None = None
         self._pending_projeto: list[Path] = []
         # Testes trocam por uma fábrica com osv=None/kev=None (sem rede).
@@ -308,7 +308,7 @@ class MainWindow(QMainWindow):
         th.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
         self.tree.setColumnWidth(0, 100)
         self.tree.setColumnWidth(1, 240)
-        self.tree.setColumnWidth(3, 420)
+        self.tree.setColumnWidth(3, 440)
         self.tree.setItemDelegateForColumn(0, BadgeDelegate(self.tree))
         lay.addWidget(self.tree, 1)
 
@@ -848,7 +848,7 @@ class MainWindow(QMainWindow):
             else:
                 low.append(a)
         for caminho, achados in groups.items():
-            self._add_project_row(raiz / caminho, caminho, achados, hashes.get(caminho))
+            self._add_project_row(raiz, raiz / caminho, caminho, achados, hashes.get(caminho))
         if low:
             self._add_low_rows(raiz, low)
         return sum(len(v) for v in groups.values())
@@ -867,7 +867,7 @@ class MainWindow(QMainWindow):
             item.addChild(QTreeWidgetItem(["", "", exibivel(a.trecho)]))
         return item
 
-    def _add_project_row(self, path: Path, caminho: str, achados: list[Achado], sha: str | None) -> None:
+    def _add_project_row(self, raiz: Path, path: Path, caminho: str, achados: list[Achado], sha: str | None) -> None:
         if path in self._proj_items:
             self._remove_project_row(path)
         achados = sorted(achados, key=lambda a: -int(a.severidade))
@@ -881,17 +881,25 @@ class MainWindow(QMainWindow):
             item.addChild(self._achado_item(f"linha {a.linha}" if a.linha is not None else "", a))
         self._insert_by_severity(item, int(sev))
         self._proj_items[path] = item
-        self._proj_rows[path] = (achados, sha)
+        self._proj_rows[path] = (raiz, achados, sha)
+        so_dep = all(_por_chave(a) for a in achados)
         if self._ignorados is None:
             no_ignore = self._ignorados_error or ""
-        elif sha is None and not all(_por_chave(a) for a in achados):
+        elif sha is None and not so_dep:
             no_ignore = "Não foi possível ler o arquivo para identificar o conteúdo."
         else:
             no_ignore = None
+        if so_dep:
+            no_quarantine = "Achado em biblioteca declarada: atualize a dependência ou destrua a pasta do projeto."
+        elif sha is None:
+            no_quarantine = "Não foi possível ler o arquivo para colocá-lo em quarentena."
+        else:
+            no_quarantine = None
         self.tree.setItemWidget(item, 3, self._row_buttons(path, [
             ("Abrir local", self.open_location, "neutral", None),
             ("Copiar detalhe", self.copy_project_detail, "neutral", None),
-            ("Ignorar sempre", self.ignore_project_row, "neutral", no_ignore)]))
+            ("Ignorar sempre", self.ignore_project_row, "neutral", no_ignore),
+            ("Quarentena", self.quarantine_project_row, "quarantine", no_quarantine)]))
 
     def _add_low_rows(self, raiz: Path, low: list[Achado]) -> None:
         item = self._proj_low_item
@@ -921,15 +929,16 @@ class MainWindow(QMainWindow):
         row = self._proj_rows.get(path)
         if row is None:
             return
+        _raiz, achados, _sha = row
         QGuiApplication.clipboard().setText("\n".join(
-            f"{_visivel(_onde(a))}  {a.regra}  {_visivel(a.explicacao)}" for a in row[0]))
+            f"{_visivel(_onde(a))}  {a.regra}  {_visivel(a.explicacao)}" for a in achados))
         self.statusBar().showMessage("Detalhe copiado")
 
     def ignore_project_row(self, path: Path) -> None:
         row = self._proj_rows.get(path)
         if row is None:
             return
-        achados, sha = row
+        _raiz, achados, sha = row
         if self._ignorados is None:
             self.notify(self._ignorados_error or "Lista de achados ignorados indisponível.")
             return
@@ -946,6 +955,37 @@ class MainWindow(QMainWindow):
             self.notify(f"Não foi possível salvar a lista de achados ignorados: {e}")
             return
         self._remove_project_row(path)
+
+    def quarantine_project_row(self, path: Path) -> None:
+        row = self._proj_rows.get(path)
+        if row is None:
+            return
+        raiz, achados, sha = row
+        if all(_por_chave(a) for a in achados):
+            self.notify("Achado em biblioteca declarada: atualize a dependência ou destrua a pasta do projeto.")
+            return
+        if sha is None:
+            self.notify("Não foi possível ler o arquivo para colocá-lo em quarentena.")
+            return
+        if not self.confirm(f"Mover este arquivo do projeto para a quarentena?\n{_visivel(str(path))}"):
+            return
+        de_arquivo = [a for a in achados if not _por_chave(a)]
+        finding = Finding(
+            path=path,
+            sha256=sha,
+            severity=de_arquivo[0].severidade,
+            alerts=[a.to_alert(raiz) for a in de_arquivo],
+        )
+        try:
+            self._quarantine.add(finding)
+        except QuarantineError as e:
+            self.notify(str(e))
+            return
+        self._remove_project_row(path)
+        if path in self._items:
+            self._remove_row(path)
+        self.refresh_tabs()
+        self.statusBar().showMessage("Arquivo movido para a quarentena")
 
     def quit_app(self) -> None:
         """Encerra o Mandacaru de verdade (sem minimizar para a bandeja)."""
@@ -1196,6 +1236,8 @@ class MainWindow(QMainWindow):
             self.notify(str(e))
             return
         self._remove_row(path)
+        if path in self._proj_items:
+            self._remove_project_row(path)
         self.refresh_tabs()
 
     # ---------- ações das abas ----------

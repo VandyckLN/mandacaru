@@ -128,7 +128,7 @@ def test_arrastar_dois_projetos_verifica_os_dois(app, tmp_path, scanner):
     assert win._proj_thread is None and win._pending_projeto == []
 
 
-def test_botao_verificar_projeto_sem_quarentena(app, tmp_path, scanner, monkeypatch):
+def test_botoes_da_linha_de_projeto(app, tmp_path, scanner, monkeypatch):
     d = tmp_path / "proj"
     d.mkdir()
     (d / "AGENTS.md").write_text(INJECAO)
@@ -140,7 +140,8 @@ def test_botao_verificar_projeto_sem_quarentena(app, tmp_path, scanner, monkeypa
     item = win._proj_items[d / "AGENTS.md"]
     widget = win.tree.itemWidget(item, 3)
     assert [b.text() for b in widget.findChildren(QPushButton)] == [
-        "Abrir local", "Copiar detalhe", "Ignorar sempre"]
+        "Abrir local", "Copiar detalhe", "Ignorar sempre", "Quarentena"]
+    assert botoes(win, item)["Quarentena"].isEnabled() is True
     botoes(win, item)["Copiar detalhe"].click()
     texto = QGuiApplication.clipboard().text()
     assert texto.startswith("AGENTS.md:2  projeto.agente.injecao  instrução para o agente")
@@ -374,3 +375,59 @@ def test_ignorar_dependencia_volta_com_aviso_novo(app, tmp_path, scanner):
     assert lock not in win._proj_items
     win._on_proj_done(_rel_dep(d, ["GHSA-1", "GHSA-2"]))     # aviso novo: a linha volta
     assert lock in win._proj_items
+
+
+def test_quarentena_de_arquivo_perigoso_do_projeto_e_restauracao(app, tmp_path, scanner):
+    d = tmp_path / "proj"
+    (d / ".vscode").mkdir(parents=True)
+    (d / "package.json").write_text("{}")
+    (d / "README.md").write_text("# Projeto limpo\n")
+    tarefa_json = (
+        '{"version": "2.0.0", "tasks": [{"label": "init", "type": "shell", '
+        '"command": "echo oi", "runOptions": {"runOn": "folderOpen"}}]}\n'
+    )
+    arq_tarefa = d / ".vscode" / "tasks.json"
+    arq_tarefa.write_text(tarefa_json, encoding="utf-8")
+
+    win = make_win(tmp_path, scanner)
+    verificar(win, d)
+    assert arq_tarefa in win._proj_items
+    botoes(win, win._proj_items[arq_tarefa])["Quarentena"].click()
+
+    assert not arq_tarefa.exists()
+    assert (d / "README.md").read_text() == "# Projeto limpo\n"
+    assert arq_tarefa not in win._proj_items
+    assert win.tbl_quarantine.rowCount() == 1
+    assert "projeto.abrir.tarefa_automatica" in win.tbl_quarantine.item(0, 3).text()
+
+    qid = win._quarantine.items()[0]["id"]
+    win.restore_item(qid)
+    assert arq_tarefa.exists()
+    assert arq_tarefa.read_text(encoding="utf-8") == tarefa_json
+    assert win.tbl_quarantine.rowCount() == 0
+
+
+def test_quarentena_recusada_na_confirmacao_nao_move(app, tmp_path, scanner):
+    d = tmp_path / "proj"
+    d.mkdir()
+    f = d / "AGENTS.md"
+    f.write_text(INJECAO)
+    win = make_win(tmp_path, scanner)
+    win.confirm = lambda _: False
+    verificar(win, d)
+    botoes(win, win._proj_items[f])["Quarentena"].click()
+    assert f.exists()
+    assert f in win._proj_items
+    assert win.tbl_quarantine.rowCount() == 0
+
+
+def test_quarentena_desabilitada_em_linha_so_de_dependencia(app, tmp_path, scanner):
+    d = tmp_path / "proj"
+    d.mkdir()
+    lock = d / "package-lock.json"
+    lock.write_text("{}")
+    win = make_win(tmp_path, scanner)
+    win._on_proj_done(_rel_dep(d, ["MAL-2026-0001"]))
+    btn = botoes(win, win._proj_items[lock])["Quarentena"]
+    assert btn.isEnabled() is False
+    assert "biblioteca declarada" in btn.toolTip()
