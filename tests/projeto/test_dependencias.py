@@ -183,3 +183,31 @@ def test_versao_corrigida_tempo_hostil():
     t = time.time()
     versao_corrigida(v, "npm", "a")
     assert time.time() - t < 1
+
+
+def test_malicioso_aparece_mesmo_sem_detalhe(tmp_path):
+    from mandacaru.projeto import RelatorioProjeto
+    from mandacaru.projeto.cli import formatar
+    osv = _osv(tmp_path, {"evil": [{"id": "MAL-2025-7"}], "lodash": [_lodash_vuln()]})
+    orig = osv.http
+
+    def http(req, timeout):
+        if "/v1/vulns/" in req.full_url:
+            return 500, b""
+        return orig(req, timeout)
+
+    osv.http = http
+    r = verificar_dependencias([_dep("evil", "1.0.0"), _dep()], 0, osv, _kev(tmp_path))
+    assert [(a.regra, a.severidade) for a in r.achados] == [("projeto.dep.malicioso", Severity.CRITICAL)]
+    assert "MAL-2025-7" in r.achados[0].explicacao and r.detalhes_faltando == 2
+    rel = RelatorioProjeto(tmp_path, r.achados, 1, False, True, deps=r)
+    assert "Aviso: 2 avisos do OSV.dev não puderam ser baixados." in formatar(rel)
+    assert "Aviso: 2 avisos do OSV.dev não puderam ser baixados." in rel.avisos()
+
+
+def test_osv_expoe_ids_do_lote(tmp_path):
+    from mandacaru.vuln import InstalledPackage
+    osv = _osv(tmp_path, {"evil": [{"id": "MAL-1"}]})
+    pkg = InstalledPackage("evil", "evil", "1.0.0", "npm")
+    osv.query_packages([pkg])
+    assert osv.batch_ids == {pkg: ["MAL-1"]}

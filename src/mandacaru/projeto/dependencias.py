@@ -128,16 +128,22 @@ def verificar_dependencias(
         return ResultadoDeps([], 0, sem_versao, _ERRO_OSV)
 
     kev_cves = _kev_cves(kev)
+    # Ids do lote (querybatch): um MAL-... conta mesmo se o download do detalhe falhar.
+    lote = getattr(osv, "batch_ids", None)
+    lote = lote if isinstance(lote, dict) else {}
     achados: list[Achado] = []
     for chave, pkg in pacotes.items():
         vulns = [v for v in resposta.get(pkg, []) if isinstance(v, dict)]
-        if not vulns:
+        ids_lote = [i for i in lote.get(pkg, ()) if isinstance(i, str)]
+        mal = list(dict.fromkeys(
+            [str(v.get("id")) for v in vulns if str(v.get("id", "")).startswith("MAL-")]
+            + [i for i in ids_lote if i.startswith("MAL-")]))
+        if not vulns and not mal:
             continue
         eco, nome, versao = chave
         origens = grupos[chave]
         caminho = origens[0]
         extra = _tambem_em(origens[1:])
-        mal = [str(v.get("id")) for v in vulns if str(v.get("id", "")).startswith("MAL-")]
         if mal:
             achados.append(Achado(
                 "projeto.dep.malicioso", Severity.CRITICAL, caminho,

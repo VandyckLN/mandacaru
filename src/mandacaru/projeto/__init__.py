@@ -64,6 +64,11 @@ class RelatorioProjeto:
         saida = []
         if self.cortado and self.completo:
             saida.append(f"Verificação incompleta: cortada em {_milhar(self.limite)} arquivos.")
+        k = self.deps.detalhes_faltando
+        if k == 1:
+            saida.append("Aviso: 1 aviso do OSV.dev não pôde ser baixado.")
+        elif k > 1:
+            saida.append(f"Aviso: {_milhar(k)} avisos do OSV.dev não puderam ser baixados.")
         return saida
 
 

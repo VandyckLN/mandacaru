@@ -330,3 +330,11 @@ def test_corte_aparece_na_barra(app, tmp_path, scanner):
     win = make_win(tmp_path, scanner)
     win._on_proj_done(RelatorioProjeto(tmp_path, [], 10, True, True, limite=10))
     assert "Verificação incompleta: cortada em 10 arquivos." in win.statusBar().currentMessage()
+
+
+def test_avisos_faltando_aparecem_na_barra(app, tmp_path, scanner):
+    from mandacaru.projeto import RelatorioProjeto
+    from mandacaru.projeto.dependencias import ResultadoDeps
+    win = make_win(tmp_path, scanner)
+    win._on_proj_done(RelatorioProjeto(tmp_path, [], 3, False, True, deps=ResultadoDeps([], 4, 0, None, 3)))
+    assert "3 avisos do OSV.dev não puderam ser baixados" in win.statusBar().currentMessage()
