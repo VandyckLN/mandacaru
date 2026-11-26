@@ -12,7 +12,7 @@ from .percurso import linha_do_trecho
 
 _REF_DO_PR = re.compile(r"github\.event\.pull_request\.head|github\.head_ref")
 _INJECAO = re.compile(
-    r"\$\{\{\s{0,50}github\.(?:event\.(?:issue\.(?:title|body)"
+    r"\$\{\{\s*github\.(?:event\.(?:issue\.(?:title|body)"
     r"|pull_request\.(?:title|body|head\.ref|head\.label)"
     r"|comment\.body|review\.body|review_comment\.body|head_commit\.message|commits)"
     r"|head_ref)"
@@ -70,7 +70,7 @@ def verificar(raiz: Path, rel: str, texto: str) -> list[Achado]:
     alvo_prt = "pull_request_target" in _gatilhos(doc)
     for passo in _passos(doc):
         uses, com, run = passo.get("uses"), passo.get("with"), passo.get("run")
-        if alvo_prt and isinstance(uses, str) and uses.startswith("actions/checkout") \
+        if alvo_prt and isinstance(uses, str) and (uses == "actions/checkout" or uses.startswith("actions/checkout@")) \
                 and isinstance(com, dict):
             ref = com.get("ref")
             if isinstance(ref, str) and _REF_DO_PR.search(ref):

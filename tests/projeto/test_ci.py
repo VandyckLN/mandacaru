@@ -133,3 +133,23 @@ def test_entrada_hostil_e_rapida(projeto):
     t0 = time.monotonic()
     _rodar(projeto, t)
     assert time.monotonic() - t0 < 1
+
+
+@pytest.mark.parametrize("texto", [
+    "x: !!timestamp foo", "x: !!bool zz", "x: !!int 'z'", "a: &a 1\nb: {<<: *a}",
+])
+def test_tags_hostis_viram_arquivo_ilegivel(texto):
+    with pytest.raises(ArquivoIlegivel):
+        yamlseguro.carregar(texto)
+
+
+def test_injecao_com_muito_espaco(projeto):
+    t = ("on: push\njobs:\n  b:\n    steps:\n"
+         "      - run: echo ${{" + " " * 60 + "github.event.issue.title }}\n")
+    (a,) = _rodar(projeto, t)
+    assert a.regra == "projeto.ci.injecao_expressao"
+
+
+def test_checkout_com_nome_parecido_nao_conta(projeto):
+    t = CHECKOUT_PR.replace("actions/checkout@v4", "actions/checkout-foo@v1")
+    assert _rodar(projeto, t) == []

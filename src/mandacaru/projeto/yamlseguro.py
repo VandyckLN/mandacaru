@@ -18,5 +18,5 @@ def carregar(texto: str, rel: str = "") -> object:
     """Le o YAML; qualquer erro de sintaxe, alias ou aninhamento absurdo vira ArquivoIlegivel."""
     try:
         return yaml.load(texto, Loader=_SemAlias)  # noqa: S506 - SafeLoader, sem aliases
-    except (yaml.YAMLError, RecursionError, ValueError) as exc:
+    except Exception as exc:  # noqa: BLE001 - tudo no parser/construtor e entrada do atacante
         raise ArquivoIlegivel(rel) from exc
