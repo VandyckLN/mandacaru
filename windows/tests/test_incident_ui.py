@@ -117,7 +117,7 @@ def make_win(tmp_path, scanner, *, procs=None, reg=None, startup=None, schtasks_
     )
     win.incident_panel.url_opener = win.urls_abertas.append
     win.incident_panel.resposta_factory = lambda store, inc: Resposta(
-        store, inc, processos=proc_backend, persistencia=pers_backend
+        store, inc, processos=proc_backend, persistencia=pers_backend, quarentena=win._quarantine
     )
     return win, proc_backend, reg_backend
 
@@ -211,6 +211,81 @@ def test_desfazer_quarentena_com_disco_cheio_nao_levanta(app, tmp_path, scanner,
     assert len(chamadas) >= 2
     assert acao.resultado == "concluida" and suspeito.exists()            # restaurou de verdade
     assert "disco cheio" in acao.detalhe and win.msgs and "disco cheio" in win.msgs[-1]
+
+
+def _painel_com_guard(tmp_path, scanner, *, hklm=None, consultas=None):
+    from test_incident_resposta import GuardFalso
+    win, procs, reg = make_win(tmp_path, scanner)
+    g = GuardFalso({"persistence_remove": {"ok": True, "id": "f" * 32}})
+    pers = Persistencia(registro=RegistroFalso(), pasta_inicializar=tmp_path / "Startup", run=lambda a, t: (0, ""),
+                        usuario="ana", registro_hklm=hklm)
+    painel = win.incident_panel
+    painel.resposta_factory = lambda store, inc: Resposta(store, inc, processos=procs, persistencia=pers, guard=g,
+                                                          quarentena=win._quarantine, hash_fn=lambda p: SHA_MAL)
+
+    def disponivel():
+        if consultas is not None:
+            consultas.append(1)
+        return True
+    painel.guard_available = disponivel
+    inc = win._incident_store.criar(origem="varredura", ameaca="malware", achados=[
+        {"regra": "hash.malicioso", "severidade": "CRITICAL", "caminho": EXE_MAL, "sha256": SHA_MAL}])
+    painel.reload_list(select_id=inc.id)
+    return win, painel, g
+
+
+def test_painel_com_guard_bloqueia_rede_e_desfaz(app, tmp_path, scanner):
+    win, painel, g = _painel_com_guard(tmp_path, scanner)
+    btn = _botao(painel, "Bloquear rede")
+    assert btn.isEnabled() is True
+    btn.click()
+    assert g.pedidos[0][0] == "firewall_block" and g.pedidos[0][1]["exe"] == EXE_MAL
+    acoes = painel.current_incident().acoes
+    assert acoes[-1].tipo == "bloquear_rede" and acoes[-1].resultado == "concluida"
+    visiveis = [b for b in painel.findChildren(QPushButton) if b.text() == "Bloquear rede" and b.isVisibleTo(painel)]
+    assert visiveis == []                                   # bloqueado: o passo mostra Desfazer
+    painel.undo_action_step(len(acoes) - 1)
+    assert g.pedidos[-1][0] == "firewall_unblock"
+    assert [b for b in painel.findChildren(QPushButton) if b.text() == "Bloquear rede" and b.isVisibleTo(painel)]
+
+
+def test_painel_com_guard_remove_persistencia_do_sistema(app, tmp_path, scanner):
+    from mandacaru_win.incident_persist import CHAVE_RUN_HKLM
+
+    class HKLM(RegistroFalso):
+        def subchaves(self, chave):
+            return []
+    hklm = HKLM({CHAVE_RUN_HKLM: {"Upd": (f'"{EXE_MAL}" /s', REG_SZ)}})
+    win, painel, g = _painel_com_guard(tmp_path, scanner, hklm=hklm)
+    [e] = [e for e in painel.detected_persistence() if e.tipo == "hklm_run"]
+    assert e.exige_servico
+    btn = _botao(painel, "Remover persistência")
+    assert btn.isEnabled() is True
+    btn.click()
+    assert g.pedidos[-1] == ("persistence_remove", {"tipo": "hklm_run", "nome": "Upd", "valor": f'"{EXE_MAL}" /s'})
+    assert painel.current_incident().acoes[-1].backup == {"guard": "persistencia", "id": "f" * 32}
+
+
+def test_janela_liga_o_guard_client(app, tmp_path, scanner, monkeypatch):
+    from mandacaru_win.guard_client import GuardClient
+    win = MainWindow(tmp_path / "dados", scanner)
+    _windows.append(win)
+    assert isinstance(win._guard, GuardClient)
+    chamadas = []
+    monkeypatch.setattr(win._guard, "disponivel", lambda: chamadas.append(1) or True)
+    assert win.incident_panel.guard_available() is True and win.incident_panel.guard_available() is True
+    assert chamadas == [1]                                         # cache: um ping a cada 30 s
+    inc = win._incident_store.criar(origem="varredura", ameaca="malware", achados=[])
+    r = win.incident_panel._resposta(inc)
+    assert r._guard is win._guard and r._quarentena is win._quarantine
+
+
+def test_guard_consultado_uma_vez_por_render(app, tmp_path, scanner):
+    consultas = []
+    win, painel, _g = _painel_com_guard(tmp_path, scanner, consultas=consultas)
+    antes = len(consultas)
+    painel._render_current()
+    assert len(consultas) - antes == 1
 
 
 def test_abrir_incidente_pela_varredura_exibe_3_fases_quarentena_e_desfazer(app, tmp_path, scanner, ps_text):

@@ -1,6 +1,7 @@
 """Painel guiado "Resposta a incidente" em 3 fases: Conter -> Neutralizar -> Recuperar."""
 from __future__ import annotations
 
+import ntpath
 from collections.abc import Callable
 from pathlib import Path
 
@@ -22,7 +23,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from mandacaru.events import Alert, Severity
 from mandacaru.projeto.achado import exibivel
 from mandacaru_win.incident import Acao, Incidente, IncidentError, IncidentStore, agora
 from mandacaru_win.incident_cred import montar_checklist, url_oficial
@@ -30,8 +30,7 @@ from mandacaru_win.incident_persist import Entrada
 from mandacaru_win.incident_proc import ProcessoInfo
 from mandacaru_win.incident_report import exportar_html, exportar_json, salvar_relatorio
 from mandacaru_win.incident_resposta import Resposta
-from mandacaru_win.quarantine import Quarantine, QuarantineError
-from mandacaru_win.scan import Finding
+from mandacaru_win.quarantine import Quarantine
 from mandacaru_win.theme import style_button
 
 _ORIGEM_ROTULO = {
@@ -188,7 +187,7 @@ class IncidentPanel(QWidget):
         on_shred_project: Callable[[Path], None] | None = None,
         on_open_updates: Callable[[], None] | None = None,
         guard_available: Callable[[], bool] = lambda: False,
-        resposta_factory: Callable[[IncidentStore, Incidente], Resposta] = Resposta,
+        resposta_factory: Callable[[IncidentStore, Incidente], Resposta] | None = None,
         url_opener: Callable[[str], None] | None = None,
     ):
         super().__init__()
@@ -203,7 +202,8 @@ class IncidentPanel(QWidget):
         self._on_shred_project = on_shred_project
         self._on_open_updates = on_open_updates
         self.guard_available = guard_available
-        self.resposta_factory = resposta_factory
+        self.resposta_factory = resposta_factory or (
+            lambda store, inc: Resposta(store, inc, quarentena=self._quarantine))
         self.url_opener: Callable[[str], None] = url_opener or (
             lambda u: QDesktopServices.openUrl(QUrl(u))
         )
@@ -470,50 +470,18 @@ class IncidentPanel(QWidget):
         self._render_current()
         return acao
 
+    def _avisar(self, acao: Acao) -> None:
+        """Falha, ou sucesso que não pôde ser gravado (disco cheio): a pessoa precisa saber."""
+        if acao.resultado == "falhou" or "Aviso:" in acao.detalhe:
+            self._notify(acao.detalhe)
+
     def quarantine_file_step(self, path: Path, sha256: str, sev_name: str, rules: list[str]) -> Acao:
         assert self._inc is not None
-        sev = Severity[sev_name] if sev_name in Severity.__members__ else Severity.HIGH
-        alerts = [Alert(r, sev, r) for r in (rules or ["incidente.arquivo"])]
-        acao = Acao(
-            tipo="quarentena_arquivo",
-            fase="conter",
-            modo="guiada",
-            resultado="em_andamento",
-            detalhe="",
-            alvo={"caminho": str(path), "sha256": sha256},
-            data=agora(),
-        )
-        try:
-            self._store.registrar(self._inc, acao)
-        except IncidentError as e:
-            if self._inc.acoes and self._inc.acoes[-1] is acao:
-                self._inc.acoes.pop()
-            acao.resultado, acao.detalhe = "falhou", f"{e} Nada foi feito."
-            self._notify(acao.detalhe)
-            return acao
-
-        try:
-            qid = self._quarantine.add(Finding(path=Path(path), sha256=sha256, severity=sev, alerts=alerts))
-        except QuarantineError as e:
-            acao.resultado, acao.detalhe = "falhou", str(e)
-            try:
-                self._store.salvar(self._inc)
-            except IncidentError:
-                pass
-            self._notify(str(e))
-            self._render_current()
-            return acao
-
-        acao.alvo["quarantine_id"] = qid
-        acao.backup = {"tipo": "quarantine", "quarantine_id": qid}
-        acao.resultado = "concluida"
-        acao.detalhe = "Arquivo movido para a quarentena; dá para desfazer."
-        try:
-            self._store.salvar(self._inc)
-        except IncidentError as e:
-            acao.detalhe += f" Aviso: {e}"
-        self._on_file_quarantined(Path(path))
-        self._on_quarantine_changed()
+        acao = self._resposta(self._inc).quarentenar(path, sha256, sev_name, rules)
+        self._avisar(acao)
+        if acao.resultado == "concluida":
+            self._on_file_quarantined(Path(path))
+            self._on_quarantine_changed()
         self._render_current()
         return acao
 
@@ -527,63 +495,13 @@ class IncidentPanel(QWidget):
         self._render_current()
         return acao
 
-    def _salvar_ou_avisar(self, acao: Acao) -> bool:
-        """Grava o incidente; se não der (disco cheio, arquivo travado), anota na ação em vez de levantar."""
-        try:
-            self._store.salvar(self._inc)
-        except IncidentError as e:
-            acao.detalhe += f" Aviso: {e}"
-            return False
-        return True
-
     def undo_action_step(self, indice: int) -> Acao:
         assert self._inc is not None
         orig = self._inc.acoes[indice] if 0 <= indice < len(self._inc.acoes) else None
-        if orig is not None and orig.tipo == "quarentena_arquivo":
-            nova = Acao(
-                tipo="desfazer",
-                fase="conter",
-                modo="guiada",
-                resultado="em_andamento",
-                detalhe="",
-                alvo={"indice": indice, **orig.alvo},
-                data=agora(),
-            )
-            try:
-                self._store.registrar(self._inc, nova)
-            except IncidentError as e:
-                if self._inc.acoes and self._inc.acoes[-1] is nova:
-                    self._inc.acoes.pop()
-                nova.resultado, nova.detalhe = "falhou", str(e)
-                self._notify(nova.detalhe)
-                return nova
-            if orig.desfeita or orig.resultado != "concluida" or not orig.alvo.get("quarantine_id"):
-                nova.resultado = "falhou"
-                nova.detalhe = "Esta ação já foi desfeita." if orig.desfeita else "Esta ação não pode ser desfeita."
-                self._salvar_ou_avisar(nova)
-                self._notify(nova.detalhe)
-                self._render_current()
-                return nova
-            try:
-                dest = self._quarantine.restore(str(orig.alvo["quarantine_id"]))
-            except QuarantineError as e:
-                nova.resultado, nova.detalhe = "falhou", str(e)
-                self._salvar_ou_avisar(nova)
-                self._notify(str(e))
-                self._render_current()
-                return nova
-            orig.desfeita = True
-            nova.resultado = "concluida"
-            nova.detalhe = f"Arquivo restaurado em {_visivel(str(dest))}."
-            if not self._salvar_ou_avisar(nova):
-                self._notify(nova.detalhe)
-            self._on_quarantine_changed()
-            self._render_current()
-            return nova
-
         acao = self._resposta(self._inc).desfazer(indice)
-        if acao.resultado == "falhou":
-            self._notify(acao.detalhe)
+        self._avisar(acao)
+        if acao.resultado == "concluida" and orig is not None and orig.tipo == "quarentena_arquivo":
+            self._on_quarantine_changed()
         self._render_current()
         return acao
 
@@ -758,11 +676,13 @@ class IncidentPanel(QWidget):
             btn_como.clicked.connect(self.show_guard_instructions)
             self._add_step_row(
                 self._lay_conter,
-                f"Bloquear conexões de saída do executável (regra Mandacaru-{inc.id[:8]})",
+                "Bloquear conexões de saída do executável",
                 _criar_selo("admin", "Requer Proteção avançada"),
                 descricao="Cria regra reversível no Firewall do Windows para cortar comunicação externa do binário.",
                 botoes=[btn_fw, btn_como],
             )
+        else:
+            self._render_firewall(inc)
 
         # 4. Orientação manual de desconexão em casos graves
         self._add_step_row(
@@ -774,6 +694,44 @@ class IncidentPanel(QWidget):
                 "o Wi-Fi ou puxe o cabo de rede antes de continuar."
             ),
         )
+
+    def _render_firewall(self, inc: Incidente) -> None:
+        """Um passo por executável do incidente (achados .exe e processos detectados)."""
+        exes: dict[str, str] = {}
+        for a in inc.achados:
+            c = a.get("caminho")
+            if isinstance(c, str) and c.lower().endswith(".exe"):
+                exes.setdefault(ntpath.normcase(c), c)
+        for p in self._detected_procs:
+            if p.exe:
+                exes.setdefault(ntpath.normcase(p.exe), p.exe)
+        if not exes:
+            self._add_step_row(self._lay_conter, "Bloquear conexões de saída do executável",
+                               _criar_selo("done", "Não se aplica"),
+                               descricao="Nenhum executável ligado a este incidente.")
+            return
+        for chave, exe in exes.items():
+            idx = next((i for i, a in enumerate(inc.acoes) if a.tipo == "bloquear_rede" and a.resultado == "concluida"
+                        and not a.desfeita and ntpath.normcase(str(a.alvo.get("exe", ""))) == chave), None)
+            if idx is not None:
+                btn = style_button(QPushButton("Desfazer"), "neutral", compact=True)
+                btn.clicked.connect(lambda _=False, i=idx: self.undo_action_step(i))
+                selo, desc = _selo_da_acao(inc.acoes[idx]), _visivel(inc.acoes[idx].detalhe)
+            else:
+                btn = style_button(QPushButton("Bloquear rede"), "quarantine", compact=True)
+                btn.clicked.connect(lambda _=False, e=exe: self.block_network_step(e))
+                selo = _criar_selo("pending", "Pendente")
+                desc = "Regra reversível no Firewall do Windows: o programa fica sem saída para a internet."
+            self._add_step_row(self._lay_conter, f"Bloquear rede: {_visivel(ntpath.basename(exe))}", selo,
+                               descricao=desc, detalhes=[f"Executável: {exe}"], botoes=[btn])
+
+    def block_network_step(self, exe: str) -> Acao:
+        assert self._inc is not None
+        acao = self._resposta(self._inc).bloquear_rede(exe)
+        if acao.resultado == "falhou":
+            self._notify(acao.detalhe)
+        self._render_current()
+        return acao
 
     def _render_neutralizar(self, inc: Incidente, tem_guard: bool) -> None:
         _limpar_layout(self._lay_neutralizar)

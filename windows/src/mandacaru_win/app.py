@@ -43,7 +43,9 @@ from mandacaru.events import Severity
 from mandacaru.projeto import Achado, RelatorioProjeto, parece_projeto
 from mandacaru.projeto.achado import exibivel
 from mandacaru_win import scan
+from mandacaru_win.guard_client import GuardClient
 from mandacaru_win.incident import Incidente, IncidentError, IncidentStore
+from mandacaru_win.incident_resposta import Resposta
 from mandacaru_win.incident_ui import IncidentPanel
 from mandacaru_win.progress import (
     consulta_text,
@@ -351,9 +353,13 @@ class MainWindow(QMainWindow):
             ["Data", "Caminho original", "Severidade", "Regras", "Ações"], stretch=1)
         self.tbl_quarantine.setItemDelegateForColumn(2, BadgeDelegate(self.tbl_quarantine))
         tabs.addTab(self.tbl_quarantine, "Quarentena")
+        self._guard = GuardClient()          # Proteção avançada (sem o serviço instalado, nunca responde)
+        self._guard_visto: tuple[float, bool] | None = None
         self.incident_panel = IncidentPanel(
             self._incident_store,
             self._quarantine,
+            guard_available=self._guard_disponivel,
+            resposta_factory=lambda store, inc: Resposta(store, inc, guard=self._guard, quarentena=self._quarantine),
             notify=lambda t: self.notify(t),
             info=lambda t: self.info(t),
             confirm=lambda t: self.confirm(t),
@@ -1377,6 +1383,13 @@ class MainWindow(QMainWindow):
         if path in self._proj_items:
             self._remove_project_row(path)
         self.refresh_tabs()
+
+    def _guard_disponivel(self) -> bool:
+        """O painel pergunta a cada render; o ping ao serviço vale por 30 s."""
+        agora_ = time.monotonic()
+        if self._guard_visto is None or agora_ - self._guard_visto[0] > 30:
+            self._guard_visto = (agora_, self._guard.disponivel())
+        return self._guard_visto[1]
 
     def _on_file_quarantined_from_incident(self, path: Path) -> None:
         if path in self._items:
