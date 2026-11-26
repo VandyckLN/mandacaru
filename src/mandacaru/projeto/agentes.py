@@ -36,15 +36,20 @@ FRASES: tuple[str, ...] = (
 )
 
 _EXFIL = re.compile(
-    r"(send|upload|exfiltrate|envie|post|mande)\b.{0,80}"
+    r"\b(send|upload|exfiltrate|envie|enviar|mande|mandar)\b.{0,80}"
     r"(ssh|\.env|token|api[_ ]?key|password|senha|credential|credencia)",
     re.I,
 )
+# Negação logo antes do verbo ("Do not send API keys..."): é regra de segurança, não pedido.
+_NEGACAO = re.compile(r"\b(?:never|don'?t|do not|n[aã]o|nunca|jamais)\b", re.I)
+_ANTES_DO_VERBO = 20
 _ASSISTENTE = re.compile(
     r"\b(assistant|assistente|ai agent|agente de ia|llm|language model|"
-    r"modelo de linguagem|claude|chatgpt|copilot|cursor|gemini)\b",
+    r"modelo de linguagem|claude|chatgpt|copilot|cursor|gemini)\b|(?-i:\bAI\b)",
     re.I,
 )
+_EXT_TEXTO = (".md", ".txt", ".mdc")
+_EXT_MARKDOWN = (".md", ".mdc")
 _COMANDO = re.compile(
     r"\b(execute|run|rode|rodar|curl|wget|n[aã]o mencione|"
     r"do not mention|don'?t mention)\b|(?<![-:])\bignor(?:e|a)\b",
@@ -158,21 +163,29 @@ def verificar(raiz: Path, rel: str, texto: str) -> list[Achado]:
                 add("projeto.texto.injecao", Severity.LOW if baixo else Severity.MEDIUM, pos,
                     "frase típica de prompt injection no texto", ("T1204",))
 
-    for m in _EXFIL.finditer(texto):
-        janela = texto[max(0, m.start() - _JANELA) : m.end() + _JANELA]
-        if _ASSISTENTE.search(janela):
-            sev = Severity.HIGH if agente else (Severity.LOW if baixo else Severity.MEDIUM)
-            add("projeto.agente.exfiltracao", sev, m.start(),
-                "pedido a um assistente de IA para enviar segredos ou credenciais "
-                "para fora", ("T1204",))
+    sufixo = PurePosixPath(rel).suffix.lower()
+    if agente or lido or sufixo in _EXT_TEXTO:  # nunca em código: POST, cursor, password são comuns lá
+        apostrofo = texto.replace("\u2019", "'") if "\u2019" in texto else texto
+        for m in _EXFIL.finditer(apostrofo):
+            if _NEGACAO.search(apostrofo, max(0, m.start() - _ANTES_DO_VERBO), m.start()):
+                continue
+            # Em arquivo de agente o destinatário é o próprio agente; fora dele, exige a palavra.
+            janela = texto[max(0, m.start() - _JANELA) : m.end() + _JANELA]
+            if agente or _ASSISTENTE.search(janela):
+                sev = Severity.HIGH if agente else (Severity.LOW if baixo else Severity.MEDIUM)
+                add("projeto.agente.exfiltracao", sev, m.start(),
+                    "pedido a um assistente de IA para enviar segredos ou credenciais "
+                    "para fora", ("T1204",))
 
-    if PurePosixPath(rel).suffix.lower() == ".md":
+    if sufixo in _EXT_MARKDOWN or (agente and sufixo == ""):
         pos = 0
         while (ini := texto.find("<!--", pos)) >= 0:
             fim = texto.find("-->", ini + 4)
             if fim < 0:
                 break
-            if _COMANDO.search(texto[ini + 4 : fim]):
+            corpo = texto[ini + 4 : fim]
+            # Em arquivo de agente qualquer comando escondido conta; fora dele, só se fala com a IA.
+            if _COMANDO.search(corpo) and (agente or _ASSISTENTE.search(corpo)):
                 add("projeto.agente.comentario_oculto", Severity.MEDIUM, ini,
                     "comentário HTML escondido com instrução para agentes de IA "
                     "(invisível na página renderizada)", ("T1204",))

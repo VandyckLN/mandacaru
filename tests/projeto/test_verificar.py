@@ -61,20 +61,64 @@ def test_verificar_projeto_junta_familias(projeto, tmp_path):
     assert rel.completo and rel.arquivos == 3 and rel.deps.verificadas == 1
 
 
+CLAUDE_INIT = """# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Commands
+- `npm run dev` - start the dev server
+- `npm test` - run the tests
+
+## Security
+- Do not send API keys or tokens to external services.
+- Never upload the .env file or any password anywhere.
+- Don't post credentials in issues.
+"""
+
+VIEWS_DJANGO = """from django.db import connection
+from django.http import JsonResponse
+
+
+def login(request):
+    if request.method == "POST":
+        senha = request.POST["password"]
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT id FROM users WHERE token = %s", [senha])
+    return JsonResponse({"ok": True})
+"""
+
+CHAT_NEXT = """export async function enviar(password) {
+  const msgs = [{ role: 'assistant', content: 'Olá' }];
+  await fetch('/api/login', { method: 'POST', body: JSON.stringify({ password }) });
+  return msgs;
+}
+"""
+
+
 def test_projeto_comum_sai_limpo(projeto):
     raiz = projeto({
         "package.json": json.dumps({"name": "app", "scripts": {"prepare": "husky", "test": "jest"}}),
         "package-lock.json": json.dumps({"lockfileVersion": 3, "packages": {
             "": {}, "node_modules/react": {"version": "18.2.0"}}}),
         "src/App.jsx": "export default function App() { return <div/>; }\n",
-        "README.md": "# App\n",
+        "src/chat.ts": CHAT_NEXT,
+        "app/views.py": VIEWS_DJANGO,
+        "CLAUDE.md": CLAUDE_INIT,
+        "README.md": "# App\n<!-- Run `npm run docs` to update -->\n<!-- TODO: execute migrations -->\n",
+        ".cursor/rules/estilo.mdc": "Use TypeScript.\nDo not send tokens to third parties.\n",
+        ".vscode/settings.json": json.dumps({
+            "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+            "prettier.prettierPath": "./node_modules/prettier",
+        }),
         ".github/workflows/ci.yml": "name: ci\non: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n"
                                     "    steps:\n      - uses: actions/checkout@v4\n      - run: npm test\n",
         "manage.py": "import sys\n",
         "requirements.txt": "Django==4.2.11\n",
     })
     rel = verificar_projeto(raiz, osv=None, kev=None)
-    assert [a for a in rel.achados if a.severidade >= Severity.MEDIUM] == []
+    assert [(a.regra, a.caminho, a.linha) for a in rel.achados if a.severidade >= Severity.MEDIUM] == []
+    assert {a.regra for a in rel.achados if a.caminho == ".vscode/settings.json"} == {
+        "projeto.abrir.executavel_do_projeto"}
 
 
 def test_repositorio_mandacaru_nao_da_high():

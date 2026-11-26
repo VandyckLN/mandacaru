@@ -187,3 +187,14 @@ def test_git_links_simbolicos_ignorados(projeto, tmp_path_factory):
 def test_baixa_e_executa_comando_gigante_e_ofuscacao():
     assert baixa_e_executa(" " * 10_050 + "curl x | sh") is True
     assert baixa_e_executa("a" * 10_001) is True
+
+
+def test_settings_apontando_para_pastas_nao_versionadas_e_low(projeto):
+    texto = json.dumps({"python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+                        "prettier.prettierPath": "./node_modules/prettier",
+                        "x.path": "venv\\Scripts\\python.exe",
+                        "eslint.nodePath": "./tools/node"})
+    achados = _rodar(projeto, ".vscode/settings.json", texto)
+    sev = {a.trecho: a.severidade for a in achados}
+    assert sev == {"${workspaceFolder}/.venv/bin/python": Severity.LOW, "./node_modules/prettier": Severity.LOW,
+                   "venv\\Scripts\\python.exe": Severity.LOW, "./tools/node": Severity.MEDIUM}

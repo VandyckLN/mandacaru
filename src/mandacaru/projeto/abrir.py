@@ -164,6 +164,14 @@ def _caminho_do_projeto(valor: str) -> bool:
     return "/" in valor or "\\" in valor
 
 
+_NAO_VERSIONADAS = frozenset({".venv", "venv", "node_modules"})
+
+
+def _em_pasta_nao_versionada(valor: str) -> bool:
+    """Aponta para .venv/venv/node_modules: pastas que a instalação cria e não vêm no repositório."""
+    return any(p in _NAO_VERSIONADAS for p in re.split(r"[/\\]", valor))
+
+
 def _settings_vscode(rel: str, ln: Linhas, dados: object) -> list[Achado]:
     if not isinstance(dados, dict):
         return []
@@ -174,9 +182,12 @@ def _settings_vscode(rel: str, ln: Linhas, dados: object) -> list[Achado]:
         if isinstance(valor, str) and (
                 chave == "python.defaultInterpreterPath"
                 or chave.endswith((".path", "Path"))) and _caminho_do_projeto(valor):
+            fora_do_repo = _em_pasta_nao_versionada(valor)
             saida.append(_achado(
-                "projeto.abrir.executavel_do_projeto", Severity.MEDIUM, rel,
-                f"'{chave}' aponta um executável para dentro do projeto", ln, valor, chave))
+                "projeto.abrir.executavel_do_projeto", Severity.LOW if fora_do_repo else Severity.MEDIUM, rel,
+                f"'{chave}' aponta um executável para dentro do projeto"
+                + (" (em pasta criada na instalação, não no repositório)" if fora_do_repo else ""),
+                ln, valor, chave))
         elif chave.startswith("terminal.integrated.env.") and isinstance(valor, dict):
             for var in valor:
                 if isinstance(var, str) and var.upper() in {"PATH", "NODE_OPTIONS", "PYTHONSTARTUP"}:
