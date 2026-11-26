@@ -25,6 +25,7 @@ _REQ_LINHA = re.compile(r"([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(.*)"
 _REQ_IGUAL = re.compile(r"==\s*([0-9][0-9A-Za-z.+!_-]*)")
 _REQ_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
 _PNPM_V5 = re.compile(r"(@[^/@]+/[^/@]+|[^/@]+)/(\d[^/_@]*)(?:_.*)?")
+_REQ_HASH = re.compile(r"\s--")
 _BERRY = re.compile(r"^__metadata:", re.M)
 
 
@@ -157,8 +158,17 @@ def _aspas(s: str) -> str:
 
 
 def _nome_da_spec(spec: str) -> str:
+    """Nome real do pacote; em alias `a@npm:b@^1` e `b`."""
     i = spec.find("@", 1)
-    return spec if i < 0 else spec[:i]
+    if i < 0:
+        return spec
+    resto = spec[i + 1:]
+    if resto.startswith("npm:") and len(resto) > 4:
+        real = resto[4:]
+        j = real.find("@", 1)
+        if j > 0:
+            return real[:j]
+    return spec[:i]
 
 
 def _yarn_v1(rel: str, texto: str):
@@ -192,9 +202,8 @@ def _yarn_berry(rel: str, texto: str):
             continue
         for spec in chave.split(","):
             spec = _aspas(spec)
-            i = spec.find("@npm:", 1)
-            if i > 0:
-                c.add(spec[:i], versao)
+            if spec.find("@npm:", 1) > 0:
+                c.add(_nome_da_spec(spec), versao)
                 break
     return c.resultado()
 
@@ -267,9 +276,7 @@ def _requirements(rel: str, texto: str):
         if not s or s[0] == "-" or _REQ_URL.match(s):
             continue
         s = s.split(";", 1)[0]
-        i = s.find(" --")
-        if i >= 0:
-            s = s[:i]
+        s = _REQ_HASH.split(s, 1)[0]
         m = _REQ_LINHA.fullmatch(s.strip())
         if not m:
             continue

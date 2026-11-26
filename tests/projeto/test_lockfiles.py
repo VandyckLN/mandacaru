@@ -54,14 +54,22 @@ def test_package_lock_v1_iterativo():
     assert trio(deps) == {("npm", "a", "1.0.0"), ("npm", "b", "2.0.0")}
 
 
-def test_package_lock_v1_profundo_sem_recursao():
-    n = 5000
-    texto = '{"dependencies":' + '{"x":{"version":"1.0.0","dependencies":' * n + "{}" + "}}" * n + "}"
-    try:
-        deps, _ = ler_lockfile("package-lock.json", texto)
-    except ArquivoIlegivel:
-        return
-    assert len(deps) <= 100001
+def _v1_aninhado(n):
+    return '{"dependencies":' + '{"x%d":{"version":"1.0.0","dependencies":' % 0 + "".join(
+        '{"x%d":{"version":"1.0.0","dependencies":' % i for i in range(1, n)) + "{}" + "}}" * n + "}"
+
+
+def test_package_lock_v1_profundo_limite():
+    deps, _ = ler_lockfile("package-lock.json", _v1_aninhado(100))
+    assert len(deps) == 64  # limite de profundidade
+    assert deps[0].nome == "x0"
+
+
+def test_package_lock_v1_muito_profundo_ilegivel():
+    t = time.monotonic()
+    with pytest.raises(ArquivoIlegivel):
+        ler_lockfile("package-lock.json", _v1_aninhado(5000))
+    assert time.monotonic() - t < 1
 
 
 def test_dedupe():
@@ -116,15 +124,18 @@ YARN1 = """\
   dependencies:
     foo "^1"
 
-alias@npm:real@^1:
-  version "2.0.0"
+"strip-ansi-cjs@npm:strip-ansi@^6.0.1":
+  version "6.0.1"
+
+"x@npm:@s/real@^1":
+  version "1.0.0"
 """
 
 
 def test_yarn_v1():
     deps, _ = ler_lockfile("yarn.lock", YARN1)
     assert trio(deps) == {("npm", "@scope/pkg", "1.2.3"), ("npm", "lodash", "4.17.21"),
-                          ("npm", "alias", "2.0.0")}
+                          ("npm", "strip-ansi", "6.0.1"), ("npm", "@s/real", "1.0.0")}
 
 
 YARN_BERRY = """\
@@ -135,6 +146,12 @@ __metadata:
   version: 4.17.21
   resolution: "lodash@npm:4.17.21"
 
+"x@npm:@s/real@^1":
+  version: 1.0.0
+
+"strip-ansi-cjs@npm:strip-ansi@^6.0.1":
+  version: 6.0.1
+
 "app@workspace:.":
   version: 0.0.0-use.local
 """
@@ -142,7 +159,8 @@ __metadata:
 
 def test_yarn_berry():
     deps, _ = ler_lockfile("yarn.lock", YARN_BERRY)
-    assert trio(deps) == {("npm", "lodash", "4.17.21")}
+    assert trio(deps) == {("npm", "lodash", "4.17.21"), ("npm", "@s/real", "1.0.0"),
+                          ("npm", "strip-ansi", "6.0.1")}
 
 
 POETRY = """\
@@ -209,9 +227,10 @@ def test_requirements_casos():
         "e==1.0  # comentario\n"
         "-e .\n--index-url https://x\nhttps://x/y.whl\ngit+https://x/y.git\n"
         "f==1.0,!=1.1\n"
+        "g==2.0\t--hash=sha256:abc\n"
     )
     deps, sem = ler_lockfile("requirements-dev.txt", texto)
-    assert [(d.nome, d.versao) for d in deps] == [("c", "1.0"), ("d", "1.0"), ("e", "1.0")]
+    assert [(d.nome, d.versao) for d in deps] == [("c", "1.0"), ("d", "1.0"), ("e", "1.0"), ("g", "2.0")]
     assert sem == 3  # a, b, f
 
 
