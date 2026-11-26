@@ -42,10 +42,9 @@ _ASSISTENTE = re.compile(
     r"modelo de linguagem|claude|chatgpt|copilot|cursor|gemini)\b",
     re.I,
 )
-_COMENTARIO = re.compile(r"<!--(.*?)-->", re.S)
 _COMANDO = re.compile(
-    r"\b(execute|run|rode|rodar|ignore|ignora|curl|wget|n[aã]o mencione|"
-    r"do not mention|don'?t mention)\b",
+    r"\b(execute|run|rode|rodar|curl|wget|n[aã]o mencione|"
+    r"do not mention|don'?t mention)\b|(?<![-:])\bignor(?:e|a)\b",
     re.I,
 )
 _JANELA = 300
@@ -106,8 +105,10 @@ def _normalizar(texto: str) -> tuple[str, list[int]]:
                 mapa.append(i)
             continue
         for d in unicodedata.normalize("NFKD", c):
-            if unicodedata.combining(d):
+            if unicodedata.combining(d) or unicodedata.category(d) == "Cf":
                 continue
+            if d in "\u2019\u2018":
+                d = "'"
             for m in d.lower():
                 saida.append(m)
                 mapa.append(i)
@@ -163,11 +164,16 @@ def verificar(raiz: Path, rel: str, texto: str) -> list[Achado]:
                 "para fora", ("T1204",))
 
     if PurePosixPath(rel).suffix.lower() == ".md":
-        for m in _COMENTARIO.finditer(texto):
-            if _COMANDO.search(m.group(1)):
-                add("projeto.agente.comentario_oculto", Severity.MEDIUM, m.start(),
+        pos = 0
+        while (ini := texto.find("<!--", pos)) >= 0:
+            fim = texto.find("-->", ini + 4)
+            if fim < 0:
+                break
+            if _COMANDO.search(texto[ini + 4 : fim]):
+                add("projeto.agente.comentario_oculto", Severity.MEDIUM, ini,
                     "comentário HTML escondido com instrução para agentes de IA "
                     "(invisível na página renderizada)", ("T1204",))
+            pos = fim + 3
 
     achados.sort(key=lambda a: (a.linha or 0, a.regra))
     return achados
