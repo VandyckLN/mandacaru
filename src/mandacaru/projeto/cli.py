@@ -3,13 +3,12 @@ from __future__ import annotations
 
 import os
 import sys
-import unicodedata
 from pathlib import Path
 
 from ..config import ConfigError, load_config
 from ..events import Severity
 from . import RelatorioProjeto, verificar_projeto
-from .achado import Achado
+from .achado import Achado, exibivel
 from .percurso import MAX_ARQUIVOS, excluir_por_globs
 
 _SECOES = (
@@ -38,23 +37,16 @@ def add_parser(sub) -> None:
     p.set_defaults(fn=cmd_dev)
 
 
-def _limpo(texto: str) -> str:
-    """Escapa controles e caracteres invisíveis: o conteúdo vem do projeto e não pode mexer no terminal."""
-    return "".join(
-        f"\\u{ord(c):04x}" if unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") and c != " " else c
-        for c in texto)
-
-
 def _linha(a: Achado) -> list[str]:
     onde = a.caminho if a.linha is None else f"{a.caminho}:{a.linha}"
-    saida = [f"  {a.severidade.name:<8}  {_limpo(onde)}  {_limpo(a.explicacao)}"]
+    saida = [f"  {a.severidade.name:<8}  {exibivel(onde, None)}  {exibivel(a.explicacao, None)}"]
     if a.trecho:
-        saida.append(" " * 13 + _limpo(a.trecho))
+        saida.append(" " * 13 + exibivel(a.trecho))
     return saida
 
 
 def formatar(rel: RelatorioProjeto) -> str:
-    linhas = [f"Mandacaru · verificação de projeto: {_limpo(str(rel.raiz))}", ""]
+    linhas = [f"Mandacaru · verificação de projeto: {exibivel(str(rel.raiz), None)}", ""]
     relevantes = [a for a in rel.achados if a.severidade > Severity.LOW]
     baixos = [a for a in rel.achados if a.severidade <= Severity.LOW]
     if not rel.achados:
@@ -90,7 +82,19 @@ def formatar(rel: RelatorioProjeto) -> str:
     return "\n".join(linhas)
 
 
+def _tolerar_codificacao() -> None:
+    """Um caractere que o console não codifica (cp1252, ASCII) sai escapado em vez de derrubar o relatório."""
+    for fluxo in (sys.stdout, sys.stderr):
+        reconfigurar = getattr(fluxo, "reconfigure", None)
+        if reconfigurar is not None:
+            try:
+                reconfigurar(errors="backslashreplace")
+            except (ValueError, OSError):
+                pass
+
+
 def cmd_dev(args) -> int:
+    _tolerar_codificacao()
     raiz = Path(args.pasta)
     if not raiz.is_dir():
         raise ConfigError(f"pasta não encontrada: {args.pasta}")

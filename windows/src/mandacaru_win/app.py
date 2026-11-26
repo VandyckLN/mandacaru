@@ -6,7 +6,6 @@ import os
 import subprocess
 import sys
 import time
-import unicodedata
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -42,6 +41,7 @@ from PySide6.QtWidgets import (
 from mandacaru.analysis import AnalysisResult
 from mandacaru.events import Severity
 from mandacaru.projeto import Achado, RelatorioProjeto, parece_projeto
+from mandacaru.projeto.achado import exibivel
 from mandacaru_win import scan
 from mandacaru_win.progress import (
     consulta_text,
@@ -102,10 +102,8 @@ APPLY_LABEL = {"ok": "Atualizado", "reiniciar": "Atualizado (reinicie)", "ja_atu
 
 
 def _visivel(texto: str) -> str:
-    """Escapa controles e caracteres invisíveis: o texto vem do projeto e não pode enganar a interface."""
-    return "".join(
-        f"\\u{ord(c):04x}" if unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") and c != " " else c
-        for c in texto)
+    """Texto do projeto inteiro, em uma linha e sem invisíveis: não pode enganar a interface."""
+    return exibivel(texto, limite=None)
 
 
 def _onde(a: Achado) -> str:
@@ -764,7 +762,7 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 0)  # indeterminado até saber o total
         self.progress.set_caption("")
         self.progress.start_clock()
-        self.lbl_file.setText(f"Verificando projeto: {raiz}")
+        self.lbl_file.setText(f"Verificando projeto: {_visivel(str(raiz))}")
         self._update_count()
         self.statusBar().showMessage("Verificando projeto…")
         self._set_scanning(True)
@@ -831,7 +829,7 @@ class MainWindow(QMainWindow):
             self.progress.setValue(0)
         self.progress.set_caption("A verificação do projeto falhou")
         self.statusBar().showMessage("Falhou")
-        self.notify(f"A verificação do projeto falhou: {msg}")
+        self.notify(f"A verificação do projeto falhou: {_visivel(msg)}")
         self.project_finished.emit(None)
 
     def _add_project_rows(self, rel: RelatorioProjeto, hashes: dict[str, str | None]) -> int:
@@ -857,7 +855,7 @@ class MainWindow(QMainWindow):
     def _achado_item(onde: str, a: Achado) -> QTreeWidgetItem:
         item = QTreeWidgetItem(["", onde, _visivel(a.explicacao)])
         if a.trecho:
-            item.addChild(QTreeWidgetItem(["", "", _visivel(a.trecho)]))
+            item.addChild(QTreeWidgetItem(["", "", exibivel(a.trecho)]))
         return item
 
     def _add_project_row(self, path: Path, caminho: str, achados: list[Achado], sha: str | None) -> None:

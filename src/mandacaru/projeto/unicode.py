@@ -17,20 +17,11 @@ _TAGS = re.compile("[\U000e0000-\U000e007f]+")
 _LARGURA_ZERO = re.compile("[\u200b\u200c\u200d\u2060\ufeff]{3,}")
 _BIDI = re.compile("[\u202a-\u202e\u2066-\u2069]")
 _BANDEIRA = "\U0001f3f4"
-_MAX_TRECHO = 120
 
 _IGNORAR = re.compile(
     r"""'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`[^`]*`|/\*.*?\*/|//.*|\#.*"""
 )
 _IDENT = re.compile(r"[^\W\d]\w*")
-
-
-def mostrar_invisiveis(s: str) -> str:
-    partes = [
-        f"<U+{ord(c):04X}>" if c != "\t" and unicodedata.category(c) in ("Cf", "Cc") else c
-        for c in s
-    ]
-    return "".join(partes)[:_MAX_TRECHO]
 
 
 def trechos_tags(texto: str) -> list[int]:
@@ -78,7 +69,7 @@ def verificar(raiz: Path, rel: str, texto: str) -> list[Achado]:
                 "projeto.unicode.bidi", Severity.HIGH, rel,
                 "caracteres de controle bidirecional no código (Trojan Source): "
                 "o texto exibido pode diferir do que é executado",
-                i, mostrar_invisiveis(trecho), ("T1027",),
+                i, trecho, ("T1027",),
             ))
         palavra = _mistura_escritas(trecho)
         if palavra:
@@ -86,6 +77,6 @@ def verificar(raiz: Path, rel: str, texto: str) -> list[Achado]:
                 "projeto.unicode.homoglifo", Severity.MEDIUM, rel,
                 f"identificador '{palavra}' mistura letras latinas com cirílicas ou "
                 "gregas parecidas (homoglifo)",
-                i, mostrar_invisiveis(trecho), ("T1036",),
+                i, trecho, ("T1036",),
             ))
     return achados

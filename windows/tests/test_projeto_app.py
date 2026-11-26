@@ -305,7 +305,21 @@ def test_texto_do_projeto_aparece_sem_invisiveis(app, tmp_path, scanner):
     win = make_win(tmp_path, scanner)
     verificar(win, d)
     item = win._proj_items[d / nome]
-    assert item.text(1) == "docs\\u202e.md"
+    assert item.text(1) == "docs<U+202E>.md"
     for col in range(3):
         assert "\u202e" not in item.text(col)
     assert "\u202e" not in item.toolTip(1)
+
+
+def test_nome_da_pasta_e_falha_aparecem_sem_invisiveis(app, tmp_path, scanner):
+    d = tmp_path / ("proj" + "\u202e" + "x")
+    d.mkdir()
+    (d / "package.json").write_text("{}")
+    win = make_win(tmp_path, scanner)
+    rotulos = []
+    win.projeto_thread_factory = lambda raiz, cache_dir, excluir: (
+        rotulos.append(win.lbl_file.text()), sem_rede(raiz, cache_dir, excluir))[1]
+    verificar(win, d)
+    assert rotulos and "\u202e" not in rotulos[0] and "proj<U+202E>x" in rotulos[0]
+    win._on_proj_failed("OSError: " + "\u202e" + "a\nb")
+    assert win.msgs[-1].endswith("OSError: <U+202E>a<U+000A>b")

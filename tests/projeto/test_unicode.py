@@ -1,6 +1,5 @@
 from mandacaru.events import Severity
 from mandacaru.projeto.unicode import (
-    mostrar_invisiveis,
     trechos_bidi,
     trechos_largura_zero,
     trechos_tags,
@@ -62,11 +61,6 @@ def test_tags_bandeira_nao_conta():
 def test_largura_zero():
     assert trechos_largura_zero("a\u200b\u200b\u200bb") == [1]
     assert trechos_largura_zero("a\u200db") == []
-
-
-def test_mostrar_invisiveis():
-    assert mostrar_invisiveis("a\u202eb\tc") == "a<U+202E>b\tc"
-    assert len(mostrar_invisiveis("x" * 300)) == 120
 
 
 def test_trechos_bidi():

@@ -6,9 +6,9 @@ import unicodedata
 from pathlib import Path, PurePosixPath
 
 from ..events import Severity
-from .achado import Achado
+from .achado import LIMITE_TRECHO, Achado
 from .percurso import linha_de
-from .unicode import mostrar_invisiveis, trechos_largura_zero, trechos_tags
+from .unicode import trechos_largura_zero, trechos_tags
 
 _NOMES_AGENTE = frozenset({
     "agents.md", "claude.md", "gemini.md",
@@ -48,7 +48,6 @@ _COMANDO = re.compile(
     re.I,
 )
 _JANELA = 300
-_MAX_TRECHO = 120
 
 
 def _segmentos(rel: str) -> list[str]:
@@ -117,9 +116,8 @@ def _normalizar(texto: str) -> tuple[str, list[int]]:
 
 def _trecho(texto: str, pos: int) -> str:
     ini = texto.rfind("\n", 0, pos) + 1
-    fim = texto.find("\n", pos)
-    linha = texto[ini : fim if fim >= 0 else len(texto)].rstrip("\r")
-    return mostrar_invisiveis(linha[:_MAX_TRECHO])
+    fim = texto.find("\n", pos, ini + 2 * LIMITE_TRECHO)
+    return texto[ini : fim if fim >= 0 else ini + 2 * LIMITE_TRECHO].rstrip("\r")
 
 
 def verificar(raiz: Path, rel: str, texto: str) -> list[Achado]:
