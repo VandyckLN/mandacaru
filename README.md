@@ -191,6 +191,27 @@ cymru = true
 
 O `config.toml` é instalado como `0640`, porque pode guardar chaves de API. Quem não é root e roda sem `--config` (por exemplo `mandacaru scan` ou `quarentena listar`) recebe um aviso e segue com a configuração padrão; um `--config` ilegível ou um config inválido continuam sendo erro.
 
+## Verificar projeto (desenvolvedores)
+
+Antes de abrir um repositório baixado no editor ou rodar `npm install`, veja o que ele faz sozinho:
+
+```bash
+mandacaru dev ./projeto            # com rede: consulta OSV.dev e CISA KEV
+mandacaru dev ./projeto --sem-rede # só olha os arquivos, nada sai da máquina
+mandacaru --json achados.jsonl dev ./projeto
+```
+
+- **Instruções para agentes de IA**: `AGENTS.md`, `CLAUDE.md`, `.cursorrules` e afins com frases de prompt injection, pedido de envio de segredos, comentários HTML escondidos ou Unicode invisível.
+- **Executa ao abrir a pasta**: tarefas `folderOpen` do VS Code, servidores MCP, hooks e permissões amplas do Claude Code, devcontainer e hooks do Git.
+- **Executa ao instalar dependências**: `postinstall`/`preinstall` do npm, `setup.py` e backends de build locais.
+- **Código com Unicode enganoso**: caracteres bidirecionais e homóglifos em código-fonte (Trojan Source).
+- **GitHub Actions**: `pull_request_target` inseguro, injeção de expressão e passos que baixam e executam código remoto.
+- **Bibliotecas**: versões fixadas nos lockfiles (npm, pnpm, yarn, Poetry, uv, Pipenv, `requirements*.txt`) e pacotes de servidores MCP, cruzados com o OSV.dev e a CISA KEV.
+
+O que sai da máquina: só ecossistema, nome e versão de cada biblioteca, para o OSV.dev (e o catálogo KEV é baixado inteiro). Nenhum caminho, conteúdo de arquivo ou nome de usuário. Com `--sem-rede` nada é enviado nem gravado em cache; `--cache-dir` muda a pasta do cache.
+
+Código de saída: `0` se não houver achado `HIGH` ou `CRITICAL` (achados médios e os de "Para conhecimento" não bloqueiam), `2` se houver e `1` para erro de uso, como pasta inexistente.
+
 ## Vulnerabilidades (CVEs)
 
 > Guia completo, com diagramas e perguntas frequentes: [docs/novidades-0.5.md](docs/novidades-0.5.md).

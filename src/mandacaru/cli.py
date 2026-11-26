@@ -25,6 +25,7 @@ from .detectors.static import StaticScanner
 from .engine import AlertSink, Engine, console_sink, jsonl_sink
 from .events import Alert, Severity
 from .ml.cli import add_parser as add_ml_parser
+from .projeto.cli import add_parser as add_projeto_parser
 from .quarantine import DEFAULT_DIR, DEFAULT_TRUST, Quarantine, TrustList
 from .quarantine_cli import add_parser as add_quarantine_parser
 from .telemetry.cli import add_parser as add_telemetry_parser
@@ -303,6 +304,7 @@ def build_parser() -> argparse.ArgumentParser:
     m.set_defaults(fn=cmd_monitor)
     add_quarantine_parser(sub)
     add_vuln_parser(sub)
+    add_projeto_parser(sub)
     add_atualizacoes_parser(sub)
     add_telemetry_parser(sub)
     add_ml_parser(sub)

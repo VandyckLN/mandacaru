@@ -1,5 +1,11 @@
 # Changelog
 
+## Não lançado
+
+Novo comando `mandacaru dev <pasta>` para verificar um projeto antes de abri-lo ou instalá-lo.
+
+- **Verificar projeto**: procura instruções para agentes de IA (prompt injection, exfiltração, Unicode invisível), o que executa ao abrir a pasta (tarefas do VS Code, servidores MCP, hooks do Claude Code e do Git, devcontainer), scripts de instalação, Unicode enganoso em código e GitHub Actions perigosas, e cruza as bibliotecas dos lockfiles e dos servidores MCP com o OSV.dev e a CISA KEV (só ecossistema, nome e versão saem da máquina; `--sem-rede` desliga). Sai com `2` se houver `HIGH` ou `CRITICAL`; `--json` grava os achados em JSON Lines.
+
 ## 0.8.2
 
 As barras de progresso do app Windows passam a dizer o que está acontecendo, não só a porcentagem, com o gradiente verde do Mandacaru.
