@@ -101,7 +101,9 @@ _CHAVES = {
     "firewall_block": {"regra", "exe"},
     "firewall_unblock": {"regra"},
     "persistence_remove": {"tipo", "nome", "valor"},
-    "persistence_restore": {"backup"},
+    # Só o id: o backup fica na pasta do serviço. Um backup vindo do cliente seria um jeito de
+    # pedir ao SYSTEM que grave qualquer tarefa, valor de registro ou arquivo de Inicializar.
+    "persistence_restore": {"id"},
 }
 
 
@@ -118,8 +120,8 @@ def validar_pedido(d: dict) -> tuple[str, dict]:
         return acao, {"pid": pid, "exe": _caminho(p["exe"]), "sha256": _sha(p["sha256"])}
     if acao == "quarantine_file":
         return acao, {"caminho": _caminho(p["caminho"]), "sha256": _sha(p["sha256"])}
-    if acao == "quarantine_restore":
-        _exigir(isinstance(p["id"], str) and bool(ID_RE.fullmatch(p["id"])), "Item de quarentena inválido.")
+    if acao in ("quarantine_restore", "persistence_restore"):
+        _exigir(isinstance(p["id"], str) and bool(ID_RE.fullmatch(p["id"])), "Identificador de backup inválido.")
         return acao, {"id": p["id"]}
     if acao == "firewall_block":
         return acao, {"regra": _regra(p["regra"]), "exe": _caminho(p["exe"])}
@@ -135,7 +137,4 @@ def validar_pedido(d: dict) -> tuple[str, dict]:
         elif tipo in ("schtask", "service"):
             _exigir(valor == "", "Valor de entrada inválido.")
         return acao, {"tipo": tipo, "nome": nome, "valor": valor}
-    if acao == "persistence_restore":
-        _exigir(isinstance(p["backup"], dict), "Backup inválido.")
-        return acao, {"backup": p["backup"]}
     return acao, {}

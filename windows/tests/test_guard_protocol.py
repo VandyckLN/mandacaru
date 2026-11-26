@@ -56,8 +56,7 @@ def test_pedidos_validos():
     assert validar_pedido({"acao": "firewall_unblock", "regra": "Mandacaru-" + "f" * 32})[0] == "firewall_unblock"
     assert validar_pedido({"acao": "persistence_remove", "tipo": "hklm_run", "nome": "Upd",
                            "valor": f'"{EXE}"'})[1]["tipo"] == "hklm_run"
-    assert validar_pedido({"acao": "persistence_restore", "backup": {"tipo": "service"}})[1] == {
-        "backup": {"tipo": "service"}}
+    assert validar_pedido({"acao": "persistence_restore", "id": "f" * 32}) == ("persistence_restore", {"id": "f" * 32})
 
 
 @pytest.mark.parametrize("pedido", [
@@ -81,7 +80,8 @@ def test_pedidos_validos():
     {"acao": "persistence_remove", "tipo": "hkcu_run", "nome": "x", "valor": "y"},
     {"acao": "persistence_remove", "tipo": "service", "nome": "", "valor": ""},
     {"acao": "persistence_remove", "tipo": "service", "nome": "a\nb", "valor": ""},
-    {"acao": "persistence_restore", "backup": "nao é dict"},
+    {"acao": "persistence_restore", "backup": {"tipo": "schtask", "xml": "<Task/>"}},   # backup do cliente: nunca
+    {"acao": "persistence_restore", "id": "../x"},
 ])
 def test_pedidos_invalidos(pedido):
     with pytest.raises(GuardError):
