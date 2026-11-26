@@ -431,3 +431,93 @@ def test_quarentena_desabilitada_em_linha_so_de_dependencia(app, tmp_path, scann
     btn = botoes(win, win._proj_items[lock])["Quarentena"]
     assert btn.isEnabled() is False
     assert "biblioteca declarada" in btn.toolTip()
+
+
+def test_aviso_fixo_aparece_em_high_e_nao_em_medium_ou_low(app, tmp_path, scanner):
+    d_low = tmp_path / "proj_low"
+    d_low.mkdir()
+    (d_low / "package.json").write_text('{"name": "x", "version": "1.0.0", "scripts": {"postinstall": "husky"}}')
+
+    d_med = tmp_path / "proj_med"
+    (d_med / ".vscode").mkdir(parents=True)
+    (d_med / "package.json").write_text("{}")
+    (d_med / ".vscode" / "tasks.json").write_text(
+        '{"version": "2.0.0", "tasks": [{"label": "ok", "type": "shell", '
+        '"command": "echo oi", "runOptions": {"runOn": "folderOpen"}}]}\n'
+    )
+
+    d_high = tmp_path / "proj_high"
+    d_high.mkdir()
+    arq_high = d_high / "AGENTS.md"
+    arq_high.write_text(INJECAO)
+
+    win = make_win(tmp_path, scanner)
+    win.show()
+
+    verificar(win, d_low)
+    assert not win.project_alert_bar.isVisible()
+
+    verificar(win, d_med)
+    assert not win.project_alert_bar.isVisible()
+
+    verificar(win, d_high)
+    assert win.project_alert_bar.isVisible()
+    texto = win.lbl_project_alert.text().lower()
+    assert "se você já abriu ou instalou este projeto, faça uma varredura completa e troque chaves e tokens" in texto
+    assert "não desfaz" in texto
+
+    # Mesmo após isolar o arquivo individual, o aviso permanece visível nesta sessão.
+    botoes(win, win._proj_items[arq_high])["Quarentena"].click()
+    assert arq_high not in win._proj_items
+    assert win.project_alert_bar.isVisible()
+
+
+def test_destruir_projeto_pela_faixa_apaga_pasta_e_limpa_linhas(app, tmp_path, scanner, ps_text):
+    d = tmp_path / "proj_armado"
+    d.mkdir()
+    (d / "AGENTS.md").write_text(INJECAO)
+    (d / "a.ps1").write_text(ps_text)
+    (d / "package.json").write_text('{"name": "x", "version": "1.0.0", "scripts": {"postinstall": "husky"}}')
+
+    win = make_win(tmp_path, scanner)
+    win.show()
+    esperar(win.project_finished, lambda: soltar(win, [d]))
+    assert win.project_alert_bar.isVisible()
+    assert d / "a.ps1" in win.findings
+    assert d / "AGENTS.md" in win._proj_items
+    assert win._proj_low_item is not None
+
+    res = esperar(win.shred_finished, win.btn_shred_project.click)[0]
+    assert res.completed
+    assert not d.exists()
+    assert win.findings == {}
+    assert win._proj_items == {}
+    assert win._proj_low_item is None
+    assert topo(win) == []
+    assert not win.project_alert_bar.isVisible()
+
+
+def test_aviso_fixo_sanitiza_nome_hostil_e_suporta_multiplos_projetos(app, tmp_path, scanner):
+    p1 = tmp_path / ("mal" + "\u202e" + "1")
+    p2 = tmp_path / "mal2"
+    for p in (p1, p2):
+        p.mkdir()
+        (p / "AGENTS.md").write_text(INJECAO)
+
+    win = make_win(tmp_path, scanner)
+    win.show()
+    esperar(win.project_finished, lambda: soltar(win, [p1, p2]), vezes=2)
+    assert win.project_alert_bar.isVisible()
+    assert "\u202e" not in win.lbl_project_alert.text()
+    assert "mal<U+202E>1" in win.lbl_project_alert.text()
+    assert "mal2" in win.lbl_project_alert.text()
+
+    esperar(win.shred_finished, lambda: win.shred_project(p1))
+    assert not p1.exists() and p2.exists()
+    assert win.project_alert_bar.isVisible()
+    assert win._flagged_projects == [p2]
+    assert p1 / "AGENTS.md" not in win._proj_items and p2 / "AGENTS.md" in win._proj_items
+
+    esperar(win.shred_finished, win.btn_shred_project.click)
+    assert not p2.exists()
+    assert not win.project_alert_bar.isVisible()

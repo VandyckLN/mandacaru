@@ -180,6 +180,7 @@ class MainWindow(QMainWindow):
         self._proj_items: dict[Path, QTreeWidgetItem] = {}
         self._proj_rows: dict[Path, tuple[Path, list[Achado], str | None]] = {}  # raiz, achados e SHA-256 do arquivo
         self._proj_low_item: QTreeWidgetItem | None = None
+        self._flagged_projects: list[Path] = []
         self._pending_projeto: list[Path] = []
         # Testes trocam por uma fábrica com osv=None/kev=None (sem rede).
         self.projeto_thread_factory: Callable[..., ProjetoThread] = ProjetoThread
@@ -295,6 +296,24 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.progress)
         lay.addWidget(self.lbl_file)
         lay.addWidget(self.lbl_count)
+
+        self.project_alert_bar = QFrame()
+        self.project_alert_bar.setObjectName("faixaProjetoAlerta")
+        pal_lay = QHBoxLayout(self.project_alert_bar)
+        pal_lay.setContentsMargins(10, 8, 10, 8)
+        pal_lay.setSpacing(10)
+        self.lbl_project_alert = QLabel("")
+        self.lbl_project_alert.setWordWrap(True)
+        self.btn_shred_project = style_button(QPushButton("Destruir projeto…"), "danger", compact=True)
+        self.btn_shred_project.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        self.btn_shred_project.setToolTip(
+            "Sobrescreve os arquivos do projeto com dados aleatórios e apaga a pasta definitivamente."
+        )
+        self.btn_shred_project.clicked.connect(self.shred_flagged_project)
+        pal_lay.addWidget(self.lbl_project_alert, 1)
+        pal_lay.addWidget(self.btn_shred_project)
+        self.project_alert_bar.setVisible(False)
+        lay.addWidget(self.project_alert_bar)
 
         self.tree = QTreeWidget()
         self.tree.setColumnCount(4)
@@ -505,7 +524,10 @@ class MainWindow(QMainWindow):
                 t.setItem(r, c, QTableWidgetItem(v))
 
     def _set_scanning(self, on: bool) -> None:
-        for b in (self.btn_downloads, self.btn_desktop, self.btn_folder, self.btn_project, self.btn_shred):
+        for b in (
+            self.btn_downloads, self.btn_desktop, self.btn_folder,
+            self.btn_project, self.btn_shred, self.btn_shred_project,
+        ):
             b.setEnabled(not on)
         self.btn_stop.setEnabled(on)
 
@@ -572,7 +594,21 @@ class MainWindow(QMainWindow):
         self._proj_items.clear()
         self._proj_rows.clear()
         self._proj_low_item = None
+        self._flagged_projects.clear()
+        self._refresh_project_alert_bar()
         self._files = 0
+
+    def _refresh_project_alert_bar(self) -> None:
+        if not self._flagged_projects:
+            self.project_alert_bar.setVisible(False)
+            self.lbl_project_alert.setText("")
+            return
+        nomes = ", ".join(_visivel(p.name or str(p)) for p in self._flagged_projects)
+        self.lbl_project_alert.setText(
+            f"Atenção ({nomes}): se você já abriu ou instalou este projeto, faça uma varredura completa "
+            "e troque chaves e tokens. Destruir a pasta não desfaz o que já foi executado."
+        )
+        self.project_alert_bar.setVisible(True)
 
     def start_scan(self, paths: list[Path], *, background: bool = False) -> None:
         if self._busy():
@@ -851,6 +887,10 @@ class MainWindow(QMainWindow):
             self._add_project_row(raiz, raiz / caminho, caminho, achados, hashes.get(caminho))
         if low:
             self._add_low_rows(raiz, low)
+        if any(a.severidade >= Severity.HIGH for lista in groups.values() for a in lista):
+            if raiz not in self._flagged_projects:
+                self._flagged_projects.append(raiz)
+            self._refresh_project_alert_bar()
         return sum(len(v) for v in groups.values())
 
     def _ignorado(self, a: Achado, sha: str | None) -> bool:
@@ -911,7 +951,9 @@ class MainWindow(QMainWindow):
             self._proj_low_item = item
         for a in low:
             child = self._achado_item(_visivel(_onde(a)), a)
-            child.setToolTip(1, _visivel(str(raiz / a.caminho)))
+            alvo = raiz / a.caminho
+            child.setToolTip(1, _visivel(str(alvo)))
+            child.setData(1, Qt.ItemDataRole.UserRole, str(alvo))
             item.addChild(child)
         item.setText(1, f"Para conhecimento ({item.childCount()})")
         item.setExpanded(False)
@@ -1042,20 +1084,50 @@ class MainWindow(QMainWindow):
         if p:
             self.shred_target(Path(p))
 
+    def shred_flagged_project(self) -> None:
+        """Destrói o projeto sinalizado na faixa de alerta (ou abre menu quando há mais de um)."""
+        if self._busy() or not self._flagged_projects:
+            return
+        if len(self._flagged_projects) == 1:
+            self.shred_project(self._flagged_projects[0])
+            return
+        menu = QMenu(self)
+        for p in list(self._flagged_projects):
+            rotulo = f"{_visivel(p.name or str(p))} — {_visivel(str(p))}"
+            act = menu.addAction(rotulo)
+            act.triggered.connect(lambda _=False, alvo=p: self.shred_project(alvo))
+        menu.exec(self.btn_shred_project.mapToGlobal(self.btn_shred_project.rect().bottomLeft()))
+
+    def shred_project(self, raiz: Path) -> None:
+        """Confirma e destrói definitivamente a pasta inteira de um projeto suspeito."""
+        if self._busy():
+            return
+        p = Path(raiz)
+        if not self.confirm(
+                f"Destruir definitivamente o projeto?\n{_visivel(str(p))}\n\n"
+                "Todos os arquivos da pasta serão sobrescritos com dados aleatórios e apagados sem "
+                "passar pela Lixeira. Lembre-se: destruir a pasta não desfaz o que já foi executado; "
+                "se você já abriu ou instalou o projeto, faça uma varredura completa e troque suas chaves."):
+            return
+        self._run_shred(p)
+
     def shred_target(self, target: Path) -> None:
         """Sobrescreve com dados aleatórios e apaga definitivamente um arquivo ou pasta."""
         if self._busy():
             return
         p = Path(target)
         if not self.confirm(
-                f"Destruir definitivamente?\n{p}\n\n"
+                f"Destruir definitivamente?\n{_visivel(str(p))}\n\n"
                 "Todos os arquivos serão sobrescritos com dados aleatórios, renomeados e apagados "
                 "sem passar pela Lixeira. Esta ação NÃO pode ser desfeita."):
             return
+        self._run_shred(p)
+
+    def _run_shred(self, p: Path) -> None:
         self.progress.set_tone("shred")
         self.progress.setRange(0, 0)
         self.progress.set_caption("")
-        self.lbl_file.setText(f"Destruindo definitivamente: {p}")
+        self.lbl_file.setText(f"Destruindo definitivamente: {_visivel(str(p))}")
         self.statusBar().showMessage("Destruindo arquivos…")
         self._set_scanning(True)
         t = ShredThread(p)
@@ -1064,6 +1136,31 @@ class MainWindow(QMainWindow):
         t.failed.connect(self._on_shred_failed)
         self._shred_thread = t
         t.start()
+
+    def _purge_shredded_rows(self, target: str) -> None:
+        """Remove da árvore linhas de arquivos e projetos contidos no alvo destruído."""
+        if not target:
+            return
+        norm_target = (os.path.normcase(os.path.abspath(target)),)
+        for p in [p for p in self._items if scan._is_under(p, norm_target)]:
+            self._remove_row(p)
+        for p in [p for p in self._proj_items if scan._is_under(p, norm_target)]:
+            self._remove_project_row(p)
+        low = self._proj_low_item
+        if low is not None:
+            for idx in range(low.childCount() - 1, -1, -1):
+                raw_p = low.child(idx).data(1, Qt.ItemDataRole.UserRole)
+                if isinstance(raw_p, str) and scan._is_under(Path(raw_p), norm_target):
+                    low.takeChild(idx)
+            if low.childCount() == 0:
+                top_idx = self.tree.indexOfTopLevelItem(low)
+                if top_idx >= 0:
+                    self.tree.takeTopLevelItem(top_idx)
+                self._proj_low_item = None
+            else:
+                low.setText(1, f"Para conhecimento ({low.childCount()})")
+        self._flagged_projects = [p for p in self._flagged_projects if not scan._is_under(p, norm_target)]
+        self._refresh_project_alert_bar()
 
     def _on_shred_progress(self, path: Path, i: int, total: int) -> None:
         self.progress.setRange(0, max(total, 1))
@@ -1080,6 +1177,8 @@ class MainWindow(QMainWindow):
 
     def _on_shred_done(self, summary: ShredSummary) -> None:
         self._finish_shred_thread()
+        if summary.completed and summary.target:
+            self._purge_shredded_rows(summary.target)
         self.progress.set_tone("shred" if summary.completed and not summary.errors else "warning")
         self.progress.setRange(0, 1)
         self.progress.setValue(1 if summary.completed else 0)

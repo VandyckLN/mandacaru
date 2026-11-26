@@ -55,6 +55,7 @@ Para Windows 10 e 11 (64 bits). Não precisa de administrador: instala só no se
   - **Abrir local:** abre a pasta no Explorer com o arquivo selecionado.
   - **Ignorar sempre:** adiciona o hash SHA-256 à aba **Confiáveis**.
   - **Quarentena:** move o arquivo embaralhado para a aba **Quarentena** (onde você pode **Analisar**, **Restaurar** ou **Apagar** definitivamente).
+- **Verificar projeto (`Verificar projeto…` ou arrastar pasta):** examina repositórios antes de abrir no editor ou rodar `npm install` (instruções para agentes de IA, tarefas `folderOpen` do VS Code, servidores MCP, hooks do Claude Code/Git, `postinstall`/`setup.py`, Trojan Source, GitHub Actions e bibliotecas vulneráveis ou `MAL-*` no OSV.dev/KEV). Permite mover apenas o arquivo perigoso para a **Quarentena** e, quando há achado `Alta` ou `Crítica`, exibe aviso fixo de pós-exploração com o botão **Destruir projeto…**.
 - **Menu de contexto no Windows Explorer (botão direito):**
   - **Varrer com Mandacaru:** disponível ao clicar com o botão direito em arquivos, pastas ou no fundo de uma pasta (abre o app ou encaminha para a janela já aberta).
   - **Destruir definitivamente com Mandacaru:** disponível ao clicar diretamente sobre um arquivo ou pasta; abre o app pedindo confirmação antes de sobrescrever e apagar.
