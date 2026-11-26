@@ -1,6 +1,7 @@
 """Leitura de lockfiles (npm, pnpm, yarn, poetry, uv, Pipfile.lock, requirements*.txt)."""
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 
@@ -79,6 +80,10 @@ class _Coletor:
 
 
 def _json(rel: str, texto: str) -> object:
+    try:
+        return json.loads(texto)  # caminho rapido (C): lockfiles grandes sao JSON puro
+    except Exception:  # noqa: BLE001 - talvez JSONC; tenta o leitor tolerante
+        pass
     try:
         return jsonc.carregar(texto)
     except Exception as exc:  # noqa: BLE001 - entrada do atacante

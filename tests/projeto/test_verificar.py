@@ -231,3 +231,34 @@ def test_corte_avisa_que_ficou_incompleto(projeto):
     saida = formatar(rel)
     assert "Nada suspeito encontrado." not in saida
     assert "Verificação incompleta: cortada em 10 arquivos." in saida
+
+
+def _lock_grande(n):
+    pacotes = {"": {"name": "app"}}
+    for i in range(n):
+        pacotes[f"node_modules/pacote-{i:05}"] = {
+            "version": "1.0.0", "resolved": f"https://registry.npmjs.org/pacote-{i:05}/-/pacote-{i:05}-1.0.0.tgz",
+            "integrity": "sha512-" + "A" * 88, "license": "MIT"}
+    return json.dumps({"name": "app", "lockfileVersion": 3, "packages": pacotes}, indent=2)
+
+
+def test_lockfile_maior_que_2mb_e_lido(projeto, tmp_path):
+    texto = _lock_grande(12_000)
+    assert len(texto.encode()) > 3 * 1024 * 1024
+    raiz = projeto({"package-lock.json": texto})
+    cache = tmp_path / "c"
+    cache.mkdir()
+    rel = verificar_projeto(raiz, osv=_osv(cache, {}), kev=_kev(cache))
+    assert rel.deps.verificadas == 12_000
+    assert rel.arquivos_ilegiveis == [] and rel.lockfiles_nao_lidos == []
+
+
+def test_lockfile_nao_lido_aparece_no_rodape(projeto, monkeypatch):
+    from mandacaru.projeto import percurso
+    from mandacaru.projeto.cli import formatar
+    monkeypatch.setattr(percurso, "MAX_BYTES_LOCKFILE", 1000)
+    raiz = projeto({"package-lock.json": _lock_grande(50), "sub/poetry.lock": "[[package]\n"})
+    rel = verificar_projeto(raiz, osv=None, kev=None)
+    saida = formatar(rel)
+    assert "lockfile não lido: package-lock.json (maior que o limite de leitura)" in saida
+    assert "lockfile não lido: sub/poetry.lock (formato inválido)" in saida

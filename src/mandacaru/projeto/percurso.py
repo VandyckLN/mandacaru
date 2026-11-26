@@ -12,6 +12,7 @@ PULAR: frozenset[str] = frozenset({
     "node_modules", ".venv", "venv", "__pycache__", "dist", "build",
 })
 MAX_BYTES = 2 * 1024 * 1024
+MAX_BYTES_LOCKFILE = 64 * 1024 * 1024  # lockfiles grandes sao comuns e so sao uteis inteiros
 MAX_ARQUIVOS = 20_000
 MAX_POR_PASTA_PRIORITARIA = 1_000
 _SONDA_BINARIO = 8 * 1024
@@ -130,8 +131,8 @@ def listar_prioritarios(
     return sorted(achados), cortado
 
 
-def ler_texto(caminho: Path) -> str | None:
-    """Le ate MAX_BYTES sem seguir link; None se link, nao-arquivo ou binario (NUL)."""
+def _ler_bytes(caminho: Path, max_bytes: int) -> bytes | None:
+    """Le ate `max_bytes` sem seguir link; None se link, nao-arquivo ou erro."""
     try:
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
         if not hasattr(os, "O_NOFOLLOW") and Path(caminho).is_symlink():
@@ -141,14 +142,35 @@ def ler_texto(caminho: Path) -> str | None:
             if not stat.S_ISREG(os.fstat(fd).st_mode):
                 return None
             with os.fdopen(fd, "rb", closefd=False) as fh:
-                dados = fh.read(MAX_BYTES)
+                return fh.read(max_bytes)
         finally:
             os.close(fd)
     except OSError:
         return None
-    if b"\x00" in dados[:_SONDA_BINARIO]:
+
+
+def ler_texto(caminho: Path) -> str | None:
+    """Le ate MAX_BYTES sem seguir link; None se link, nao-arquivo ou binario (NUL)."""
+    dados = _ler_bytes(caminho, MAX_BYTES)
+    if dados is None or b"\x00" in dados[:_SONDA_BINARIO]:
         return None
     return dados.decode("utf-8-sig", errors="replace")
+
+
+def ler_texto_grande(caminho: Path) -> tuple[str | None, str | None]:
+    """Lockfile inteiro, ate MAX_BYTES_LOCKFILE, com as mesmas travas de `ler_texto`.
+
+    Devolve (texto, None) ou (None, motivo) — nunca um texto cortado, que nao parsearia.
+    """
+    limite = MAX_BYTES_LOCKFILE
+    dados = _ler_bytes(caminho, limite + 1)
+    if dados is None:
+        return None, "não pôde ser aberto"
+    if len(dados) > limite:
+        return None, "maior que o limite de leitura"
+    if b"\x00" in dados[:_SONDA_BINARIO]:
+        return None, "não é texto"
+    return dados.decode("utf-8-sig", errors="replace"), None
 
 
 class Linhas:
