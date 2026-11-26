@@ -5,10 +5,24 @@ detecção do pacote `mandacaru-edr`.
 
 ## Instalar (usuário)
 
-Baixe `Mandacaru-<versão>-setup.exe` na página de Releases e execute. Não
-precisa de administrador: instala em `%LOCALAPPDATA%\Programs\Mandacaru`, cria
-atalhos no Menu Iniciar (e opcionalmente na Área de Trabalho) e integra o menu
-de contexto do Explorer (em `HKCU`, removido automaticamente ao desinstalar).
+Baixe `Mandacaru-<versão>-setup.exe` na página de Releases e execute. No
+início, o instalador pergunta o modo:
+
+- **Só para mim** (padrão, sem administrador): instala em
+  `%LOCALAPPDATA%\Programs\Mandacaru`, cria atalhos no Menu Iniciar (e
+  opcionalmente na Área de Trabalho) e integra o menu de contexto do Explorer
+  (em `HKCU`, removido automaticamente ao desinstalar).
+- **Para todos os usuários** (pede administrador uma vez): instala em
+  `C:\Program Files\Mandacaru` e oferece a tarefa **Proteção avançada**, que
+  registra o serviço `MandacaruGuard`. Ele roda como SYSTEM e executa só uma
+  lista fechada de ações pedidas pela janela, que continua sem privilégio:
+  bloquear a rede de um executável, encerrar processos de outros usuários, pôr
+  em quarentena arquivos de pastas do sistema e remover persistência em `HKLM`,
+  na Inicializar de todos, em tarefas do sistema e em serviços — sempre com
+  **Desfazer** no painel **Incidentes**. Nada do Windows nem do Defender é
+  tocado. Neste modo, cada atualização pede o UAC; desinstalar remove o serviço
+  e as regras de firewall `Mandacaru-*`.
+
 Desinstalar não apaga `%LOCALAPPDATA%\Mandacaru` (histórico, quarentena,
 confiáveis e pastas ignoradas).
 
