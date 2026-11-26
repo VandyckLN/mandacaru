@@ -75,7 +75,7 @@ salvar_relatorio(destino, texto)
 
 **Interfaces — Consumes:** `sha256_arquivo`. **Produces:**
 - `@dataclass(frozen=True) class ProcessoInfo: pid: int; ppid: int; exe: str | None; criado: float | None`
-- `class Processos(Protocol)`: `listar() -> list[ProcessoInfo]`; `info(pid) -> ProcessoInfo | None`; `encerrar(pid) -> None` (levanta `OSError`).
+- `class Processos(Protocol)`: `listar() -> list[ProcessoInfo]`; `info(pid) -> ProcessoInfo | None`; `encerrar(pid, criado) -> None` (levanta `OSError`; o backend Windows confere a hora de criação e encerra o mesmo handle — decisão da execução, fecha a corrida de PID reaproveitado).
 - `class ProcessosWindows` (ctypes: `CreateToolhelp32Snapshot`/`Process32FirstW`/`NextW`, `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` + `QueryFullProcessImageNameW` + `GetProcessTimes`, `OpenProcess(PROCESS_TERMINATE)` + `TerminateProcess`).
 - `@dataclass class ResultadoEncerrar: encerrados: list[int]; falhas: list[tuple[int, str]]; recusa: str | None`
 - `encerrar_arvore(processos, pid, exe_esperado, sha256, *, hash_fn=sha256_arquivo, proprio_pid=os.getpid()) -> ResultadoEncerrar`
@@ -96,7 +96,7 @@ Regras, nesta ordem (a primeira que falhar vira `recusa` e nada é encerrado):
 - `@dataclass(frozen=True) class Entrada: tipo: str; local: str; nome: str; comando: str; sha256: str | None = None; exige_servico: bool = False`
 - `class Registro(Protocol)`: `valores(chave) -> list[tuple[str, object, int]]`; `apagar(chave, nome)`; `gravar(chave, nome, valor, tipo_reg)`. `class RegistroWindows` (`winreg`, `HKEY_CURRENT_USER`).
 - `menciona(texto: str, alvo: str) -> bool` — expande `%VAR%` (`ntpath.expandvars`), troca `/` por `\`, compara com `casefold`; o alvo precisa terminar em fronteira (fim ou caractere fora de `[0-9a-z_.-]`, então `C:\proj` casa `C:\proj\x.js` mas não `C:\projeto`).
-- `class Persistencia(*, registro=None, pasta_inicializar=None, run=None, usuario=None)`: `detectar(alvos: list[str], hashes: set[str] = frozenset()) -> list[Entrada]`; `remover(e: Entrada) -> dict` (backup); `restaurar(backup: dict) -> None`. Erros → `IncidentError` com mensagem para a pessoa.
+- `class Persistencia(*, registro=None, pasta_inicializar=None, run=None, usuario=None)`: `detectar(alvos: list[str], hashes: set[str] = frozenset()) -> list[Entrada]`; `backup(e: Entrada) -> dict`; `remover(backup: dict) -> None` (confere que o estado atual ainda é o do backup); `restaurar(backup: dict) -> None`. Erros → `IncidentError` com mensagem para a pessoa. (Decisão da execução: separar `backup` de `remover` deixa a fachada gravar o backup no incidente antes de apagar.)
 
 Comportamento: só valores `str` do registro; arquivos regulares da Inicializar (sem seguir link), lidos até 1 MiB (texto como `latin-1` e `utf-16-le` para achar o caminho dentro de `.lnk`), casando por menção ou por SHA-256. `remover` relê a entrada e recusa se mudou ("A entrada mudou desde a detecção; nada foi removido."). Backup da Inicializar guarda o conteúdo embaralhado (XOR com `b"mandacaru-incidente"` + base64) e o SHA-256; arquivo acima de 1 MiB → "Arquivo grande demais para guardar no incidente; use a Quarentena.". `restaurar` valida o backup (tipo conhecido, chave exatamente `CHAVE_RUN`/`CHAVE_RUNONCE`, nome de arquivo sem separador nem `..`, pasta igual à configurada), não sobrescreve (valor idêntico já presente = sucesso; diferente → "Já existe outra entrada com esse nome; nada foi alterado."), cria arquivo com `O_EXCL` e confere o SHA-256.
 
