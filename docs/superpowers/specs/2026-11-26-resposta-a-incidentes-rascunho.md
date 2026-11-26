@@ -62,7 +62,7 @@ Todo o resto fica guiado: CVE (mesmo listada no KEV), achado de projeto, heurís
 
 **Aviso fixo** sempre que houver HIGH ou CRITICAL num projeto: "Se você já abriu ou instalou este projeto, faça uma varredura completa e troque chaves e tokens." Destruir a pasta **não desfaz** o que já foi executado.
 
-## Pré-requisito: bug real no Destruir (corrigir antes de tudo)
+## Pré-requisito: bug real no Destruir — CORRIGIDO no mesmo PR (#24)
 
 O Destruir sobrescreve arquivos que têm **hard link**, ou seja, o mesmo arquivo com dois nomes. Isso destrói o conteúdo do arquivo de fora da pasta.
 

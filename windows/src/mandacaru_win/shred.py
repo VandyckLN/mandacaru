@@ -99,6 +99,19 @@ def shred_file(path: Path, passes: int = 1) -> None:
     if not p.is_file():
         raise ShredError(f"Não é um arquivo comum: {p}")
 
+    # Hard link: o mesmo conteúdo tem outro nome, possivelmente fora da pasta destruída. Sobrescrever
+    # apagaria o arquivo do outro lado (ex.: um AGENTS.md ligado à tese do usuário). Só desvincula.
+    try:
+        outros_nomes = os.lstat(p).st_nlink > 1
+    except OSError as exc:
+        raise ShredError(f"Não foi possível examinar {p.name}: {exc}") from exc
+    if outros_nomes:
+        try:
+            os.unlink(p)
+        except OSError as exc:
+            raise ShredError(f"Não foi possível remover {p.name}: {exc}") from exc
+        return
+
     _make_writable(p)
     try:
         size = p.stat().st_size
