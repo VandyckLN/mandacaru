@@ -1,6 +1,12 @@
 /*
   Regras base do Mandacaru. Foco: tecnicas que scripts gerados por LLM
   costumam repetir mesmo quando o codigo muda a cada geracao.
+
+  meta.category define o rebaixamento em arquivos de texto (static.py):
+    "technique" -> no maximo MEDIUM em .md/.txt/.jsonl/.log/.rst (docs e
+                   transcricoes descrevem ataques sem executa-los)
+    "note"      -> idem, exceto .txt (formato tipico de nota de resgate)
+  Regras sem category (familia, hash, as do usuario) nunca sao rebaixadas.
 */
 
 rule EICAR_Test_File
@@ -20,6 +26,7 @@ rule Py_Exec_Decoded_Payload
         description = "Python executando payload decodificado (base64/zlib/marshal)"
         severity = "HIGH"
         mitre = "T1027,T1059.006"
+        category = "technique"
     strings:
         // a decodificacao acontece dentro da propria chamada exec()/eval()
         $nested = /\b(exec|eval)\s*\(\s*[\w.]*(b64decode|b32decode|a85decode|decompress|marshal\.loads|fromhex|codecs\.decode)\s*\(/
@@ -33,6 +40,7 @@ rule PS_Encoded_Or_Download_Exec
         description = "PowerShell com comando codificado ou download seguido de execucao"
         severity = "HIGH"
         mitre = "T1059.001,T1105"
+        category = "technique"
     strings:
         $enc = /(powershell|pwsh)(\.exe)?[^\n]{0,80}\s-e(nc|ncodedcommand)?\s+[A-Za-z0-9+\/=]{40,}/ nocase
         $iex = /\b(iex|invoke-expression)\b/ nocase
@@ -50,6 +58,7 @@ rule Shell_Pipe_To_Interpreter
         description = "Download direto para um interpretador (curl|sh, wget|bash, ...)"
         severity = "MEDIUM"
         mitre = "T1105,T1059.004"
+        category = "technique"
     strings:
         $p = /(curl|wget)[^\n|]{0,200}\|\s*(sudo\s+)?(ba|z|da)?sh\b/
         $q = /(curl|wget)[^\n|]{0,200}\|\s*python[23]?\b/
@@ -63,8 +72,11 @@ rule Reverse_Shell_Patterns
         description = "Padroes classicos de shell reverso"
         severity = "CRITICAL"
         mitre = "T1059"
+        category = "technique"
     strings:
-        $r1 = "/dev/tcp/"
+        // /dev/tcp sozinho aparece em changelogs e listas de indicadores; exige o
+        // redirecionamento de shell que abre o socket (>&, &>, <>, <, >)
+        $r1 = /(<>|>&|&>|<|>)\s*\/dev\/(tcp|udp)\/[^\s\/]+\/\S+/
         $r2 = /nc(at)?\s+(-e|-c)\s*\/bin\/(ba)?sh/
         $r3 = /socket\.socket\(.{0,200}(dup2|pty\.spawn)/
         $r4 = /mkfifo\s+\S+;\s*(cat|tail)\s+\S+\s*\|\s*\/bin\/(ba)?sh/
@@ -78,14 +90,16 @@ rule Ransom_Note_Keywords
         description = "Texto tipico de nota de resgate"
         severity = "HIGH"
         mitre = "T1486"
+        category = "note"
     strings:
         $a = "your files have been encrypted" nocase
         $b = "seus arquivos foram criptografados" nocase
-        $c = "bitcoin" nocase
-        $d = "decrypt" nocase
-        $e = ".onion" nocase
+        // frases de instrucao da nota, nao palavras soltas (bitcoin/decrypt aparecem em codigo)
+        $pay = /\b(pay|send|pague|envie|transfira)\s[^\n]{0,40}\b(bitcoin|btc|monero|xmr)\b/ nocase
+        $rec = /\b(to (decrypt|recover|restore) (all )?your files|para (descriptografar|recuperar|restaurar) (todos )?(os )?seus arquivos)\b/ nocase
+        $tor = /\b[a-z2-7]{16,56}\.onion\b/ nocase
     condition:
-        ($a or $b) and 1 of ($c, $d, $e)
+        ($a or $b) and ($pay or $rec or $tor)
 }
 
 rule Prompt_Injection_Instructions
@@ -116,6 +130,7 @@ rule JS_Exec_Decoded_Payload
         description = "JavaScript executando payload decodificado (atob/Buffer.from)"
         severity = "HIGH"
         mitre = "T1027,T1059.007"
+        category = "technique"
     strings:
         $eval_atob = /\beval\s*\(\s*atob\s*\(/
         $eval_buf = /\beval\s*\(\s*Buffer\.from\s*\([^)\n]{1,200}['"](base64|hex)['"]/
@@ -131,6 +146,7 @@ rule Cron_Persistence_From_Script
         description = "Script instalando tarefa agendada no crontab (persistencia)"
         severity = "MEDIUM"
         mitre = "T1053.003"
+        category = "technique"
     strings:
         $pipe = /\|\s*crontab\s+-(\s|$|;|#)/
         $tmp = /\bcrontab\s+(\/tmp|\/var\/tmp|\/dev\/shm)\/\S+/
@@ -144,6 +160,7 @@ rule Win_LOLBin_Download_Exec
         description = "Utilitario nativo do Windows (LOLBin) baixando ou executando payload remoto"
         severity = "HIGH"
         mitre = "T1105,T1218"
+        category = "technique"
     strings:
         $certutil = /\bcertutil(\.exe)?\b[^\n]{0,120}-urlcache[^\n]{0,120}https?:\/\// nocase
         $mshta = /\bmshta(\.exe)?\s+["']?https?:\/\// nocase
@@ -159,6 +176,7 @@ rule Win_Persistence_Registry_Or_Task
         description = "Script configurando persistencia no Windows (Registro Run ou tarefa agendada)"
         severity = "MEDIUM"
         mitre = "T1547.001,T1053.005"
+        category = "technique"
     strings:
         $reg_run = /\breg(\.exe)?\s+add\b[^\n]{0,160}\\CurrentVersion\\Run(Once)?\b/ nocase
         $schtasks = /\bschtasks(\.exe)?\s+\/create\b[^\n]{0,200}\/tr\s+["']?[^\n]{0,120}(powershell|pwsh|cmd\.exe|wscript|cscript|mshta|\\temp\\|%temp%|%appdata%)/ nocase
