@@ -32,6 +32,12 @@ CHAVE_RUN = r"Software\Microsoft\Windows\CurrentVersion\Run"
 CHAVE_RUNONCE = CHAVE_RUN + "Once"
 REG_SZ, REG_EXPAND_SZ = 1, 2
 _CHAVES = {"hkcu_run": CHAVE_RUN, "hkcu_runonce": CHAVE_RUNONCE}
+# Do sistema (HKLM): o app só lê; quem remove é a Proteção avançada (guard_service usa as mesmas chaves).
+CHAVE_RUN_HKLM = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+CHAVE_RUNONCE_HKLM = CHAVE_RUN_HKLM + "Once"
+_CHAVES_HKLM = {"hklm_run": CHAVE_RUN_HKLM, "hklm_runonce": CHAVE_RUNONCE_HKLM}
+CHAVE_SERVICOS = r"SYSTEM\CurrentControlSet\Services"
+SERVICOS = "Serviços do Windows"
 LIMITE_INICIALIZAR = 1024 * 1024
 _CHAVE_XOR = b"mandacaru-incidente"
 _FRONTEIRA = re.compile(r"[\w.\-]")
@@ -86,6 +92,11 @@ class Registro(Protocol):
     def valores(self, chave: str) -> list[tuple[str, object, int]]: ...
     def apagar(self, chave: str, nome: str) -> None: ...
     def gravar(self, chave: str, nome: str, valor: str, tipo_reg: int) -> None: ...
+
+
+class RegistroLeitura(Protocol):
+    def valores(self, chave: str) -> list[tuple[str, object, int]]: ...
+    def subchaves(self, chave: str) -> list[str]: ...
 
 
 def _norm(s: str) -> str:
@@ -143,9 +154,26 @@ def _remover_arquivo(f: Path) -> None:
         os.remove(f)
 
 
+def programa_de_comando(imagem: str, system_root: str) -> str:
+    """Executável de um comando/ImagePath ("…\\svc.exe" -k x, %SystemRoot%\\…, \\SystemRoot\\…, System32\\…)."""
+    s = imagem.strip()
+    if s.startswith('"'):
+        prog = s[1:].split('"', 1)[0]
+    else:
+        m = re.match(r"(.+?\.(?:exe|sys|dll))(?=\s|$)", s, re.IGNORECASE)
+        prog = m.group(1) if m else s.split(" ", 1)[0]
+    prog = re.sub(r"^\\\?\?\\", "", prog)
+    prog = re.sub(r"(?i)%(systemroot|windir)%", lambda _m: system_root, prog)
+    prog = re.sub(r"(?i)^\\systemroot\\", lambda _m: system_root + "\\", prog)
+    if not re.match(r"[A-Za-z]:[\\/]", prog):
+        prog = ntpath.join(system_root, prog.lstrip("\\"))
+    return prog
+
+
 class Persistencia:
     def __init__(self, *, registro: Registro | None = None, pasta_inicializar: Path | None = None,
-                 run: Executor | None = None, usuario: str | None = None):
+                 run: Executor | None = None, usuario: str | None = None,
+                 registro_hklm: RegistroLeitura | None = None, pasta_inicializar_global: Path | None = None):
         if registro is None and sys.platform == "win32":
             registro = RegistroWindows()
         if pasta_inicializar is None and os.environ.get("APPDATA"):
@@ -153,17 +181,65 @@ class Persistencia:
                                  / "Programs" / "Startup")
         if run is None and sys.platform == "win32":
             run = _run_oem
+        if registro_hklm is None and sys.platform == "win32":
+            registro_hklm = RegistroHKLMLeitura()
+        if pasta_inicializar_global is None and sys.platform == "win32" and os.environ.get("ProgramData"):
+            pasta_inicializar_global = (Path(os.environ["ProgramData"]) / "Microsoft" / "Windows" / "Start Menu"
+                                        / "Programs" / "StartUp")
         self._registro = registro
         self._pasta = Path(pasta_inicializar) if pasta_inicializar is not None else None
         self._run = run
         self._usuario = usuario if usuario is not None else os.environ.get("USERNAME", "")
+        self._hklm = registro_hklm
+        self._pasta_global = Path(pasta_inicializar_global) if pasta_inicializar_global is not None else None
 
     # ---------- detectar ----------
     def detectar(self, alvos: Iterable[str], hashes: Iterable[str] = frozenset()) -> list[Entrada]:
         alvos = [a for a in alvos if a]
         hashes = set(hashes)
         return [*self._detectar_registro(alvos), *self._detectar_inicializar(alvos, hashes),
-                *self._detectar_tarefas(alvos)]
+                *self._detectar_tarefas(alvos), *self._detectar_hklm(alvos),
+                *self._detectar_inicializar(alvos, hashes, glob=True), *self._detectar_servicos(alvos)]
+
+    def _detectar_hklm(self, alvos: list[str]) -> list[Entrada]:
+        """Run/RunOnce de todos os usuários: só leitura; remover exige a Proteção avançada."""
+        if self._hklm is None or not alvos:
+            return []
+        saida = []
+        for tipo, chave in _CHAVES_HKLM.items():
+            try:
+                valores = self._hklm.valores(chave)
+            except OSError:
+                continue
+            for nome, valor, _t in valores:
+                if isinstance(valor, str) and any(menciona(valor, a) for a in alvos):
+                    saida.append(Entrada(tipo, chave, nome, valor, exige_servico=True))
+        return saida
+
+    def _detectar_servicos(self, alvos: list[str]) -> list[Entrada]:
+        """Serviços cujo ImagePath cita o incidente; drivers e serviços do Windows ficam de fora."""
+        if self._hklm is None or not alvos:
+            return []
+        raiz = os.environ.get("SystemRoot") or r"C:\Windows"
+        saida = []
+        try:
+            nomes = self._hklm.subchaves(CHAVE_SERVICOS)
+        except OSError:
+            return []
+        for nome in nomes:
+            try:
+                vals = {n: v for n, v, _t in self._hklm.valores(CHAVE_SERVICOS + "\\" + nome)}
+            except OSError:
+                continue
+            imagem, tipo_svc = vals.get("ImagePath"), vals.get("Type")
+            if not isinstance(imagem, str) or not isinstance(tipo_svc, int) or tipo_svc & 0x3:
+                continue
+            prog = ntpath.normcase(programa_de_comando(imagem, raiz))
+            if prog.startswith(ntpath.normcase(raiz).rstrip("\\") + "\\"):
+                continue
+            if any(menciona(imagem, a) for a in alvos):
+                saida.append(Entrada("service", SERVICOS, nome, imagem, exige_servico=True))
+        return saida
 
     def _detectar_tarefas(self, alvos: list[str]) -> list[Entrada]:
         if self._run is None or not alvos:
@@ -203,11 +279,12 @@ class Persistencia:
                     saida.append(Entrada(tipo, chave, nome, valor))
         return saida
 
-    def _detectar_inicializar(self, alvos: list[str], hashes: set[str]) -> list[Entrada]:
-        if self._pasta is None or not self._pasta.is_dir():
+    def _detectar_inicializar(self, alvos: list[str], hashes: set[str], *, glob: bool = False) -> list[Entrada]:
+        pasta = self._pasta_global if glob else self._pasta
+        if pasta is None or not pasta.is_dir():
             return []
         saida = []
-        for f in sorted(self._pasta.iterdir()):
+        for f in sorted(pasta.iterdir()):
             try:
                 if _eh_link(f) or not stat.S_ISREG(os.lstat(f).st_mode):
                     continue
@@ -222,7 +299,8 @@ class Persistencia:
             sha = sha256_arquivo(f)
             texto = _textos(inicio)
             if (sha is not None and sha in hashes) or any(menciona(texto, a) for a in alvos):
-                saida.append(Entrada("startup_user", str(self._pasta), f.name, str(f), sha))
+                saida.append(Entrada("startup_all" if glob else "startup_user", str(pasta), f.name, str(f), sha,
+                                     exige_servico=glob))
         return saida
 
     # ---------- backup / remover ----------
@@ -450,3 +528,38 @@ if sys.platform == "win32":
         def gravar(self, chave: str, nome: str, valor: str, tipo_reg: int) -> None:
             with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, chave, 0, winreg.KEY_SET_VALUE) as k:
                 winreg.SetValueEx(k, nome, 0, tipo_reg, valor)
+
+    class RegistroHKLMLeitura:
+        """HKEY_LOCAL_MACHINE só para leitura (qualquer usuário lê Run, RunOnce e Services)."""
+
+        _ACESSO = winreg.KEY_READ | winreg.KEY_WOW64_64KEY
+
+        def valores(self, chave: str) -> list[tuple[str, object, int]]:
+            try:
+                k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, chave, 0, self._ACESSO)
+            except OSError:
+                return []
+            saida, i = [], 0
+            with k:
+                while True:
+                    try:
+                        saida.append(winreg.EnumValue(k, i))
+                    except OSError:
+                        break
+                    i += 1
+            return saida
+
+        def subchaves(self, chave: str) -> list[str]:
+            try:
+                k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, chave, 0, self._ACESSO)
+            except OSError:
+                return []
+            saida, i = [], 0
+            with k:
+                while True:
+                    try:
+                        saida.append(winreg.EnumKey(k, i))
+                    except OSError:
+                        break
+                    i += 1
+            return saida

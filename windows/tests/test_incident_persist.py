@@ -421,3 +421,75 @@ def test_schtasks_falha_vira_erro(tmp_path):
     st.falhar = {"/Delete"}
     with pytest.raises(IncidentError, match="Acesso negado"):
         p.remover(b)
+
+
+# ---------- persistência do sistema (só detectar; quem remove é a Proteção avançada) ----------
+class HKLMFalso(RegistroFalso):
+    def subchaves(self, chave):
+        prefixo = chave + "\\"
+        return sorted({k[len(prefixo):].split("\\")[0] for k in self.dados if k.startswith(prefixo)})
+
+
+def _hklm():
+    from mandacaru_win.incident_persist import CHAVE_RUN_HKLM, CHAVE_RUNONCE_HKLM, CHAVE_SERVICOS
+    h = HKLMFalso({
+        CHAVE_RUN_HKLM: {"Upd": (f'"{EXE}" /s', REG_SZ),
+                         "SecurityHealth": (r"%windir%\system32\SecurityHealthSystray.exe", REG_EXPAND_SZ)},
+        CHAVE_RUNONCE_HKLM: {"Proj": (rf"node {PROJ}\x.js", REG_SZ)},
+        CHAVE_SERVICOS + r"\MalSvc": {"ImagePath": (f'"{EXE}" -svc', REG_EXPAND_SZ), "Type": (0x10, 4),
+                                      "Start": (2, 4)},
+        CHAVE_SERVICOS + r"\Dhcp": {"ImagePath": (r"%SystemRoot%\system32\svchost.exe -k x " + EXE, REG_EXPAND_SZ),
+                                    "Type": (0x20, 4), "Start": (2, 4)},
+        CHAVE_SERVICOS + r"\MalDrv": {"ImagePath": (EXE.replace(".exe", ".sys"), REG_EXPAND_SZ), "Type": (1, 4)},
+        CHAVE_SERVICOS + r"\Editor": {"ImagePath": (r'"C:\Program Files\Editor\svc.exe"', REG_EXPAND_SZ),
+                                      "Type": (0x10, 4)},
+    })
+    return h
+
+
+def test_detecta_persistencia_do_sistema_ligada_ao_incidente(tmp_path, monkeypatch):
+    monkeypatch.setenv("SystemRoot", r"C:\Windows")
+    from mandacaru_win.incident_persist import CHAVE_RUN_HKLM, CHAVE_RUNONCE_HKLM
+    glob = tmp_path / "StartUpGlobal"
+    glob.mkdir()
+    (glob / "upd.lnk").write_bytes(b"L\x00\x00\x00" + EXE.encode("utf-16-le"))
+    (glob / "outro.lnk").write_bytes(b"nada")
+    p = Persistencia(registro=RegistroFalso(), pasta_inicializar=tmp_path / "nao", run=lambda a, t: (0, ""),
+                     usuario="ana", registro_hklm=_hklm(), pasta_inicializar_global=glob)
+    achadas = p.detectar([EXE, PROJ])
+    assert [(e.tipo, e.nome) for e in achadas] == [
+        ("hklm_run", "Upd"), ("hklm_runonce", "Proj"), ("startup_all", "upd.lnk"), ("service", "MalSvc")]
+    assert all(e.exige_servico for e in achadas)
+    assert achadas[0].local == CHAVE_RUN_HKLM and achadas[1].local == CHAVE_RUNONCE_HKLM
+    assert achadas[2].sha256 == hashlib.sha256((glob / "upd.lnk").read_bytes()).hexdigest()
+    for e in achadas:
+        with pytest.raises(IncidentError, match="Proteção avançada"):
+            p.backup(e)
+
+
+def test_padroes_do_windows_nao_leem_a_maquina_nos_testes(monkeypatch):
+    # Simula o Windows: com os padrões, a fixture do conftest deixa HKLM e Inicializar global vazios.
+    from mandacaru_win import incident_persist
+    monkeypatch.setattr(sys, "platform", "win32")
+    p = incident_persist.Persistencia(registro=RegistroFalso(), run=lambda a, t: (0, ""), usuario="x")
+    assert p._hklm.valores(incident_persist.CHAVE_RUN_HKLM) == [] and p._hklm.subchaves("x") == []
+    assert p._pasta_global is not None and list(p._pasta_global.parents)[-1].exists()
+    assert p.detectar(["\x00\x01"]) == []
+
+
+def test_sem_hklm_nada_muda(tmp_path):
+    p, _ = _pers(tmp_path)
+    assert [e.tipo for e in p.detectar([EXE, PROJ])] == ["hkcu_run", "hkcu_runonce"]
+
+
+@pytest.mark.parametrize("imagem,esperado", [
+    (r'"C:\Program Files\Mal\svc.exe" -k x', r"C:\Program Files\Mal\svc.exe"),
+    (r"C:\Program Files\Mal\svc.exe -k x", r"C:\Program Files\Mal\svc.exe"),
+    (r"%SystemRoot%\System32\svchost.exe -k netsvcs", r"C:\Windows\System32\svchost.exe"),
+    (r"\SystemRoot\System32\drivers\x.sys", r"C:\Windows\System32\drivers\x.sys"),
+    (r"System32\drivers\y.sys", r"C:\Windows\System32\drivers\y.sys"),
+    (r"\??\C:\Mal\z.sys", r"C:\Mal\z.sys"),
+])
+def test_programa_de_comando(imagem, esperado):
+    from mandacaru_win.incident_persist import programa_de_comando
+    assert programa_de_comando(imagem, r"C:\Windows") == esperado

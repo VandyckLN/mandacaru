@@ -205,6 +205,153 @@ def test_detectar_processos_por_caminho_pasta_e_hash(tmp_path):
     assert [p.pid for p in achados] == [100, 101, 102]
 
 
+def test_sha_para_encerrar_usa_o_achado_e_nunca_o_disco_trocado(tmp_path):
+    store, inc = _inc(tmp_path)                                  # achado: EXE com SHA "a"*64
+    disco = {EXE: "b" * 64, r"C:\Users\ana\proj\tool.exe": "c" * 64, r"C:\Users\ana\proj\x.exe": None}
+    r = Resposta(store, inc, processos=None, persistencia=PersistenciaEspia(),
+                 hash_fn=lambda p: {k.lower(): v for k, v in disco.items()}[str(p).lower()])   # NTFS ignora a caixa
+    sha, motivo = r.sha_para_encerrar(ProcessoInfo(100, 1, EXE, 1.0))
+    assert sha is None and "mudou desde a detecção" in motivo     # trocado no disco: não confirma
+    disco[EXE] = SHA
+    assert r.sha_para_encerrar(ProcessoInfo(100, 1, EXE.upper(), 1.0)) == (SHA, None)
+    assert r.sha_para_encerrar(ProcessoInfo(101, 1, r"C:\Users\ana\proj\tool.exe", 1.0)) == ("c" * 64, None)
+    sha, motivo = r.sha_para_encerrar(ProcessoInfo(102, 1, r"C:\Users\ana\proj\x.exe", 1.0))
+    assert sha is None and "ler o executável" in motivo
+    assert r.sha_para_encerrar(ProcessoInfo(103, 1, None, 1.0))[0] is None
+
+
+# ---------- Proteção avançada (Guard) ----------
+class GuardFalso:
+    def __init__(self, respostas=None, ativo=True):
+        self.respostas = respostas or {}
+        self.ativo = ativo
+        self.pedidos: list[tuple[str, dict]] = []
+
+    def disponivel(self):
+        return self.ativo
+
+    def chamar(self, acao, **params):
+        from mandacaru_win.guard_protocol import GuardError, validar_pedido
+        validar_pedido({"acao": acao, **params})               # o mesmo esquema do serviço real
+        self.pedidos.append((acao, params))
+        resp = self.respostas.get(acao, {"ok": True})
+        if isinstance(resp, Exception):
+            raise resp
+        if not resp.get("ok"):
+            raise GuardError(resp["erro"])
+        return resp
+
+
+def _resp_guard(tmp_path, guard, **kw):
+    from mandacaru_win.quarantine import Quarantine
+    store, inc = _inc(tmp_path)
+    q = Quarantine(tmp_path / "quarentena")
+    return store, inc, Resposta(store, inc, processos=kw.get("processos"), persistencia=PersistenciaEspia(),
+                                guard=guard, quarentena=q, hash_fn=kw.get("hash_fn", lambda p: SHA)), q
+
+
+@pytest.mark.parametrize("entrada,pedido", [
+    (Entrada("hklm_run", r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", "Upd", f'"{EXE}"', exige_servico=True),
+     {"tipo": "hklm_run", "nome": "Upd", "valor": f'"{EXE}"'}),
+    (Entrada("startup_all", r"C:\ProgramData\x\StartUp", "upd.lnk", r"C:\ProgramData\x\StartUp\upd.lnk", "b" * 64,
+             exige_servico=True), {"tipo": "startup_all", "nome": "upd.lnk", "valor": "b" * 64}),
+    (Entrada("service", "Serviços do Windows", "MalSvc", f'"{EXE}"', exige_servico=True),
+     {"tipo": "service", "nome": "MalSvc", "valor": ""}),
+    (Entrada("schtask_sistema", "Agendador de Tarefas", r"\Mal", EXE, exige_servico=True),
+     {"tipo": "schtask", "nome": r"\Mal", "valor": ""}),
+])
+def test_persistencia_do_sistema_vai_pelo_guard_e_desfaz(tmp_path, entrada, pedido):
+    g = GuardFalso({"persistence_remove": {"ok": True, "id": "f" * 32}})
+    store, inc, r, _q = _resp_guard(tmp_path, g)
+    a = r.remover_persistencia(entrada)
+    assert a.resultado == "concluida" and g.pedidos == [("persistence_remove", pedido)]
+    assert a.backup == {"guard": "persistencia", "id": "f" * 32}
+    d = r.desfazer(0)
+    assert d.resultado == "concluida" and g.pedidos[-1] == ("persistence_restore", {"id": "f" * 32})
+    assert store.carregar(inc.id).acoes[0].desfeita is True
+
+
+def test_sem_guard_entrada_do_sistema_falha_registrada(tmp_path):
+    e = Entrada("service", "Serviços do Windows", "MalSvc", EXE, exige_servico=True)
+    for guard in (None, GuardFalso(ativo=False)):
+        store, inc, r, _q = _resp_guard(tmp_path / str(id(guard)), guard)
+        a = r.remover_persistencia(e)
+        assert a.resultado == "falhou" and "Requer Proteção avançada" in a.detalhe
+        assert store.carregar(inc.id).acoes[0].resultado == "falhou"
+        assert not r.guard_disponivel()
+
+
+def test_erro_do_guard_vira_falha_com_motivo(tmp_path):
+    from mandacaru_win.guard_protocol import GuardError
+    g = GuardFalso({"persistence_remove": GuardError("Serviço do Windows: o serviço não o desativa.")})
+    _s, _i, r, _q = _resp_guard(tmp_path, g)
+    a = r.remover_persistencia(Entrada("service", "Serviços do Windows", "Dhcp", EXE, exige_servico=True))
+    assert a.resultado == "falhou" and a.detalhe == "Serviço do Windows: o serviço não o desativa."
+
+
+def test_bloquear_rede_e_desfazer(tmp_path):
+    g = GuardFalso()
+    store, inc, r, _q = _resp_guard(tmp_path, g)
+    a = r.bloquear_rede(EXE)
+    acao, params = g.pedidos[0]
+    assert acao == "firewall_block" and params["exe"] == EXE and params["regra"].startswith("Mandacaru-")
+    assert a.tipo == "bloquear_rede" and a.fase == "conter" and a.resultado == "concluida"
+    assert a.backup == {"guard": "firewall", "regra": params["regra"]}
+    assert r.desfazer(0).resultado == "concluida"
+    assert g.pedidos[-1] == ("firewall_unblock", {"regra": params["regra"]})
+    _s, _i, r2, _q2 = _resp_guard(tmp_path / "sem", None)
+    assert "Requer Proteção avançada" in r2.bloquear_rede(EXE).detalhe
+
+
+def test_quarentenar_local_e_desfazer(tmp_path):
+    f = tmp_path / "mal.ps1"
+    f.write_bytes(b"abc")
+    sha = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    g = GuardFalso()
+    store, inc, r, q = _resp_guard(tmp_path, g)
+    a = r.quarentenar(f, sha, "HIGH", ["regra.x"])
+    assert a.resultado == "concluida" and not f.exists() and len(q.items()) == 1
+    assert a.backup["local"] == "quarentena" and g.pedidos == []
+    assert r.desfazer(0).resultado == "concluida" and f.read_bytes() == b"abc" and q.items() == []
+
+
+def test_quarentenar_cai_no_guard_quando_a_local_falha(tmp_path):
+    g = GuardFalso({"quarantine_file": {"ok": True, "id": "e" * 32}})
+    _s, _i, r, _q = _resp_guard(tmp_path, g)
+    a = r.quarentenar(r"C:\Program Files\Mal\mal.exe", SHA, "CRITICAL", ["hash.malicioso"])
+    assert a.resultado == "concluida" and a.backup == {"guard": "quarentena", "id": "e" * 32}
+    assert g.pedidos == [("quarantine_file", {"caminho": r"C:\Program Files\Mal\mal.exe", "sha256": SHA})]
+    assert r.desfazer(0).resultado == "concluida" and g.pedidos[-1] == ("quarantine_restore", {"id": "e" * 32})
+
+
+def test_quarentenar_sem_guard_mostra_erro_local(tmp_path):
+    _s, _i, r, _q = _resp_guard(tmp_path, None)
+    a = r.quarentenar(tmp_path / "nao-existe.exe", SHA, "HIGH", [])
+    assert a.resultado == "falhou" and "não existe" in a.detalhe
+
+
+def test_encerrar_recorre_ao_guard_quando_acesso_negado(tmp_path):
+    class Negado(ProcessosFalsos):
+        def encerrar(self, pid, criado):
+            raise PermissionError(5, "Acesso negado")
+    g = GuardFalso({"terminate_process": {"ok": True, "encerrados": [100], "falhas": []}})
+    _s, _i, r, _q = _resp_guard(tmp_path, g, processos=Negado())
+    a = r.encerrar_processo(100, EXE, SHA)
+    assert a.resultado == "concluida" and a.alvo["encerrados"] == [100]
+    assert g.pedidos == [("terminate_process", {"pid": 100, "exe": EXE, "sha256": SHA})]
+    assert "Proteção avançada" in a.detalhe
+
+
+def test_desfazer_pelo_guard_sem_guard_falha(tmp_path):
+    g = GuardFalso({"persistence_remove": {"ok": True, "id": "f" * 32}})
+    store, inc, r, _q = _resp_guard(tmp_path, g)
+    r.remover_persistencia(Entrada("service", "Serviços do Windows", "MalSvc", EXE, exige_servico=True))
+    g.ativo = False
+    d = r.desfazer(0)
+    assert d.resultado == "falhou" and "Proteção avançada" in d.detalhe
+    assert store.carregar(inc.id).acoes[0].desfeita is False
+
+
 def test_marcar_credencial_persiste_e_valida(tmp_path):
     store, inc = _inc(tmp_path)
     r = Resposta(store, inc, processos=None, persistencia=PersistenciaEspia())

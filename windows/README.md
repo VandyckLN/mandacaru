@@ -5,10 +5,24 @@ detecção do pacote `mandacaru-edr`.
 
 ## Instalar (usuário)
 
-Baixe `Mandacaru-<versão>-setup.exe` na página de Releases e execute. Não
-precisa de administrador: instala em `%LOCALAPPDATA%\Programs\Mandacaru`, cria
-atalhos no Menu Iniciar (e opcionalmente na Área de Trabalho) e integra o menu
-de contexto do Explorer (em `HKCU`, removido automaticamente ao desinstalar).
+Baixe `Mandacaru-<versão>-setup.exe` na página de Releases e execute. No
+início, o instalador pergunta o modo:
+
+- **Só para mim** (padrão, sem administrador): instala em
+  `%LOCALAPPDATA%\Programs\Mandacaru`, cria atalhos no Menu Iniciar (e
+  opcionalmente na Área de Trabalho) e integra o menu de contexto do Explorer
+  (em `HKCU`, removido automaticamente ao desinstalar).
+- **Para todos os usuários** (pede administrador uma vez): instala em
+  `C:\Program Files\Mandacaru` e oferece a tarefa **Proteção avançada**, que
+  registra o serviço `MandacaruGuard`. Ele roda como SYSTEM e executa só uma
+  lista fechada de ações pedidas pela janela, que continua sem privilégio:
+  bloquear a rede de um executável, encerrar processos de outros usuários, pôr
+  em quarentena arquivos de pastas do sistema e remover persistência em `HKLM`,
+  na Inicializar de todos, em tarefas do sistema e em serviços — sempre com
+  **Desfazer** no painel **Incidentes**. Nada do Windows nem do Defender é
+  tocado. Neste modo, cada atualização pede o UAC; desinstalar remove o serviço
+  e as regras de firewall `Mandacaru-*`.
+
 Desinstalar não apaga `%LOCALAPPDATA%\Mandacaru` (histórico, quarentena,
 confiáveis e pastas ignoradas).
 
@@ -35,13 +49,19 @@ confiáveis e pastas ignoradas).
   `setup.py`), código com Unicode enganoso (Trojan Source) e GitHub Actions
   inseguras. As bibliotecas fixadas nos lockfiles também são cruzadas com o
   OSV.dev e a CISA KEV. Aparece uma linha por arquivo, com **Abrir local**,
-  **Copiar detalhe** e **Ignorar sempre**. **Ignorar sempre** vale só para
-  aquele conteúdo: se o arquivo mudar, o achado volta. Os achados de severidade
-  baixa ficam recolhidos em **Para conhecimento**. Só sai da máquina o
-  ecossistema, o nome e a versão de cada biblioteca, enviados ao OSV.dev; o
-  catálogo KEV é baixado inteiro. Nenhum caminho, conteúdo de arquivo ou nome
-  de usuário sai da máquina, e as pastas ignoradas na aba **Confiáveis** ficam
-  de fora também aqui.
+  **Copiar detalhe**, **Ignorar sempre** e **Quarentena** (habilitado para
+  isolar apenas o arquivo perigoso do projeto e desabilitado com explicação
+  quando a linha for apenas de biblioteca declarada em lockfile). **Ignorar
+  sempre** vale só para aquele conteúdo: se o arquivo mudar, o achado volta.
+  Quando houver achado de severidade **Alta** ou **Crítica**, a aba exibe um
+  aviso fixo lembrando de fazer uma varredura completa e trocar chaves e tokens
+  caso o projeto já tenha sido aberto ou instalado, junto com o botão
+  **Destruir projeto…** para sobrescrever e apagar a pasta inteira. Os achados
+  de severidade baixa ficam recolhidos em **Para conhecimento**. Só sai da
+  máquina o ecossistema, o nome e a versão de cada biblioteca, enviados ao
+  OSV.dev; o catálogo KEV é baixado inteiro. Nenhum caminho, conteúdo de arquivo
+  ou nome de usuário sai da máquina, e as pastas ignoradas na aba **Confiáveis**
+  ficam de fora também aqui.
 - **Menu de contexto no Explorer (botão direito):**
   - **Varrer com Mandacaru** (`--scan`): aparece em arquivos, pastas e no fundo
     de pastas; se o Mandacaru já estiver aberto, encaminha a varredura para a
@@ -58,6 +78,25 @@ confiáveis e pastas ignoradas).
   truncado para 0 bytes, renomeado para um nome aleatório e removido sem ir para
   a Lixeira. Raízes de unidade (`C:\`), pastas do sistema e a pasta do usuário
   são bloqueadas por segurança, e symlinks/junções nunca são seguidos.
+- **Resposta a incidente (`Incidentes`):** a partir de qualquer achado `Alta`
+  ou `Crítica` (botão **Responder…** na varredura, **Responder ao incidente…**
+  na faixa de alerta de projeto ou **Responder a incidente…** na aba
+  *Atualizações*), conduz a resposta em três fases encadeadas:
+  1. **Conter:** encerra processos suspeitos do usuário e seus filhos (só após
+     conferir caminho e SHA-256), move arquivos suspeitos para a **Quarentena**
+     com **Desfazer** e orienta o isolamento manual de rede em casos extremos.
+  2. **Neutralizar:** detecta e remove apenas entradas de persistência ligadas
+     ao incidente (`HKCU\...\Run` e `RunOnce`, pasta `Inicializar` e tarefas
+     agendadas do usuário), salvando backup completo em
+     `%LOCALAPPDATA%\Mandacaru\incidents\<id>.json` para **Desfazer** em um
+     clique; também oferece atalhos para **Destruir projeto…** ou atualizar via
+     `winget`. Ações de sistema aparecem visíveis com o selo *Requer Proteção
+     avançada*.
+  3. **Recuperar:** inicia varredura completa em lotes leves, traz checklist
+     marcável de credenciais para trocar com links oficiais auditados sob clique
+     (GitHub, Google, Microsoft, AWS, npm, PyPI) e exporta relatório em **HTML
+     autocontido** ou **JSON** com ocultação de usuário/caminhos ligada por
+     padrão.
 - **Pastas ignoradas na varredura (`Confiáveis`):** abaixo da lista de arquivos
   confiáveis por hash, clique em **Adicionar pasta…** para excluir pastas da
   varredura (ex.: pastas de projetos ou jogos) e **Remover** para voltar a

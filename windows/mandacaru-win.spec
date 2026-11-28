@@ -3,7 +3,7 @@
 from PyInstaller.utils.hooks import collect_data_files
 
 a = Analysis(
-    ["src/mandacaru_win/__main__.py"],
+    ["src/mandacaru_win/entrada.py"],  # janela ou serviço MandacaruGuard (--guard-servico), sem Qt no serviço
     pathex=["src"],
     datas=collect_data_files("mandacaru") + collect_data_files("mandacaru_win"),  # regras YARA, modelos, ícone
     excludes=["psutil", "watchdog", "tkinter"],

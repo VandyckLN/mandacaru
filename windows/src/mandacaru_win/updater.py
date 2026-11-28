@@ -319,10 +319,31 @@ def _discard(p: Path) -> None:
         pass
 
 
-def install_command(setup: Path, log: Path | None = None) -> list[str]:
-    """Instalação silenciosa por cima da atual; o instalador reabre o app (REOPEN_FLAG)."""
+def instalado_para_todos(exe: str | None = None, env: dict | None = None) -> bool:
+    """O app roda de Arquivos de Programas (instalação "para todos os usuários", com Proteção avançada)."""
+    import ntpath
+    exe = exe if exe is not None else sys.executable
+    env = env if env is not None else os.environ
+    pasta = ntpath.normcase(ntpath.dirname(exe))
+    for var in ("ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"):
+        base = env.get(var)
+        if base:
+            b = ntpath.normcase(base).rstrip("\\")
+            if pasta == b or pasta.startswith(b + "\\"):
+                return True
+    return False
+
+
+def install_command(setup: Path, log: Path | None = None, *, todos: bool | None = None) -> list[str]:
+    """Instalação silenciosa por cima da atual; o instalador reabre o app (REOPEN_FLAG).
+
+    Na instalação para todos os usuários vai `/ALLUSERS` (o Windows pede UAC): sem ele, o setup
+    instalaria uma segunda cópia só para o usuário e a Proteção avançada ficaria desatualizada.
+    """
     cmd = [str(setup), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
            "/CLOSEAPPLICATIONS", REOPEN_FLAG]
+    if todos if todos is not None else (getattr(sys, "frozen", False) and instalado_para_todos()):
+        cmd.append("/ALLUSERS")
     if log is not None:
         cmd.append(f"/LOG={log}")
     return cmd

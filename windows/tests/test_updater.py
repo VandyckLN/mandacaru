@@ -268,6 +268,23 @@ def test_install_command_is_silent_and_reopens(tmp_path):
     assert {"/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/ATUALIZACAO"} <= set(cmd[1:])
 
 
+def test_install_command_para_todos_os_usuarios(tmp_path):
+    setup = tmp_path / "Mandacaru-9.0.0-setup.exe"
+    assert "/ALLUSERS" in install_command(setup, todos=True)       # senão vira uma 2ª cópia por usuário
+    assert "/ALLUSERS" not in install_command(setup, todos=False)
+
+
+@pytest.mark.parametrize("exe,esperado", [
+    (r"C:\Program Files\Mandacaru\Mandacaru.exe", True),
+    (r"c:\program files\mandacaru\Mandacaru.exe", True),
+    (r"C:\Users\ana\AppData\Local\Programs\Mandacaru\Mandacaru.exe", False),
+])
+def test_instalado_para_todos(exe, esperado):
+    from mandacaru_win.updater import instalado_para_todos
+    env = {"ProgramFiles": r"C:\Program Files", "ProgramW6432": r"C:\Program Files"}
+    assert instalado_para_todos(exe, env) is esperado
+
+
 def test_run_installer_uses_injected_runner(tmp_path):
     setup = tmp_path / "Mandacaru-9.0.0-setup.exe"
     cmds = []

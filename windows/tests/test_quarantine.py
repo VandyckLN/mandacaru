@@ -230,3 +230,33 @@ def test_restore_write_failure_removes_partial_destination(tmp_path, monkeypatch
     with pytest.raises(QuarantineError):
         q.restore(qid)
     assert not f.exists() and len(q.items()) == 1
+
+
+def test_symlink_is_refused_without_touching_target(tmp_path):
+    fora = tmp_path / "fora.txt"
+    fora.write_bytes(b"segredo")
+    link = tmp_path / "link.ps1"
+    try:
+        os.symlink(fora, link)
+    except (OSError, NotImplementedError):
+        pytest.skip("sem permissão para criar link simbólico")
+    q = Quarantine(tmp_path / "q")
+    fin = Finding(link, sha256_file(fora), Severity.HIGH, [Alert("yara.X", Severity.HIGH, "s")])
+    with pytest.raises(QuarantineError, match="Links simbólicos"):
+        q.add(fin)
+    assert fora.read_bytes() == b"segredo"
+    assert os.path.islink(link)
+    assert not (tmp_path / "q").exists() or list((tmp_path / "q").iterdir()) == []
+
+
+def test_restore_when_dangling_symlink_occupies_original_name(tmp_path):
+    f, q = _setup(tmp_path, b"conteudo-original")
+    qid = q.add(finding_for(f))
+    try:
+        os.symlink(tmp_path / "nao_existe.txt", f)
+    except (OSError, NotImplementedError):
+        pytest.skip("sem permissão para criar link simbólico")
+    restaurado = q.restore(qid)
+    assert restaurado == tmp_path / "a (restaurado).ps1"
+    assert restaurado.read_bytes() == b"conteudo-original"
+    assert os.path.islink(f)
