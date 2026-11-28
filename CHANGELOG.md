@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.4
+
+Menos falsos positivos em texto que só descreve ataques (agentes de pentest em Markdown, transcrições de sessões de IA, changelogs e documentação). Numa varredura completa de uma pasta de usuário no Windows, esses arquivos geravam centenas de achados CRITICAL e HIGH.
+
+- **Shell reverso com `/dev/tcp`**: a regra `Reverse_Shell_Patterns` passa a exigir o redirecionamento de shell que abre o socket (`bash -i >& /dev/tcp/host/porta`, `exec 5<>/dev/tcp/…`, `cat < /dev/tcp/…`). A string `/dev/tcp/` sozinha, comum em changelogs e listas de indicadores, não dispara mais.
+- **Nota de resgate**: além de "seus arquivos foram criptografados", `Ransom_Note_Keywords` passa a exigir uma instrução da nota (pagar ou enviar bitcoin/monero, "para recuperar seus arquivos" ou um endereço `.onion` real). Palavras soltas como *bitcoin* e *decrypt* não bastam.
+- **Severidade em arquivos de texto**: regras de técnica (shell reverso, PowerShell, execução de payload decodificado, `curl | sh`, cron, LOLBins e persistência no Windows) valem no máximo MEDIUM em `.md`, `.markdown`, `.txt`, `.jsonl`, `.log` e `.rst`. Scripts e executáveis continuam CRITICAL/HIGH. A nota de resgate continua HIGH em `.txt`. O alerta não é descartado: guarda a severidade original na evidência. Regras de família, de hash e as do usuário nunca são rebaixadas.
+- Base interna do motor de resposta a incidentes no Windows (encerrar processo, remover e restaurar persistência e tarefas agendadas, registro e relatório de incidentes), ainda sem interface.
+
+Depois de atualizar, faça uma nova varredura para reavaliar os achados antigos.
+
 ## 0.8.3
 
 Correção de segurança no Destruir com *hard links* (Marco a), verificação de projetos (`mandacaru dev <pasta>` e app Windows) e monitoramento agendado em segundo plano no Windows.

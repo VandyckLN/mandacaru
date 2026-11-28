@@ -1,3 +1,13 @@
+mandacaru (0.8.4) unstable; urgency=medium
+
+  * Menos falsos positivos em texto que descreve ataques: /dev/tcp exige
+    redirecionamento de shell e a nota de resgate exige frase de instrucao.
+  * Regras de tecnica valem no maximo MEDIUM em .md/.txt/.jsonl/.log/.rst;
+    scripts e executaveis mantem CRITICAL/HIGH. Regras de familia/hash e
+    do usuario nunca sao rebaixadas.
+
+ -- Vandyck Diniz <noreply@users.noreply.github.com>  Sat, 28 Nov 2026 10:00:00 -0300
+
 mandacaru (0.8.3) unstable; urgency=high
 
   * Correcao (Windows): Destruir nao sobrescreve arquivos com hard link

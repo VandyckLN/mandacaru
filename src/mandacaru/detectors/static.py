@@ -28,6 +28,10 @@ if TYPE_CHECKING:
 MAX_BYTES = 8 * 1024 * 1024          # nao le arquivos gigantes inteiros
 SCRIPT_EXT = {".py", ".ps1", ".psm1", ".js", ".mjs", ".vbs", ".sh", ".bash", ".bat", ".cmd", ".php", ".rb", ".pl"}
 _SEV = {s.name: s for s in Severity}
+# texto, documentacao e log: descrevem tecnicas (agentes de pentest, transcricoes,
+# changelogs) sem executa-las, entao regras de tecnica valem no maximo MEDIUM
+TEXT_EXT = frozenset({".md", ".markdown", ".txt", ".jsonl", ".log", ".rst"})
+_REBAIXA_EXT = {"technique": TEXT_EXT, "note": TEXT_EXT - {".txt"}}
 
 
 def shannon_entropy(data: bytes) -> float:
@@ -130,13 +134,20 @@ class StaticScanner:
 
     def scan_bytes(self, path: Path, data: bytes) -> list[Alert]:
         alerts: list[Alert] = []
+        ext = path.suffix.lower()
         for m in self.rules.match(data=data):
             meta = m.meta or {}
+            sev = _SEV.get(str(meta.get("severity", "MEDIUM")).upper(), Severity.MEDIUM)
+            evidence = {"path": str(path), "strings": sorted({s.identifier for s in m.strings})}
+            if sev > Severity.MEDIUM and ext in _REBAIXA_EXT.get(str(meta.get("category", "")), ()):
+                evidence["severidade_original"] = sev.name
+                evidence["rebaixado"] = "arquivo de texto/documentacao: descreve a tecnica, nao a executa"
+                sev = Severity.MEDIUM
             alerts.append(Alert(
                 rule=f"yara.{m.rule}",
-                severity=_SEV.get(str(meta.get("severity", "MEDIUM")).upper(), Severity.MEDIUM),
+                severity=sev,
                 summary=f"{meta.get('description', m.rule)}: {path.name}",
-                evidence={"path": str(path), "strings": sorted({s.identifier for s in m.strings})},
+                evidence=evidence,
                 mitre=[t for t in str(meta.get("mitre", "")).split(",") if t],
             ))
         alerts += script_heuristics(path, data)

