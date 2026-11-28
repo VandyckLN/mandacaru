@@ -35,13 +35,19 @@ confiáveis e pastas ignoradas).
   `setup.py`), código com Unicode enganoso (Trojan Source) e GitHub Actions
   inseguras. As bibliotecas fixadas nos lockfiles também são cruzadas com o
   OSV.dev e a CISA KEV. Aparece uma linha por arquivo, com **Abrir local**,
-  **Copiar detalhe** e **Ignorar sempre**. **Ignorar sempre** vale só para
-  aquele conteúdo: se o arquivo mudar, o achado volta. Os achados de severidade
-  baixa ficam recolhidos em **Para conhecimento**. Só sai da máquina o
-  ecossistema, o nome e a versão de cada biblioteca, enviados ao OSV.dev; o
-  catálogo KEV é baixado inteiro. Nenhum caminho, conteúdo de arquivo ou nome
-  de usuário sai da máquina, e as pastas ignoradas na aba **Confiáveis** ficam
-  de fora também aqui.
+  **Copiar detalhe**, **Ignorar sempre** e **Quarentena** (habilitado para
+  isolar apenas o arquivo perigoso do projeto e desabilitado com explicação
+  quando a linha for apenas de biblioteca declarada em lockfile). **Ignorar
+  sempre** vale só para aquele conteúdo: se o arquivo mudar, o achado volta.
+  Quando houver achado de severidade **Alta** ou **Crítica**, a aba exibe um
+  aviso fixo lembrando de fazer uma varredura completa e trocar chaves e tokens
+  caso o projeto já tenha sido aberto ou instalado, junto com o botão
+  **Destruir projeto…** para sobrescrever e apagar a pasta inteira. Os achados
+  de severidade baixa ficam recolhidos em **Para conhecimento**. Só sai da
+  máquina o ecossistema, o nome e a versão de cada biblioteca, enviados ao
+  OSV.dev; o catálogo KEV é baixado inteiro. Nenhum caminho, conteúdo de arquivo
+  ou nome de usuário sai da máquina, e as pastas ignoradas na aba **Confiáveis**
+  ficam de fora também aqui.
 - **Menu de contexto no Explorer (botão direito):**
   - **Varrer com Mandacaru** (`--scan`): aparece em arquivos, pastas e no fundo
     de pastas; se o Mandacaru já estiver aberto, encaminha a varredura para a

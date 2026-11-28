@@ -77,6 +77,8 @@ def test_badge_delegate_and_theme_light_and_dark(app, tmp_path, scanner):
     assert 'role="analyze"' in build_stylesheet(True)
     assert 'role="quarantine"' in build_stylesheet(True)
     assert 'role="danger"' in build_stylesheet(False)
+    assert "#faixaProjetoAlerta" in build_stylesheet(False)
+    assert "#faixaProjetoAlerta" in build_stylesheet(True)
 
     tbl = QTableWidget(5, 1)
     tbl.setItemDelegateForColumn(0, BadgeDelegate(tbl))
@@ -95,6 +97,7 @@ def test_badge_delegate_and_theme_light_and_dark(app, tmp_path, scanner):
     try:
         assert win.btn_downloads.property("role") == "scan"
         assert win.btn_shred.property("role") == "danger"
+        assert win.btn_shred_project.property("role") == "danger"
         assert win.btn_stop.property("role") == "danger"
         assert isinstance(win.tree.itemDelegateForColumn(0), BadgeDelegate)
         assert isinstance(win.tbl_quarantine.itemDelegateForColumn(2), BadgeDelegate)
